@@ -43,7 +43,6 @@ jobs:
                 fi
 
                 ./mach --no-interactive bootstrap --application-choice browser
-                rustup override set nightly
 
             - name: Cache dependencies
               uses: actions/cache/save@v3
