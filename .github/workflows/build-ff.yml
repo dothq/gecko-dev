@@ -34,9 +34,12 @@ jobs:
             - name: Configure the build
               run: |
                 touch mozconfig
+                # todo: work out why we can't build without this
+                echo "ac_add_options --without-wasm-sandboxed-libraries" >> mozconfig
                 echo "ac_add_options --with-ccache=sccache" >> mozconfig
 
             - name: Build the source tree
               run: |
                 echo "Compilation started at $(date '+%a %d %b %Y %H:%M:%S %Z')."
                 ./mach build
+                
