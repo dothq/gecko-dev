@@ -1,0 +1,41 @@
+name: "Build Firefox"
+
+on:
+    push:
+        branches:
+            - "release"
+    pull_request:
+        branches:
+            - "release"
+
+env:
+    SCCACHE_VERSION: "0.5.4"
+
+jobs:
+    build:
+        strategy:
+            matrix:
+                os: [ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+            - name: Checkout source tree
+              uses: actions/checkout@v3
+
+            - name: Install dependencies
+              run: |
+                sudo apt-get install -y curl \
+                                   python3 \
+                                   python3-pip
+                curl -L https://github.com/mozilla/sccache/releases/download/v${{ env.SCCACHE_VERSION }}/sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl.tar.gz | tar -xzf -
+                sudo mv sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl/sccache /usr/local/bin/
+                ./mach --no-interactive bootstrap --application-choice browser
+
+            - name: Configure the build
+              run: |
+                touch mozconfig
+                echo "ac_add_options --with-ccache=sccache" >> mozconfig
+
+            - name: Build the source tree
+              run: |
+                echo "Compilation started at $(date '+%a %d %b %Y %H:%M:%S %Z')."
+                ./mach build
