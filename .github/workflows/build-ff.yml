@@ -14,6 +14,10 @@ env:
       ~/.mozbuild
       /usr/local/bin/sccache
 
+concurrency:
+    group: ${{ github.ref }}
+    cancel-in-progress: ${{ github.ref != 'refs/heads/release' }}
+      
 jobs:
     build:
         strategy:
@@ -29,7 +33,7 @@ jobs:
               uses: actions/cache/restore@v3
               with:
                 path: ${{ env.DEPS_CACHE }}
-                key: deps-${{ runner.os }}
+                key: deps-${{ matrix.os }}
 
             - name: Install dependencies
               run: |
@@ -62,3 +66,21 @@ jobs:
               run: |
                 echo "Compilation started at $(date '+%a %d %b %Y %H:%M:%S %Z')."
                 ./mach build
+
+            - name: Configure build cache
+              if: ${{ github.ref == 'refs/heads/release' }}
+              run: |
+                echo "FF_VERSION=$(cat browser/config/version.txt)" >> "$GITHUB_ENV"
+                echo "ARCHIVE_NAME=$(echo firefox-$(cat browser/config/version.txt)-linux-$(uname -m).source.tar.xz)" >> "$GITHUB_ENV"
+                echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+                XZ_OPT='-9' tar -cJf $ARCHIVE_NAME .
+
+            - name: Release built tree
+              if: ${{ github.ref == 'refs/heads/release' }}
+              uses: marvinpinto/action-automatic-releases@d68defdd11f9dcc7f52f35c1b7c236ee7513bcc1
+              with:
+                repo_token: ${{ secrets.ROBOT_TOKEN }}
+                automatic_release_tag: "${{ env.FF_VERSION }}-${{ env.SHORT_SHA }}"
+                prerelease: true
+                title: "v${{ env.FF_VERSION }} (${{ env.SHORT_SHA }})"
+                files: ${{ env.ARCHIVE_NAME }}
