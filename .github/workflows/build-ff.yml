@@ -10,6 +10,9 @@ on:
 
 env:
     SCCACHE_VERSION: "0.5.4"
+    DEPS_CACHE: |
+      ~/.mozbuild
+      /usr/local/bin/sccache
 
 jobs:
     build:
@@ -21,15 +24,33 @@ jobs:
             - name: Checkout source tree
               uses: actions/checkout@v3
 
+            - name: Restore dependency cache
+              id: deps-cache
+              uses: actions/cache/restore@v3
+              with:
+                path: ${{ env.DEPS_CACHE }}
+                key: deps-${{ runner.os }}
+
             - name: Install dependencies
               run: |
                 sudo apt-get install -y curl \
                                    python3 \
                                    python3-pip
-                curl -L https://github.com/mozilla/sccache/releases/download/v${{ env.SCCACHE_VERSION }}/sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl.tar.gz | tar -xzf -
-                sudo mv sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl/sccache /usr/local/bin/
+
+                if [ ! -f "/usr/local/bin/sccache" ]; then
+                  curl -L https://github.com/mozilla/sccache/releases/download/v${{ env.SCCACHE_VERSION }}/sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl.tar.gz | tar -xzf -
+                  sudo mv sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl/sccache /usr/local/bin/
+                fi
+
                 ./mach --no-interactive bootstrap --application-choice browser
                 rustup override set nightly
+
+            - name: Cache dependencies
+              uses: actions/cache/save@v3
+              with:
+                path: ${{ env.DEPS_CACHE }}
+                key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+  
 
             - name: Configure the build
               run: |
@@ -42,4 +63,3 @@ jobs:
               run: |
                 echo "Compilation started at $(date '+%a %d %b %Y %H:%M:%S %Z')."
                 ./mach build
-                
