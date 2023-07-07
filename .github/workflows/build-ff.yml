@@ -1,0 +1,86 @@
+name: "Build Firefox"
+
+on:
+    push:
+        branches:
+            - "release"
+    pull_request:
+        branches:
+            - "release"
+
+env:
+    SCCACHE_VERSION: "0.5.4"
+    DEPS_CACHE: |
+      ~/.mozbuild
+      /usr/local/bin/sccache
+
+concurrency:
+    group: ${{ github.ref }}
+    cancel-in-progress: ${{ github.ref != 'refs/heads/release' }}
+      
+jobs:
+    build:
+        strategy:
+            matrix:
+                os: [ubuntu-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+            - name: Checkout source tree
+              uses: actions/checkout@v3
+
+            - name: Restore dependency cache
+              id: deps-cache
+              uses: actions/cache/restore@v3
+              with:
+                path: ${{ env.DEPS_CACHE }}
+                key: deps-${{ matrix.os }}
+
+            - name: Install dependencies
+              run: |
+                sudo apt-get install -y curl \
+                                   python3 \
+                                   python3-pip
+
+                if [ ! -f "/usr/local/bin/sccache" ]; then
+                  curl -L https://github.com/mozilla/sccache/releases/download/v${{ env.SCCACHE_VERSION }}/sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl.tar.gz | tar -xzf -
+                  sudo mv sccache-v${{ env.SCCACHE_VERSION }}-$(uname -m)-unknown-linux-musl/sccache /usr/local/bin/
+                fi
+
+                ./mach --no-interactive bootstrap --application-choice browser
+
+            - name: Cache dependencies
+              uses: actions/cache/save@v3
+              with:
+                path: ${{ env.DEPS_CACHE }}
+                key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+  
+
+            - name: Configure the build
+              run: |
+                touch mozconfig
+                # todo: work out why we can't build without this
+                echo "ac_add_options --without-wasm-sandboxed-libraries" >> mozconfig
+                echo "ac_add_options --with-ccache=sccache" >> mozconfig
+
+            - name: Build the source tree
+              run: |
+                echo "Compilation started at $(date '+%a %d %b %Y %H:%M:%S %Z')."
+                ./mach build
+
+            - name: Configure build cache
+              if: ${{ github.ref == 'refs/heads/release' }}
+              run: |
+                echo "FF_VERSION=$(cat browser/config/version.txt)" >> "$GITHUB_ENV"
+                echo "ARCHIVE_NAME=$(echo firefox-$(cat browser/config/version.txt)-linux-$(uname -m).source.tar.xz)" >> "$GITHUB_ENV"
+                echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+                XZ_OPT='-9' tar --exclude=.git -cJf $ARCHIVE_NAME .
+
+            - name: Release built tree
+              if: ${{ github.ref == 'refs/heads/release' }}
+              uses: marvinpinto/action-automatic-releases@d68defdd11f9dcc7f52f35c1b7c236ee7513bcc1
+              with:
+                repo_token: ${{ secrets.ROBOT_TOKEN }}
+                automatic_release_tag: "${{ env.FF_VERSION }}-${{ env.SHORT_SHA }}"
+                prerelease: true
+                title: "v${{ env.FF_VERSION }} (${{ env.SHORT_SHA }})"
+                files: ${{ env.ARCHIVE_NAME }}
