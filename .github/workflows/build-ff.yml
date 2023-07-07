@@ -22,7 +22,7 @@ jobs:
     build:
         strategy:
             matrix:
-                os: [ubuntu-latest, buildjet-16vcpu-ubuntu-2204]
+                os: [buildjet-32vcpu-ubuntu-2204, buildjet-8vcpu-ubuntu-2204]
         runs-on: ${{ matrix.os }}
         steps:
             - name: Checkout source tree
