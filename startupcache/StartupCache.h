@@ -171,6 +171,8 @@ class StartupCache : public nsIMemoryReporter {
   // Signal that data should not be loaded from the cache file
   static void IgnoreDiskCache();
 
+  static bool GetIgnoreDiskCache();
+
   // In DEBUG builds, returns a stream that will attempt to check for
   // and disallow multiple writes of the same object.
   nsresult GetDebugObjectOutputStream(nsIObjectOutputStream* aStream,
@@ -211,12 +213,12 @@ class StartupCache : public nsIMemoryReporter {
   Result<Ok, nsresult> WriteToDisk() MOZ_REQUIRES(mTableLock);
 
   void WaitOnPrefetch();
-  void StartPrefetchMemory();
+  void StartPrefetchMemory() MOZ_REQUIRES(mTableLock);
 
   static nsresult InitSingleton();
   static void WriteTimeout(nsITimer* aTimer, void* aClosure);
   void MaybeWriteOffMainThread();
-  void ThreadedPrefetch();
+  void ThreadedPrefetch(uint8_t* aStart, size_t aSize);
 
   Monitor mPrefetchComplete{"StartupCachePrefetch"};
   bool mPrefetchInProgress MOZ_GUARDED_BY(mPrefetchComplete){false};
