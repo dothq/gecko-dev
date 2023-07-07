@@ -73,7 +73,7 @@ jobs:
                 echo "FF_VERSION=$(cat browser/config/version.txt)" >> "$GITHUB_ENV"
                 echo "ARCHIVE_NAME=$(echo firefox-$(cat browser/config/version.txt)-linux-$(uname -m).source.tar.xz)" >> "$GITHUB_ENV"
                 echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-                XZ_OPT='-9' tar -cJf $ARCHIVE_NAME .
+                XZ_OPT='-9' tar --exclude=.git -cJf $ARCHIVE_NAME .
 
             - name: Release built tree
               if: ${{ github.ref == 'refs/heads/release' }}
