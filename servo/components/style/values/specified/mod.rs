@@ -16,8 +16,8 @@ use super::generics::{self, GreaterThanOrEqualToOne, NonNegative};
 use super::{CSSFloat, CSSInteger};
 use crate::context::QuirksMode;
 use crate::parser::{Parse, ParserContext};
-use crate::values::serialize_atom_identifier;
 use crate::values::specified::calc::CalcNode;
+use crate::values::{serialize_atom_identifier, serialize_number};
 use crate::{Atom, Namespace, One, Prefix, Zero};
 use cssparser::{Parser, Token};
 use std::fmt::{self, Write};
@@ -195,15 +195,15 @@ fn parse_number_with_clamping_mode<'i, 't>(
     match *input.next()? {
         Token::Number { value, .. } if clamping_mode.is_ok(context.parsing_mode, value) => {
             Ok(Number {
-                value: value.min(f32::MAX).max(f32::MIN),
+                value,
                 calc_clamping_mode: None,
             })
         },
         Token::Function(ref name) => {
             let function = CalcNode::math_function(context, name, location)?;
-            let result = CalcNode::parse_number(context, input, function)?;
+            let value = CalcNode::parse_number(context, input, function)?;
             Ok(Number {
-                value: result.min(f32::MAX).max(f32::MIN),
+                value,
                 calc_clamping_mode: Some(clamping_mode),
             })
         },
@@ -234,6 +234,7 @@ impl Parse for Number {
 
 impl Number {
     /// Returns a new number with the value `val`.
+    #[inline]
     fn new_with_clamping_mode(
         value: CSSFloat,
         calc_clamping_mode: Option<AllowedNumericType>,
@@ -250,6 +251,7 @@ impl Number {
     }
 
     /// Returns a new number with the value `val`.
+    #[inline]
     pub fn new(val: CSSFloat) -> Self {
         Self::new_with_clamping_mode(val, None)
     }
@@ -263,8 +265,12 @@ impl Number {
     /// Returns the numeric value, clamped if needed.
     #[inline]
     pub fn get(&self) -> f32 {
-        self.calc_clamping_mode
-            .map_or(self.value, |mode| mode.clamp(self.value))
+        crate::values::normalize(
+            self.calc_clamping_mode
+                .map_or(self.value, |mode| mode.clamp(self.value)),
+        )
+        .min(f32::MAX)
+        .max(f32::MIN)
     }
 
     #[allow(missing_docs)]
@@ -315,14 +321,7 @@ impl ToCss for Number {
     where
         W: Write,
     {
-        if self.calc_clamping_mode.is_some() {
-            dest.write_str("calc(")?;
-        }
-        self.value.to_css(dest)?;
-        if self.calc_clamping_mode.is_some() {
-            dest.write_char(')')?;
-        }
-        Ok(())
+        serialize_number(self.value, self.calc_clamping_mode.is_some(), dest)
     }
 }
 

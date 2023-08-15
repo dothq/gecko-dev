@@ -404,7 +404,8 @@ static DynFn GetVMFunctionTarget(TailCallVMFunctionId id) {
 
 template <typename IdT>
 bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm,
-                                    VMWrapperOffsets& offsets) {
+                                    VMWrapperOffsets& offsets,
+                                    PerfSpewerRangeRecorder& rangeRecorder) {
   // Generate all VM function wrappers.
 
   static constexpr size_t NumVMFunctions = size_t(IdT::Count);
@@ -436,6 +437,9 @@ bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm,
     if (!generateVMWrapper(cx, masm, fun, GetVMFunctionTarget(id), &offset)) {
       return false;
     }
+#if defined(JS_ION_PERF)
+    rangeRecorder.recordVMWrapperOffset(fun.name());
+#endif
 
     MOZ_ASSERT(offsets.length() == size_t(id));
     offsets.infallibleAppend(offset);
@@ -444,13 +448,15 @@ bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm,
   return true;
 };
 
-bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm) {
-  if (!generateVMWrappers<VMFunctionId>(cx, masm, functionWrapperOffsets_)) {
+bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm,
+                                    PerfSpewerRangeRecorder& rangeRecorder) {
+  if (!generateVMWrappers<VMFunctionId>(cx, masm, functionWrapperOffsets_,
+                                        rangeRecorder)) {
     return false;
   }
 
   if (!generateVMWrappers<TailCallVMFunctionId>(
-          cx, masm, tailCallFunctionWrapperOffsets_)) {
+          cx, masm, tailCallFunctionWrapperOffsets_, rangeRecorder)) {
     return false;
   }
 
@@ -641,27 +647,6 @@ template bool StringsCompare<ComparisonKind::LessThan>(JSContext* cx,
                                                        bool* res);
 template bool StringsCompare<ComparisonKind::GreaterThanOrEqual>(
     JSContext* cx, HandleString lhs, HandleString rhs, bool* res);
-
-bool ArrayPushDensePure(JSContext* cx, ArrayObject* arr, Value* v) {
-  AutoUnsafeCallWithABI unsafe;
-
-  // Shape guards guarantee that the input is an extensible ArrayObject, which
-  // has a writable "length" property and has no other indexed properties.
-  MOZ_ASSERT(arr->isExtensible());
-  MOZ_ASSERT(arr->lengthIsWritable());
-  MOZ_ASSERT(!arr->isIndexed());
-
-  // Length must fit in an int32 because we guard against overflow before
-  // calling this VM function.
-  uint32_t index = arr->length();
-  MOZ_ASSERT(index < uint32_t(INT32_MAX));
-
-  DenseElementResult result = arr->setOrExtendDenseElements(cx, index, v, 1);
-  if (result == DenseElementResult::Failure) {
-    cx->recoverFromOutOfMemory();
-  }
-  return result == DenseElementResult::Success;
-}
 
 JSString* ArrayJoin(JSContext* cx, HandleObject array, HandleString sep) {
   JS::RootedValueArray<3> argv(cx);
@@ -877,25 +862,16 @@ void PostWriteBarrier(JSRuntime* rt, js::gc::Cell* cell) {
 
 static const size_t MAX_WHOLE_CELL_BUFFER_SIZE = 4096;
 
-template <IndexInBounds InBounds>
 void PostWriteElementBarrier(JSRuntime* rt, JSObject* obj, int32_t index) {
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!IsInsideNursery(obj));
 
-  if (InBounds == IndexInBounds::Yes) {
-    MOZ_ASSERT(uint32_t(index) <
-               obj->as<NativeObject>().getDenseInitializedLength());
-  } else {
-    if (MOZ_UNLIKELY(!obj->is<NativeObject>() || index < 0 ||
-                     uint32_t(index) >=
-                         NativeObject::MAX_DENSE_ELEMENTS_COUNT)) {
-      rt->gc.storeBuffer().putWholeCell(obj);
-      return;
-    }
-  }
-
   NativeObject* nobj = &obj->as<NativeObject>();
+
+  MOZ_ASSERT(index >= 0);
+  MOZ_ASSERT(uint32_t(index) < nobj->getDenseInitializedLength());
+
   if (nobj->isInWholeCellBuffer()) {
     return;
   }
@@ -912,14 +888,6 @@ void PostWriteElementBarrier(JSRuntime* rt, JSObject* obj, int32_t index) {
 
   rt->gc.storeBuffer().putWholeCell(obj);
 }
-
-template void PostWriteElementBarrier<IndexInBounds::Yes>(JSRuntime* rt,
-                                                          JSObject* obj,
-                                                          int32_t index);
-
-template void PostWriteElementBarrier<IndexInBounds::Maybe>(JSRuntime* rt,
-                                                            JSObject* obj,
-                                                            int32_t index);
 
 void PostGlobalWriteBarrier(JSRuntime* rt, GlobalObject* obj) {
   MOZ_ASSERT(obj->JSObject::is<GlobalObject>());
@@ -2269,7 +2237,7 @@ void* AllocateFatInlineString(JSContext* cx) {
 void* AllocateBigIntNoGC(JSContext* cx, bool requestMinorGC) {
   AutoUnsafeCallWithABI unsafe;
 
-  if (requestMinorGC) {
+  if (requestMinorGC && cx->nursery().isEnabled()) {
     cx->nursery().requestMinorGC(JS::GCReason::OUT_OF_NURSERY);
   }
 

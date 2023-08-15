@@ -15,6 +15,7 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   Downloader: "resource://services-settings/Attachments.sys.mjs",
   ExperimentAPI: "resource://nimbus/ExperimentAPI.sys.mjs",
+  KintoHttpClient: "resource://services-common/kinto-http-client.sys.mjs",
   MacAttribution: "resource:///modules/MacAttribution.sys.mjs",
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
   PanelTestProvider: "resource://activity-stream/lib/PanelTestProvider.sys.mjs",
@@ -41,7 +42,6 @@ XPCOMUtils.defineLazyModuleGetters(lazy, {
     "resource://activity-stream/lib/ASRouterPreferences.jsm",
   ASRouterTriggerListeners:
     "resource://activity-stream/lib/ASRouterTriggerListeners.jsm",
-  KintoHttpClient: "resource://services-common/kinto-http-client.js",
 });
 
 XPCOMUtils.defineLazyServiceGetters(lazy, {
@@ -1163,12 +1163,23 @@ class _ASRouter {
         }
 
         const target = {};
-        const promises = Object.entries(object).map(async ([key, value]) => [
-          key,
-          await resolve(await value),
-        ]);
-        for (const [key, value] of await Promise.all(promises)) {
-          target[key] = value;
+        const promises = Object.entries(object).map(async ([key, value]) => {
+          try {
+            let resolvedValue = await resolve(await value);
+            return [key, resolvedValue];
+          } catch (error) {
+            lazy.ASRouterPreferences.console.debug(
+              `getTargetingParameters: Error resolving ${key}: `,
+              error
+            );
+            throw error;
+          }
+        });
+        for (const { status, value } of await Promise.allSettled(promises)) {
+          if (status === "fulfilled") {
+            const [key, resolvedValue] = value;
+            target[key] = resolvedValue;
+          }
         }
         return target;
       }

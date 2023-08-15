@@ -41,6 +41,9 @@ exclude = [
   "tools/fuzzing/rust",
   "dom/base/rust",
   "dom/origin-trials/ffi",
+
+  # Excluded because we don't want to vendor their dependencies.
+  "intl/l10n/rust/l10nregistry-tests"
 ]
 
 # Use the new dependency resolver to reduce some of the platform-specific dependencies.
@@ -93,8 +96,14 @@ vcpkg = { path = "build/rust/vcpkg" }
 # Helper crate for integration in the gecko build system.
 mozbuild = { path = "build/rust/mozbuild" }
 
+# Workspace hack
+mozilla-central-workspace-hack = { path = "build/workspace-hack" }
+
 # Dummy oslog replacement. It's only used by glean in code that is not actually used.
 oslog = { path = "build/rust/oslog" }
+
+# Override terminal_size with a dummy crate that returns a fixed 80x25 terminal size.
+terminal_size = { path = "build/rust/terminal_size" }
 
 # Patch bitflags 2.0 to 1.0 while not too many crates use 2.0 features
 bitflags = { path = "build/rust/bitflags" }
@@ -102,8 +111,8 @@ bitflags = { path = "build/rust/bitflags" }
 # Patch cfg-if 0.1 to 1.0
 cfg-if = { path = "build/rust/cfg-if" }
 
-# Patch darling 0.13 to 0.14
-darling = { path = "build/rust/darling" }
+# Patch serde_with 1.0 to 3.0
+serde_with = { path = "build/rust/serde_with" }
 
 # Patch redox_users to an empty crate
 redox_users = { path = "build/rust/redox_users" }
@@ -124,7 +133,8 @@ base64 = { path = "build/rust/base64" }
 # Patch wasi 0.10 to 0.11
 wasi = { path = "build/rust/wasi" }
 
-# Patch bindgen 0.63 to 0.64
+# Patch bindgen 0.63 and 0.64 to 0.66
+bindgen_0_63 = { package = "bindgen", path = "build/rust/bindgen-0.63" }
 bindgen = { path = "build/rust/bindgen" }
 
 # Patch ntapi 0.3 to 0.4
@@ -152,16 +162,17 @@ moz_asserts = { path = "mozglue/static/rust/moz_asserts" }
 # Workaround for https://github.com/rust-lang/cargo/issues/11232
 rure = { path = "third_party/rust/rure" }
 
-# 0.31.1 but without rust-cssparser#342.
-# TODO: Remove these, and just use v0.31.1 once bug 1836219 lands
-# (which will get syn 2 into the tree).
-cssparser = { path = "third_party/rust/cssparser" }
-cssparser-macros = { path = "third_party/rust/cssparser-macros" }
+# num-derive 0.3.3 + https://github.com/rust-num/num-derive/pull/54
+num-derive = { path = "third_party/rust/num-derive" }
+
+# phf_macros 0.10.0 + https://github.com/rust-phf/rust-phf/pull/284
+phf_macros = { path = "third_party/rust/phf_macros" }
 
 # Other overrides
 chardetng = { git = "https://github.com/hsivonen/chardetng", rev="3484d3e3ebdc8931493aa5df4d7ee9360a90e76b" }
 chardetng_c = { git = "https://github.com/hsivonen/chardetng_c", rev="ed8a4c6f900a90d4dbc1d64b856e61490a1c3570" }
 coremidi = { git = "https://github.com/chris-zen/coremidi.git", rev="fc68464b5445caf111e41f643a2e69ccce0b4f83" }
+cose = { git = "https://github.com/franziskuskiefer/cose-rust", rev = "43c22248d136c8b38fe42ea709d08da6355cf04b" }
 firefox-on-glean = { path = "toolkit/components/glean/api" }
 libudev-sys = { path = "dom/webauthn/libudev-sys" }
 packed_simd = { package = "packed_simd_2", git = "https://github.com/hsivonen/packed_simd", rev="412f9a0aa556611de021bde89dee8fefe6e0fbbd" }

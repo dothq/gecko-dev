@@ -10,6 +10,8 @@ import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
+  AddonManagerPrivate: "resource://gre/modules/AddonManager.sys.mjs",
   ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
   FileUtils: "resource://gre/modules/FileUtils.sys.mjs",
   JSONFile: "resource://gre/modules/JSONFile.sys.mjs",
@@ -566,13 +568,35 @@ export var OriginControls = {
     };
   },
 
-  // Whether to show the attention indicator for extension on current tab.
-  getAttention(policy, window) {
+  /**
+   * Whether to show the attention indicator for extension on current tab. We
+   * usually show attention when:
+   *
+   * - some permissions are needed (in MV3+)
+   * - the extension is not allowed on the domain (quarantined)
+   *
+   * @param {WebExtensionPolicy} policy an extension's policy
+   * @param {Window} window The window for which we can get the attention state
+   * @returns {{attention: boolean, quarantined: boolean}}
+   */
+  getAttentionState(policy, window) {
     if (policy?.manifestVersion >= 3) {
-      let state = this.getState(policy, window.gBrowser.selectedTab);
-      return !!state.whenClicked && !state.hasAccess && !state.temporaryAccess;
+      const state = this.getState(policy, window.gBrowser.selectedTab);
+      // quarantined is always false when the feature is disabled.
+      const quarantined = !!state.quarantined;
+      const attention =
+        quarantined ||
+        (!!state.whenClicked && !state.hasAccess && !state.temporaryAccess);
+
+      return { attention, quarantined };
     }
-    return false;
+
+    // No need to check whether the Quarantined Domains feature is enabled
+    // here, it's already done in `getState()`.
+    const state = this.getState(policy, window.gBrowser.selectedTab);
+    const attention = !!state.quarantined;
+    // If it needs attention, it's because of the quarantined domains.
+    return { attention, quarantined: attention };
   },
 
   // Grant extension host permission to always run on this host.
@@ -655,6 +679,52 @@ export var OriginControls = {
     return null;
   },
 };
+
+export var QuarantinedDomains = {
+  getUserAllowedAddonIdPrefName(addonId) {
+    return `${this.PREF_ADDONS_BRANCH_NAME}${addonId}`;
+  },
+  isUserAllowedAddonId(addonId) {
+    return Services.prefs.getBoolPref(
+      this.getUserAllowedAddonIdPrefName(addonId),
+      false
+    );
+  },
+  setUserAllowedAddonIdPref(addonId, userAllowed) {
+    Services.prefs.setBoolPref(
+      this.getUserAllowedAddonIdPrefName(addonId),
+      userAllowed
+    );
+  },
+  clearUserPref(addonId) {
+    Services.prefs.clearUserPref(this.getUserAllowedAddonIdPrefName(addonId));
+  },
+
+  // Implementation internals.
+
+  PREF_ADDONS_BRANCH_NAME: `extensions.quarantineIgnoredByUser.`,
+  _init() {
+    const onUserAllowedPrefChanged = this._onUserAllowedPrefChanged.bind(this);
+    Services.prefs.addObserver(
+      this.PREF_ADDONS_BRANCH_NAME,
+      onUserAllowedPrefChanged
+    );
+  },
+  async _onUserAllowedPrefChanged(_subject, _topic, prefName) {
+    let addonId = prefName.slice(this.PREF_ADDONS_BRANCH_NAME.length);
+    // Sanity check.
+    if (!addonId || prefName !== this.getUserAllowedAddonIdPrefName(addonId)) {
+      return;
+    }
+
+    // Notify listeners, e.g. to update details in TelemetryEnvironment.
+    const addon = await lazy.AddonManager.getAddonByID(addonId);
+    lazy.AddonManagerPrivate.callAddonListeners("onPropertyChanged", addon, [
+      "quarantineIgnoredByUser",
+    ]);
+  },
+};
+QuarantinedDomains._init();
 
 // Constants exported for testing purpose.
 export {

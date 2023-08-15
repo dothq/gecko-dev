@@ -52,6 +52,21 @@ function moduleCompareForDisplay(a, b) {
 async function fetchData() {
   let data = null;
   try {
+    // Wait until the module load events are ready (bug 1833152)
+    const sleep = delayInMs =>
+      new Promise(resolve => setTimeout(resolve, delayInMs));
+    let loadEventsReady = Services.telemetry.areUntrustedModuleLoadEventsReady;
+    let numberOfAttempts = 0;
+    // Just to make sure we don't infinite loop here. (this is normally quite
+    // quick) If we do hit this limit, the page will return an empty list of
+    // modules.
+    const MAX_ATTEMPTS = 30;
+    while (!loadEventsReady && numberOfAttempts < MAX_ATTEMPTS) {
+      await sleep(1000);
+      numberOfAttempts++;
+      loadEventsReady = Services.telemetry.areUntrustedModuleLoadEventsReady;
+    }
+
     data = await Services.telemetry.getUntrustedModuleLoadEvents(
       Services.telemetry.INCLUDE_OLD_LOADEVENTS |
         Services.telemetry.KEEP_LOADEVENTS_NEW |
@@ -158,7 +173,7 @@ function setContent(element, text, l10n) {
   if (text) {
     element.textContent = text;
   } else if (l10n) {
-    element.setAttribute("data-l10n-id", l10n);
+    document.l10n.setAttributes(element, l10n);
   }
 }
 
@@ -224,7 +239,7 @@ async function onBlock(event) {
         ? "third-party-button-to-unblock-disabled"
         : "third-party-button-to-unblock";
     }
-    event.target.setAttribute("data-l10n-id", blockButtonL10nId);
+    document.l10n.setAttributes(event.target, blockButtonL10nId);
     updatedBlocklist = true;
   } catch (ex) {
     console.error("Failed to update the blocklist file - ", ex.result);
@@ -384,8 +399,8 @@ function setUpBlockButton(aCard, isBlocklistDisabled, aModule) {
     blockButton.classList.add("blocklist-disabled");
   }
   if (blockButton.classList.contains("module-blocked")) {
-    blockButton.setAttribute(
-      "data-l10n-id",
+    document.l10n.setAttributes(
+      blockButton,
       isBlocklistDisabled
         ? "third-party-button-to-unblock-disabled"
         : "third-party-button-to-unblock"

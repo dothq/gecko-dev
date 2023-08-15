@@ -10,6 +10,7 @@ use cssparser::{Parser, ParserInput, SourceLocation, UnicodeRange};
 use dom::{DocumentState, ElementState};
 use malloc_size_of::MallocSizeOfOps;
 use nsstring::{nsCString, nsString};
+use selectors::matching::IgnoreNthChildForInvalidation;
 use selectors::NthIndexCache;
 use servo_arc::{Arc, ArcBorrow};
 use smallvec::SmallVec;
@@ -18,7 +19,6 @@ use std::fmt::Write;
 use std::iter;
 use std::os::raw::c_void;
 use std::ptr;
-use style::applicable_declarations::ApplicableDeclarationBlock;
 use style::color::mix::ColorInterpolationMethod;
 use style::color::{AbsoluteColor, ColorSpace};
 use style::context::ThreadLocalStyleContext;
@@ -105,7 +105,7 @@ use style::properties::{PropertyDeclarationId, ShorthandId};
 use style::properties::{SourcePropertyDeclaration, StyleBuilder};
 use style::properties_and_values::rule::Inherits as PropertyInherits;
 use style::rule_cache::RuleCacheConditions;
-use style::rule_tree::{CascadeLevel, StrongRuleNode};
+use style::rule_tree::StrongRuleNode;
 use style::selector_parser::PseudoElementCascadeType;
 use style::shared_lock::{
     Locked, SharedRwLock, SharedRwLockReadGuard, StylesheetGuards, ToCssWithGuard,
@@ -115,14 +115,14 @@ use style::style_adjuster::StyleAdjuster;
 use style::stylesheets::container_rule::ContainerSizeQuery;
 use style::stylesheets::import_rule::{ImportLayer, ImportSheet};
 use style::stylesheets::keyframes_rule::{Keyframe, KeyframeSelector, KeyframesStepValue};
-use style::stylesheets::layer_rule::LayerOrder;
 use style::stylesheets::supports_rule::parse_condition_or_declaration;
 use style::stylesheets::{
-    AllowImportRules, ContainerRule, CounterStyleRule, CssRule, CssRuleType, CssRules,
-    CssRulesHelpers, DocumentRule, FontFaceRule, FontFeatureValuesRule, FontPaletteValuesRule,
-    ImportRule, KeyframesRule, LayerBlockRule, LayerStatementRule, MediaRule, NamespaceRule,
-    Origin, OriginSet, PageRule, PropertyRule, SanitizationData, SanitizationKind, StyleRule,
-    StylesheetContents, StylesheetLoader as StyleStylesheetLoader, SupportsRule, UrlExtraData,
+    AllowImportRules, ContainerRule, CounterStyleRule, CssRule, CssRuleType, CssRuleTypes,
+    CssRules, CssRulesHelpers, DocumentRule, FontFaceRule, FontFeatureValuesRule,
+    FontPaletteValuesRule, ImportRule, KeyframesRule, LayerBlockRule, LayerStatementRule,
+    MediaRule, NamespaceRule, Origin, OriginSet, PagePseudoClassFlags, PageRule, PropertyRule,
+    SanitizationData, SanitizationKind, StyleRule, StylesheetContents, StylesheetLoader as
+    StyleStylesheetLoader, SupportsRule, UrlExtraData,
 };
 use style::stylist::{add_size_of_ua_cache, AuthorStylesEnabled, RuleInclusion, Stylist};
 use style::thread_state;
@@ -132,8 +132,9 @@ use style::traversal_flags::{self, TraversalFlags};
 use style::use_counters::UseCounters;
 use style::values::animated::{Animate, Procedure, ToAnimatedZero};
 use style::values::computed::easing::ComputedTimingFunction;
+use style::values::computed::effects::Filter;
 use style::values::computed::font::{
-    FontFamily, FontFamilyList, FontStretch, FontStyle, FontWeight, GenericFontFamily,
+    FamilyName, FontFamily, FontFamilyList, FontStretch, FontStyle, FontWeight, GenericFontFamily,
 };
 use style::values::computed::{self, Context, ToComputedValue};
 use style::values::distance::ComputeSquaredDistance;
@@ -815,9 +816,13 @@ pub unsafe extern "C" fn Servo_AnimationValue_GetTransform(
 #[no_mangle]
 pub unsafe extern "C" fn Servo_AnimationValue_GetOffsetPath(
     value: &AnimationValue,
-) -> *const computed::motion::OffsetPath {
+    output: &mut computed::motion::OffsetPath,
+) {
+    use style::values::animated::ToAnimatedValue;
     match *value {
-        AnimationValue::OffsetPath(ref value) => value,
+        AnimationValue::OffsetPath(ref value) => {
+            *output = ToAnimatedValue::from_animated_value(value.clone())
+        },
         _ => unreachable!("Expected offset-path"),
     }
 }
@@ -853,6 +858,16 @@ pub unsafe extern "C" fn Servo_AnimationValue_GetOffsetAnchor(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn Servo_AnimationValue_GetOffsetPosition(
+    value: &AnimationValue,
+) -> *const computed::motion::OffsetPosition {
+    match *value {
+        AnimationValue::OffsetPosition(ref value) => value,
+        _ => unreachable!("Expected offset-position"),
+    }
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn Servo_AnimationValue_Rotate(
     r: &computed::Rotate,
 ) -> Strong<AnimationValue> {
@@ -882,7 +897,8 @@ pub unsafe extern "C" fn Servo_AnimationValue_Transform(
 pub unsafe extern "C" fn Servo_AnimationValue_OffsetPath(
     p: &computed::motion::OffsetPath,
 ) -> Strong<AnimationValue> {
-    Arc::new(AnimationValue::OffsetPath(p.clone())).into()
+    use style::values::animated::ToAnimatedValue;
+    Arc::new(AnimationValue::OffsetPath(p.clone().to_animated_value())).into()
 }
 
 #[no_mangle]
@@ -904,6 +920,13 @@ pub unsafe extern "C" fn Servo_AnimationValue_OffsetAnchor(
     p: &computed::position::PositionOrAuto,
 ) -> Strong<AnimationValue> {
     Arc::new(AnimationValue::OffsetAnchor(p.clone())).into()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn Servo_AnimationValue_OffsetPosition(
+    p: &computed::motion::OffsetPosition,
+) -> Strong<AnimationValue> {
+    Arc::new(AnimationValue::OffsetPosition(p.clone())).into()
 }
 
 #[no_mangle]
@@ -1025,18 +1048,16 @@ impl_basic_serde_funcs!(
 );
 
 impl_basic_serde_funcs!(
+    Servo_StyleOffsetPosition_Serialize,
+    Servo_StyleOffsetPosition_Deserialize,
+    computed::motion::OffsetPosition
+);
+
+impl_basic_serde_funcs!(
     Servo_StyleComputedTimingFunction_Serialize,
     Servo_StyleComputedTimingFunction_Deserialize,
     ComputedTimingFunction
 );
-
-#[no_mangle]
-pub extern "C" fn Servo_SVGPathData_Normalize(
-    input: &specified::SVGPathData,
-    output: &mut specified::SVGPathData,
-) {
-    *output = input.normalize();
-}
 
 // Return the ComputedValues by a base ComputedValues and the rules.
 fn resolve_rules_for_element_with_context<'a>(
@@ -2061,7 +2082,7 @@ pub extern "C" fn Servo_CssRules_InsertRule(
     contents: &StylesheetContents,
     rule: &nsACString,
     index: u32,
-    nested: bool,
+    containing_rule_types: u32,
     loader: *mut Loader,
     allow_import_rules: AllowImportRules,
     gecko_stylesheet: *mut DomStyleSheet,
@@ -2088,7 +2109,7 @@ pub extern "C" fn Servo_CssRules_InsertRule(
         rule,
         contents,
         index as usize,
-        nested,
+        CssRuleTypes::from_bits(containing_rule_types),
         loader,
         allow_import_rules,
     );
@@ -2246,6 +2267,25 @@ impl_basic_rule_funcs! { (Style, StyleRule, Locked<StyleRule>),
     changed: Servo_StyleSet_StyleRuleChanged,
 }
 
+#[no_mangle]
+pub extern "C" fn Servo_StyleRule_EnsureRules(rule: &LockedStyleRule, read_only: bool) -> Strong<LockedCssRules> {
+    let global_style_data = &*GLOBAL_STYLE_DATA;
+    let lock = &global_style_data.shared_lock;
+    if read_only {
+        let guard = lock.read();
+        if let Some(ref rules) = rule.read_with(&guard).rules {
+            return rules.clone().into();
+        }
+        return CssRules::new(vec![], lock).into();
+    }
+    let mut guard = lock.write();
+    rule.write_with(&mut guard)
+        .rules
+        .get_or_insert_with(|| CssRules::new(vec![], lock))
+        .clone()
+        .into()
+}
+
 impl_basic_rule_funcs! { (Import, ImportRule, Locked<ImportRule>),
     getter: Servo_CssRules_GetImportRuleAt,
     debug: Servo_ImportRule_Debug,
@@ -2380,107 +2420,97 @@ pub extern "C" fn Servo_StyleRule_SetStyle(
 
 #[no_mangle]
 pub extern "C" fn Servo_StyleRule_GetSelectorText(rule: &LockedStyleRule, result: &mut nsACString) {
-    read_locked_arc(rule, |rule: &StyleRule| {
-        rule.selectors.to_css(result).unwrap();
-    })
+    read_locked_arc(rule, |rule| rule.selectors.to_css(result).unwrap());
+}
+
+fn desugared_selector_list(rules: &ThinVec<&LockedStyleRule>) -> SelectorList {
+    let mut selectors: Option<SelectorList> = None;
+    for rule in rules.iter().rev() {
+        selectors = Some(read_locked_arc(rule, |rule| match selectors {
+            Some(s) => rule.selectors.replace_parent_selector(&s.0),
+            None => rule.selectors.clone(),
+        }));
+    }
+    selectors.expect("Empty rule chain?")
 }
 
 #[no_mangle]
-pub extern "C" fn Servo_StyleRule_GetSelectorTextAtIndex(
-    rule: &LockedStyleRule,
+pub extern "C" fn Servo_StyleRule_GetSelectorDataAtIndex(
+    rules: &ThinVec<&LockedStyleRule>,
     index: u32,
-    result: &mut nsACString,
+    text: Option<&mut nsACString>,
+    specificity: Option<&mut u64>,
 ) {
-    read_locked_arc(rule, |rule: &StyleRule| {
-        let index = index as usize;
-        if index >= rule.selectors.0.len() {
-            return;
-        }
-        rule.selectors.0[index].to_css(result).unwrap();
-    })
+    let selectors = desugared_selector_list(rules);
+    let Some(selector) = selectors.0.get(index as usize) else { return };
+    if let Some(text) = text {
+        selector.to_css(text).unwrap();
+    }
+    if let Some(specificity) = specificity {
+        *specificity = selector.specificity() as u64;
+    }
 }
 
 #[no_mangle]
-pub extern "C" fn Servo_StyleRule_GetSelectorCount(rule: &LockedStyleRule, count: *mut u32) {
-    read_locked_arc(rule, |rule: &StyleRule| {
-        *unsafe { count.as_mut().unwrap() } = rule.selectors.0.len() as u32;
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn Servo_StyleRule_GetSpecificityAtIndex(
-    rule: &LockedStyleRule,
-    index: u32,
-    specificity: *mut u64,
-) {
-    read_locked_arc(rule, |rule: &StyleRule| {
-        let specificity = unsafe { specificity.as_mut().unwrap() };
-        let index = index as usize;
-        if index >= rule.selectors.0.len() {
-            *specificity = 0;
-            return;
-        }
-        *specificity = rule.selectors.0[index].specificity() as u64;
-    })
+pub extern "C" fn Servo_StyleRule_GetSelectorCount(rule: &LockedStyleRule) -> u32 {
+    read_locked_arc(rule, |rule| rule.selectors.0.len() as u32)
 }
 
 #[no_mangle]
 pub extern "C" fn Servo_StyleRule_SelectorMatchesElement(
-    rule: &LockedStyleRule,
+    rules: &ThinVec<&LockedStyleRule>,
     element: &RawGeckoElement,
     index: u32,
+    host: Option<&RawGeckoElement>,
     pseudo_type: PseudoStyleType,
     relevant_link_visited: bool,
 ) -> bool {
     use selectors::matching::{
         matches_selector, MatchingContext, MatchingMode, NeedsSelectorFlags, VisitedHandlingMode,
     };
-    read_locked_arc(rule, |rule: &StyleRule| {
-        let index = index as usize;
-        if index >= rule.selectors.0.len() {
-            return false;
-        }
+    let selectors = desugared_selector_list(rules);
+    let Some(selector) = selectors.0.get(index as usize) else { return false };
+    let mut matching_mode = MatchingMode::Normal;
+    match PseudoElement::from_pseudo_type(pseudo_type) {
+        Some(pseudo) => {
+            // We need to make sure that the requested pseudo element type
+            // matches the selector pseudo element type before proceeding.
+            match selector.pseudo_element() {
+                Some(selector_pseudo) if *selector_pseudo == pseudo => {
+                    matching_mode = MatchingMode::ForStatelessPseudoElement
+                },
+                _ => return false,
+            };
+        },
+        None => {
+            // Do not attempt to match if a pseudo element is requested and
+            // this is not a pseudo element selector, or vice versa.
+            if selector.has_pseudo_element() {
+                return false;
+            }
+        },
+    };
 
-        let selector = &rule.selectors.0[index];
-        let mut matching_mode = MatchingMode::Normal;
-
-        match PseudoElement::from_pseudo_type(pseudo_type) {
-            Some(pseudo) => {
-                // We need to make sure that the requested pseudo element type
-                // matches the selector pseudo element type before proceeding.
-                match selector.pseudo_element() {
-                    Some(selector_pseudo) if *selector_pseudo == pseudo => {
-                        matching_mode = MatchingMode::ForStatelessPseudoElement
-                    },
-                    _ => return false,
-                };
-            },
-            None => {
-                // Do not attempt to match if a pseudo element is requested and
-                // this is not a pseudo element selector, or vice versa.
-                if selector.has_pseudo_element() {
-                    return false;
-                }
-            },
-        };
-
-        let element = GeckoElement(element);
-        let quirks_mode = element.as_node().owner_doc().quirks_mode();
-        let mut nth_index_cache = Default::default();
-        let visited_mode = if relevant_link_visited {
-            VisitedHandlingMode::RelevantLinkVisited
-        } else {
-            VisitedHandlingMode::AllLinksUnvisited
-        };
-        let mut ctx = MatchingContext::new_for_visited(
-            matching_mode,
-            None,
-            &mut nth_index_cache,
-            visited_mode,
-            quirks_mode,
-            NeedsSelectorFlags::No,
-        );
-        matches_selector(selector, 0, None, &element, &mut ctx)
+    let element = GeckoElement(element);
+    let host = host.map(GeckoElement);
+    let quirks_mode = element.as_node().owner_doc().quirks_mode();
+    let mut nth_index_cache = Default::default();
+    let visited_mode = if relevant_link_visited {
+        VisitedHandlingMode::RelevantLinkVisited
+    } else {
+        VisitedHandlingMode::AllLinksUnvisited
+    };
+    let mut ctx = MatchingContext::new_for_visited(
+        matching_mode,
+        /* bloom_filter = */ None,
+        &mut nth_index_cache,
+        visited_mode,
+        quirks_mode,
+        NeedsSelectorFlags::No,
+        IgnoreNthChildForInvalidation::No,
+    );
+    ctx.with_shadow_host(host, |ctx| {
+        matches_selector(selector, 0, None, &element, ctx)
     })
 }
 
@@ -2496,6 +2526,7 @@ pub extern "C" fn Servo_StyleRule_SetSelectorText(
 
     write_locked_arc(rule, |rule: &mut StyleRule| {
         use style::selector_parser::SelectorParser;
+        use selectors::parser::ParseRelative;
 
         let namespaces = contents.namespaces.read();
         let url_data = contents.url_data.read();
@@ -2506,8 +2537,10 @@ pub extern "C" fn Servo_StyleRule_SetSelectorText(
             for_supports_rule: false,
         };
 
+        // TODO: Maybe allow setting relative selectors from the OM, if we're in a nested style
+        // rule?
         let mut parser_input = ParserInput::new(&value_str);
-        match SelectorList::parse(&parser, &mut Parser::new(&mut parser_input)) {
+        match SelectorList::parse(&parser, &mut Parser::new(&mut parser_input), ParseRelative::No) {
             Ok(selectors) => {
                 rule.selectors = selectors;
                 true
@@ -3823,39 +3856,30 @@ counter_style_descriptors! {
 pub unsafe extern "C" fn Servo_ComputedValues_GetForPageContent(
     raw_data: &PerDocumentStyleData,
     page_name: *const nsAtom,
+    pseudos: PagePseudoClassFlags,
 ) -> Strong<ComputedValues> {
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let guard = global_style_data.shared_lock.read();
     let guards = StylesheetGuards::same(&guard);
     let data = raw_data.borrow_mut();
+    let cascade_data = data.stylist.cascade_data();
 
     let mut extra_declarations = vec![];
     let iter = data.stylist.iter_extra_data_origins_rev();
+    let name = if !page_name.is_null() {
+        Some(Atom::from_raw(page_name as *mut nsAtom))
+    } else {
+        None
+    };
     for (data, origin) in iter {
-        let level = match origin {
-            Origin::UserAgent => CascadeLevel::UANormal,
-            Origin::User => CascadeLevel::UserNormal,
-            Origin::Author => CascadeLevel::same_tree_author_normal(),
-        };
-        extra_declarations.reserve(data.pages.global.len());
-        let mut add_rule = |rule: &Arc<Locked<PageRule>>| {
-            extra_declarations.push(ApplicableDeclarationBlock::from_declarations(
-                rule.read_with(level.guard(&guards)).block.clone(),
-                level,
-                LayerOrder::root(),
-            ));
-        };
-        for &(ref rule, _layer_id) in data.pages.global.iter() {
-            add_rule(&rule.0);
-        }
-        if !page_name.is_null() {
-            Atom::with(page_name, |name| {
-                if let Some(rules) = data.pages.named.get(name) {
-                    // Rules are already sorted by source order.
-                    rules.iter().for_each(|d| add_rule(&d.rule));
-                }
-            });
-        }
+        data.pages.match_and_append_rules(
+            &mut extra_declarations,
+            origin,
+            &guards,
+            cascade_data,
+            &name,
+            pseudos,
+        );
     }
 
     let rule_node = data.stylist.rule_node_for_precomputed_pseudo(
@@ -5921,17 +5945,25 @@ pub extern "C" fn Servo_ResolveStyleLazily(
 pub extern "C" fn Servo_ReparentStyle(
     style_to_reparent: &ComputedValues,
     parent_style: &ComputedValues,
-    parent_style_ignoring_first_line: &ComputedValues,
     layout_parent_style: &ComputedValues,
     element: Option<&RawGeckoElement>,
     raw_data: &PerDocumentStyleData,
 ) -> Strong<ComputedValues> {
+    use style::properties::FirstLineReparenting;
+
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let guard = global_style_data.shared_lock.read();
     let doc_data = raw_data.borrow();
     let inputs = CascadeInputs::new_from_style(style_to_reparent);
     let pseudo = style_to_reparent.pseudo();
     let element = element.map(GeckoElement);
+
+    let is_pseudo_element = element.is_some() && pseudo.is_some();
+    let originating_element_style = if is_pseudo_element {
+        Some(parent_style)
+    } else {
+        None
+    };
 
     doc_data
         .stylist
@@ -5940,13 +5972,10 @@ pub extern "C" fn Servo_ReparentStyle(
             pseudo.as_ref(),
             inputs,
             &StylesheetGuards::same(&guard),
-            match element.is_some() && pseudo.is_some() {
-                true => Some(parent_style),
-                false => None,
-            },
+            originating_element_style,
             Some(parent_style),
-            Some(parent_style_ignoring_first_line),
             Some(layout_parent_style),
+            FirstLineReparenting::Yes { style_to_reparent },
             /* rule_cache = */ None,
             &mut RuleCacheConditions::default(),
         )
@@ -7197,6 +7226,62 @@ pub extern "C" fn Servo_ParseTransformIntoMatrix(
 }
 
 #[no_mangle]
+pub extern "C" fn Servo_ParseFilters(
+    value: &nsACString,
+    ignore_urls: bool,
+    data: *mut URLExtraData,
+    out: &mut style::OwnedSlice<Filter>,
+) -> bool {
+    use style::values::specified::effects::SpecifiedFilter;
+
+    let string = unsafe { value.as_str_unchecked() };
+    let mut input = ParserInput::new(&string);
+    let mut parser = Parser::new(&mut input);
+    let url_data = unsafe { UrlExtraData::from_ptr_ref(&data) };
+    let context = ParserContext::new(
+        Origin::Author,
+        url_data,
+        None,
+        ParsingMode::DEFAULT,
+        QuirksMode::NoQuirks,
+        /* namespaces = */ Default::default(),
+        None,
+        None,
+    );
+
+    let mut filters = vec![];
+
+    if parser.try_parse(|i| i.expect_ident_matching("none")).is_ok() {
+        return parser.expect_exhausted().is_ok();
+    }
+
+    if parser.is_exhausted() {
+        return false;
+    }
+
+    while !parser.is_exhausted() {
+        let specified_filter = match SpecifiedFilter::parse(&context, &mut parser) {
+            Ok(f) => f,
+            Err(..) => return false,
+        };
+
+        let filter = match specified_filter.to_computed_value_without_context() {
+            Ok(f) => f,
+            Err(..) => return false,
+        };
+
+        if ignore_urls && matches!(filter, Filter::Url(_)) {
+            continue;
+        }
+
+        filters.push(filter);
+    }
+
+    *out = style::OwnedSlice::from(filters);
+    true
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
     value: &nsACString,
     data: *mut URLExtraData,
@@ -7205,6 +7290,7 @@ pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
     stretch: &mut FontStretch,
     weight: &mut FontWeight,
     size: Option<&mut f32>,
+    small_caps: Option<&mut bool>,
 ) -> bool {
     use style::properties::shorthands::font;
     use style::values::generics::font::FontStyle as GenericFontStyle;
@@ -7292,6 +7378,11 @@ pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
                 return false;
             },
         };
+    }
+
+    if let Some(small_caps) = small_caps {
+        use style::computed_values::font_variant_caps::T::SmallCaps;
+        *small_caps = font.font_variant_caps == SmallCaps;
     }
 
     true
@@ -7496,17 +7587,6 @@ pub unsafe extern "C" fn Servo_SharedMemoryBuilder_Drop(builder: *mut SharedMemo
     let _ = Box::from_raw(builder);
 }
 
-/// Returns a unique pointer to a clone of the shape image.
-///
-/// Probably temporary, as we move more stuff to cbindgen.
-#[no_mangle]
-#[must_use]
-pub unsafe extern "C" fn Servo_CloneBasicShape(
-    v: &computed::basic_shape::BasicShape,
-) -> *mut computed::basic_shape::BasicShape {
-    Box::into_raw(Box::new(v.clone()))
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn Servo_StyleArcSlice_EmptyPtr() -> *mut c_void {
     style_traits::arc_slice::ArcSlice::<u64>::leaked_empty_ptr()
@@ -7587,6 +7667,11 @@ pub extern "C" fn Servo_FontFamilyList_WithNames(
     *out = FontFamilyList {
         list: style_traits::arc_slice::ArcSlice::from_iter(names.iter().cloned()),
     };
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_FamilyName_Serialize(name: &FamilyName, result: &mut nsACString) {
+    name.to_css(&mut CssWriter::new(result)).unwrap()
 }
 
 #[no_mangle]
@@ -7736,4 +7821,84 @@ pub extern "C" fn Servo_ParseAbsoluteLength(len: &nsACString, out: &mut f32) -> 
         },
         Err(..) => false,
     }
+}
+
+#[repr(u8)]
+pub enum RegisterCustomPropertyResult {
+    SuccessfullyRegistered,
+    InvalidName,
+    AlreadyRegistered,
+    InvalidSyntax,
+    NoInitialValue,
+    InvalidInitialValue,
+    InitialValueNotComputationallyIndependent,
+}
+
+/// https://drafts.css-houdini.org/css-properties-values-api-1/#the-registerproperty-function
+#[no_mangle]
+pub extern "C" fn Servo_RegisterCustomProperty(
+    per_doc_data: &PerDocumentStyleData,
+    name: &nsACString,
+    syntax: &nsACString,
+    inherits: bool,
+    initial_value: Option<&nsACString>,
+) -> RegisterCustomPropertyResult {
+    use self::RegisterCustomPropertyResult::*;
+    use style::custom_properties::SpecifiedValue;
+    use style::properties_and_values::registry::PropertyRegistration;
+    use style::properties_and_values::rule::{PropertyRuleData, ToRegistrationError};
+    use style::properties_and_values::syntax::Descriptor;
+
+    let mut per_doc_data = per_doc_data.borrow_mut();
+    let name = unsafe { name.as_str_unchecked() };
+    let syntax = unsafe { syntax.as_str_unchecked() };
+    let initial_value = initial_value.map(|v| unsafe { v.as_str_unchecked() });
+
+    // If name is not a custom property name string, throw a SyntaxError and exit this algorithm.
+    let name = match style::custom_properties::parse_name(name) {
+        Ok(n) => Atom::from(n),
+        Err(()) => return InvalidName,
+    };
+
+    // If property set already contains an entry with name as its property name (compared
+    // codepoint-wise), throw an InvalidModificationError and exit this algorithm.
+    if per_doc_data.stylist.custom_property_script_registry().get(&name).is_some() {
+        return AlreadyRegistered
+    }
+    // Attempt to consume a syntax definition from syntax. If it returns failure, throw a
+    // SyntaxError. Otherwise, let syntax definition be the returned syntax definition.
+    let Ok(syntax) = Descriptor::from_str(syntax) else { return InvalidSyntax };
+
+    let initial_value = match initial_value {
+        Some(v) => {
+            let mut input = ParserInput::new(v);
+            let parsed = Parser::new(&mut input).parse_entirely(|input| {
+                input.skip_whitespace();
+                SpecifiedValue::parse(input)
+            }).ok();
+            if parsed.is_none() {
+                return InvalidInitialValue
+            }
+            parsed
+        }
+        None => None,
+    };
+
+    if let Err(error) = PropertyRuleData::validate_initial_value(&syntax, initial_value.as_ref()) {
+        return match error {
+            ToRegistrationError::MissingInherits |
+            ToRegistrationError::MissingSyntax => unreachable!(),
+            ToRegistrationError::InitialValueNotComputationallyIndependent => InitialValueNotComputationallyIndependent,
+            ToRegistrationError::InvalidInitialValue => InvalidInitialValue,
+            ToRegistrationError::NoInitialValue=> NoInitialValue,
+        }
+    }
+
+    per_doc_data.stylist.custom_property_script_registry_mut().register(name, PropertyRegistration {
+        syntax,
+        inherits,
+        initial_value,
+    });
+
+    SuccessfullyRegistered
 }

@@ -24,14 +24,18 @@ let shouldEnterFullscreen = false;
 button.addEventListener("click", function(e) {
   clickCount++;
   if (shouldEnterFullscreen) {
-    lastFullscreenPromise = document.getElementById("fullscreen").requestFullscreen();
+    const fullscreenElement = document.getElementById("fullscreen");
+    lastFullscreenPromise = SimpleTest.promiseFocus().then(() => {
+      fullscreenElement.focus();
+      return fullscreenElement.requestFullscreen();
+    });
   }
 });
 
 function clickButton(expectEvent) {
   let lastClickCount = clickCount;
   synthesizeMouseAtCenter(button, {});
-  (expectEvent ? isnot : is)(lastClickCount, clickCount, `Should've ${expectEvent ? "" : "not "}been able to click`);
+  (expectEvent ? isnot : is)(clickCount, lastClickCount, `Should've ${expectEvent ? "" : "not "}been able to click`);
 }
 
 function enterFullscreen() {

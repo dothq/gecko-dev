@@ -201,6 +201,7 @@
 #include "mozilla/dom/ImageTracker.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsClassHashtable.h"
+#include "nsGlobalWindowOuter.h"
 #include "nsHashKeys.h"
 #include "ScrollSnap.h"
 #include "VisualViewport.h"
@@ -8596,7 +8597,7 @@ nsresult PresShell::EventHandler::DispatchEventToDOM(
   }
   if (eventTarget) {
     if (eventTarget->OwnerDoc()->ShouldResistFingerprinting(
-            RFPTarget::Unknown) &&
+            RFPTarget::WidgetEvents) &&
         aEvent->IsBlockedForFingerprintingResistance()) {
       aEvent->mFlags.mOnlySystemGroupDispatchInContent = true;
     } else if (aEvent->mMessage == eKeyPress) {
@@ -9196,9 +9197,8 @@ void PresShell::DidPaintWindow() {
     nsCOMPtr<nsIObserverService> obsvc = services::GetObserverService();
     if (obsvc && mDocument) {
       nsPIDOMWindowOuter* window = mDocument->GetWindow();
-      nsCOMPtr<nsIDOMChromeWindow> chromeWin(do_QueryInterface(window));
-      if (chromeWin) {
-        obsvc->NotifyObservers(chromeWin, "widget-first-paint", nullptr);
+      if (window && nsGlobalWindowOuter::Cast(window)->IsChromeWindow()) {
+        obsvc->NotifyObservers(window, "widget-first-paint", nullptr);
       }
     }
   }

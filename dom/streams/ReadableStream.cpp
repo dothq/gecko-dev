@@ -24,12 +24,12 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/dom/BindingCallContext.h"
 #include "mozilla/dom/ByteStreamHelpers.h"
-#include "mozilla/dom/BodyStream.h"
 #include "mozilla/dom/QueueWithSizes.h"
 #include "mozilla/dom/QueuingStrategyBinding.h"
 #include "mozilla/dom/ReadRequest.h"
 #include "mozilla/dom/ReadableByteStreamController.h"
 #include "mozilla/dom/ReadableStreamBYOBReader.h"
+#include "mozilla/dom/ReadableStreamBYOBRequest.h"
 #include "mozilla/dom/ReadableStreamBinding.h"
 #include "mozilla/dom/ReadableStreamController.h"
 #include "mozilla/dom/ReadableStreamDefaultController.h"
@@ -1040,11 +1040,15 @@ already_AddRefed<ReadableStream> ReadableStream::CreateByteAbstract(
 // https://streams.spec.whatwg.org/#readablestream-set-up
 // (except this instead creates a new ReadableStream rather than accepting an
 // existing instance)
-already_AddRefed<ReadableStream> ReadableStream::CreateNative(
-    JSContext* aCx, nsIGlobalObject* aGlobal,
-    UnderlyingSourceAlgorithmsWrapper& aAlgorithms,
-    mozilla::Maybe<double> aHighWaterMark, QueuingStrategySize* aSizeAlgorithm,
-    ErrorResult& aRv) {
+// _BOUNDARY because `aAlgorithms->StartCallback` (called by
+// SetUpReadableStreamDefaultController below) should not be able to run script
+// in this case.
+MOZ_CAN_RUN_SCRIPT_BOUNDARY already_AddRefed<ReadableStream>
+ReadableStream::CreateNative(JSContext* aCx, nsIGlobalObject* aGlobal,
+                             UnderlyingSourceAlgorithmsWrapper& aAlgorithms,
+                             mozilla::Maybe<double> aHighWaterMark,
+                             QueuingStrategySize* aSizeAlgorithm,
+                             ErrorResult& aRv) {
   // an optional number highWaterMark (default 1)
   double highWaterMark = aHighWaterMark.valueOr(1);
   // and if given, highWaterMark must be a non-negative, non-NaN number.
@@ -1078,7 +1082,10 @@ already_AddRefed<ReadableStream> ReadableStream::CreateNative(
 }
 
 // https://streams.spec.whatwg.org/#readablestream-set-up-with-byte-reading-support
-void ReadableStream::SetUpByteNative(
+// _BOUNDARY because `aAlgorithms->StartCallback` (called by
+// SetUpReadableByteStreamController below) should not be able to run script in
+// this case.
+MOZ_CAN_RUN_SCRIPT_BOUNDARY void ReadableStream::SetUpByteNative(
     JSContext* aCx, UnderlyingSourceAlgorithmsWrapper& aAlgorithms,
     mozilla::Maybe<double> aHighWaterMark, ErrorResult& aRv) {
   // an optional number highWaterMark (default 0)
@@ -1242,7 +1249,7 @@ void ReadableStream::EnqueueNative(JSContext* aCx, JS::Handle<JS::Value> aChunk,
     MOZ_ASSERT(JS_GetArrayBufferViewByteOffset(chunk) ==
                JS_GetArrayBufferViewByteOffset(byobView));
     // Step 4.2: Assert: chunk.[[ByteLength]] ≤ byobView.[[ByteLength]].
-    MOZ_ASSERT(JS_GetArrayBufferViewByteLength(chunk) ==
+    MOZ_ASSERT(JS_GetArrayBufferViewByteLength(chunk) <=
                JS_GetArrayBufferViewByteLength(byobView));
     // Step 4.3: Perform ?
     // ReadableByteStreamControllerRespond(stream.[[controller]],
@@ -1259,6 +1266,29 @@ void ReadableStream::EnqueueNative(JSContext* aCx, JS::Handle<JS::Value> aChunk,
   // Step 5: Otherwise, perform ?
   // ReadableByteStreamControllerEnqueue(stream.[[controller]], chunk).
   ReadableByteStreamControllerEnqueue(aCx, controller, chunk, aRv);
+}
+
+// https://streams.spec.whatwg.org/#readablestream-current-byob-request-view
+void ReadableStream::GetCurrentBYOBRequestView(
+    JSContext* aCx, JS::MutableHandle<JSObject*> aView, ErrorResult& aRv) {
+  aView.set(nullptr);
+
+  // Step 1: Assert: stream.[[controller]] implements
+  // ReadableByteStreamController.
+  MOZ_ASSERT(mController->IsByte());
+
+  // Step 2: Let byobRequest be !
+  // ReadableByteStreamControllerGetBYOBRequest(stream.[[controller]]).
+  RefPtr<ReadableStreamBYOBRequest> byobRequest =
+      mController->AsByte()->GetByobRequest(aCx, aRv);
+
+  // Step 3: If byobRequest is null, then return null.
+  if (!byobRequest || aRv.Failed()) {
+    return;
+  }
+
+  // Step 4: Return byobRequest.[[view]].
+  byobRequest->GetView(aCx, aView);
 }
 
 // https://streams.spec.whatwg.org/#readablestream-get-a-reader

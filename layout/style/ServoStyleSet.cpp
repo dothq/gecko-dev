@@ -10,6 +10,7 @@
 #include "gfxPlatformFontList.h"
 #include "mozilla/AutoRestyleTimelineMarker.h"
 #include "mozilla/DocumentStyleRootIterator.h"
+#include "mozilla/AttributeStyles.h"
 #include "mozilla/EffectCompositor.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/Keyframe.h"
@@ -25,6 +26,7 @@
 #include "mozilla/StyleAnimationValue.h"
 #include "mozilla/css/Loader.h"
 #include "mozilla/dom/AnonymousContent.h"
+#include "mozilla/dom/CSSBinding.h"
 #include "mozilla/dom/CSSCounterStyleRule.h"
 #include "mozilla/dom/CSSFontFaceRule.h"
 #include "mozilla/dom/CSSFontFeatureValuesRule.h"
@@ -48,7 +50,6 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsCSSPseudoElements.h"
 #include "nsDeviceContext.h"
-#include "nsHTMLStyleSheet.h"
 #include "nsIAnonymousContentCreator.h"
 #include "nsLayoutUtils.h"
 #include "mozilla/dom/DocumentInlines.h"
@@ -321,14 +322,6 @@ const ServoElementSnapshotTable& ServoStyleSet::Snapshots() {
   return GetPresContext()->RestyleManager()->Snapshots();
 }
 
-void ServoStyleSet::ResolveMappedAttrDeclarationBlocks() {
-  if (nsHTMLStyleSheet* sheet = mDocument->GetAttributeStyleSheet()) {
-    sheet->CalculateMappedServoDeclarations();
-  }
-
-  mDocument->ResolveScheduledSVGPresAttrs();
-}
-
 void ServoStyleSet::PreTraverseSync() {
   // Get the Document's root element to ensure that the cache is valid before
   // calling into the (potentially-parallel) Servo traversal, where a cache hit
@@ -341,7 +334,7 @@ void ServoStyleSet::PreTraverseSync() {
   // can end up doing editing stuff, which adds stylesheets etc...
   mDocument->FlushUserFontSet();
 
-  ResolveMappedAttrDeclarationBlocks();
+  mDocument->ResolveScheduledPresAttrs();
 
   LookAndFeel::NativeInit();
 
@@ -572,7 +565,7 @@ ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(PseudoStyleType aType) {
 }
 
 already_AddRefed<ComputedStyle> ServoStyleSet::ResolvePageContentStyle(
-    const nsAtom* aPageName) {
+    const nsAtom* aPageName, const StylePagePseudoClassFlags& aPseudo) {
   // The empty atom is used to indicate no specified page name, and is not
   // usable as a page-rule selector. Changing this to null is a slight
   // optimization to avoid the Servo code from doing an unnecessary hashtable
@@ -580,10 +573,12 @@ already_AddRefed<ComputedStyle> ServoStyleSet::ResolvePageContentStyle(
   if (aPageName == nsGkAtoms::_empty) {
     aPageName = nullptr;
   }
-  // Only use the cache if we are not doing a lookup for a named page style.
+  // Only use the cache when we are doing a lookup for page styles without a
+  // page-name or any pseudo classes.
+  const bool useCache = !aPageName && !aPseudo;
   RefPtr<ComputedStyle>& cache =
       mNonInheritingComputedStyles[nsCSSAnonBoxes::NonInheriting::pageContent];
-  if (!aPageName && cache) {
+  if (useCache && cache) {
     RefPtr<ComputedStyle> retval = cache;
     return retval.forget();
   }
@@ -591,11 +586,11 @@ already_AddRefed<ComputedStyle> ServoStyleSet::ResolvePageContentStyle(
   UpdateStylistIfNeeded();
 
   RefPtr<ComputedStyle> computedValues =
-      Servo_ComputedValues_GetForPageContent(mRawData.get(), aPageName)
+      Servo_ComputedValues_GetForPageContent(mRawData.get(), aPageName, aPseudo)
           .Consume();
   MOZ_ASSERT(computedValues);
 
-  if (!aPageName) {
+  if (useCache) {
     cache = computedValues;
   }
   return computedValues.forget();
@@ -606,7 +601,8 @@ already_AddRefed<ComputedStyle> ServoStyleSet::ResolveXULTreePseudoStyle(
     ComputedStyle* aParentStyle, const AtomArray& aInputWord) {
   MOZ_ASSERT(nsCSSAnonBoxes::IsTreePseudoElement(aPseudoTag));
   MOZ_ASSERT(aParentStyle);
-  MOZ_ASSERT(!StylistNeedsUpdate());
+  NS_ASSERTION(!StylistNeedsUpdate(),
+               "Stylesheets modified when resolving XUL tree pseudo");
 
   return Servo_ComputedValues_ResolveXULTreePseudoStyle(
              aParentElement, aPseudoTag, aParentStyle, &aInputWord,
@@ -684,7 +680,8 @@ StyleSheet* ServoStyleSet::SheetAt(Origin aOrigin, size_t aIndex) const {
 ServoStyleSet::FirstPageSizeAndOrientation
 ServoStyleSet::GetFirstPageSizeAndOrientation(const nsAtom* aFirstPageName) {
   FirstPageSizeAndOrientation retval;
-  const RefPtr<ComputedStyle> style = ResolvePageContentStyle(aFirstPageName);
+  const RefPtr<ComputedStyle> style =
+      ResolvePageContentStyle(aFirstPageName, StylePagePseudoClassFlags::FIRST);
   const StylePageSize& pageSize = style->StylePage()->mSize;
 
   if (pageSize.IsSize()) {
@@ -1024,9 +1021,6 @@ void ServoStyleSet::RuleChangedInternal(StyleSheet& aSheet, css::Rule& aRule,
     // @namespace can only be inserted / removed when there are only other
     // @namespace and @import rules, and can't be mutated.
     case StyleCssRuleType::Namespace:
-      break;
-    case StyleCssRuleType::Viewport:
-      MOZ_ASSERT_UNREACHABLE("Gecko doesn't implement @viewport");
       break;
     case StyleCssRuleType::Keyframe:
       // FIXME: We should probably just forward to the parent @keyframes rule? I
@@ -1434,10 +1428,8 @@ bool ServoStyleSet::HasDocumentStateDependency(
 
 already_AddRefed<ComputedStyle> ServoStyleSet::ReparentComputedStyle(
     ComputedStyle* aComputedStyle, ComputedStyle* aNewParent,
-    ComputedStyle* aNewParentIgnoringFirstLine, ComputedStyle* aNewLayoutParent,
-    Element* aElement) {
-  return Servo_ReparentStyle(aComputedStyle, aNewParent,
-                             aNewParentIgnoringFirstLine, aNewLayoutParent,
+    ComputedStyle* aNewLayoutParent, Element* aElement) {
+  return Servo_ReparentStyle(aComputedStyle, aNewParent, aNewLayoutParent,
                              aElement, mRawData.get())
       .Consume();
 }
@@ -1450,6 +1442,34 @@ void ServoStyleSet::InvalidateForViewportUnits(OnlyDynamic aOnlyDynamic) {
 
   Servo_InvalidateForViewportUnits(mRawData.get(), root,
                                    aOnlyDynamic == OnlyDynamic::Yes);
+}
+
+void ServoStyleSet::RegisterProperty(const PropertyDefinition& aDefinition,
+                                     ErrorResult& aRv) {
+  using Result = StyleRegisterCustomPropertyResult;
+  auto result = Servo_RegisterCustomProperty(
+      RawData(), &aDefinition.mName, &aDefinition.mSyntax,
+      aDefinition.mInherits,
+      aDefinition.mInitialValue.WasPassed() ? &aDefinition.mInitialValue.Value()
+                                            : nullptr);
+  switch (result) {
+    case Result::SuccessfullyRegistered:
+      break;
+    case Result::InvalidName:
+      return aRv.ThrowSyntaxError("Invalid name");
+    case Result::InvalidSyntax:
+      return aRv.ThrowSyntaxError("Invalid syntax descriptor");
+    case Result::InvalidInitialValue:
+      return aRv.ThrowSyntaxError("Invalid initial value syntax");
+    case Result::NoInitialValue:
+      return aRv.ThrowSyntaxError(
+          "Initial value is required when syntax is not universal");
+    case Result::InitialValueNotComputationallyIndependent:
+      return aRv.ThrowSyntaxError(
+          "Initial value is required when syntax is not universal");
+    case Result::AlreadyRegistered:
+      return aRv.ThrowInvalidModificationError("Property already registered");
+  }
 }
 
 NS_IMPL_ISUPPORTS(UACacheReporter, nsIMemoryReporter)

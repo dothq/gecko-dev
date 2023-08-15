@@ -557,6 +557,7 @@ class nsWindow final : public nsBaseWidget {
     HWND owner = GetOwnerWnd();
     return owner && owner == ::GetForegroundWindow();
   }
+  bool IsForegroundWindow() const { return mWnd == ::GetForegroundWindow(); }
   bool IsPopup() const { return mWindowType == WindowType::Popup; }
   bool IsCloaked() const { return mIsCloaked; }
 
@@ -813,11 +814,11 @@ class nsWindow final : public nsBaseWidget {
   // Indicates custom resize margins are in effect
   bool mUseResizeMarginOverrides = false;
   // Width of the left and right portions of the resize region
-  int32_t mHorResizeMargin;
+  mozilla::LayoutDeviceIntCoord mHorResizeMargin;
   // Height of the top and bottom portions of the resize region
-  int32_t mVertResizeMargin;
+  mozilla::LayoutDeviceIntCoord mVertResizeMargin;
   // Height of the caption plus border
-  int32_t mCaptionHeight;
+  mozilla::LayoutDeviceIntCoord mCaptionHeight;
 
   // not yet set, will be calculated on first use
   double mDefaultScale = -1.0;

@@ -64,6 +64,9 @@ class StyleSheetWatcher {
     styleSheet,
     { isCreatedByDevTools = false, fileName = null, resourceId } = {}
   ) {
+    const { atRules, ruleCount } =
+      this._styleSheetsManager.getStyleSheetRuleCountAndAtRules(styleSheet);
+
     const resource = {
       resourceId,
       resourceType: STYLESHEET,
@@ -72,9 +75,9 @@ class StyleSheetWatcher {
       fileName,
       href: styleSheet.href,
       isNew: isCreatedByDevTools,
-      atRules: await this._styleSheetsManager.getAtRules(styleSheet),
+      atRules,
       nodeHref: this._styleSheetsManager._getNodeHref(styleSheet),
-      ruleCount: styleSheet.cssRules.length,
+      ruleCount,
       sourceMapBaseURL:
         this._styleSheetsManager._getSourcemapBaseURL(styleSheet),
       sourceMapURL: styleSheet.sourceMapURL,

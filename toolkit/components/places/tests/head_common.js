@@ -34,6 +34,7 @@ ChromeUtils.defineESModuleGetters(this, {
   BookmarkHTMLUtils: "resource://gre/modules/BookmarkHTMLUtils.sys.mjs",
   BookmarkJSONUtils: "resource://gre/modules/BookmarkJSONUtils.sys.mjs",
   FileUtils: "resource://gre/modules/FileUtils.sys.mjs",
+  NetUtil: "resource://gre/modules/NetUtil.sys.mjs",
   PlacesBackups: "resource://gre/modules/PlacesBackups.sys.mjs",
   PlacesDBUtils: "resource://gre/modules/PlacesDBUtils.sys.mjs",
   PlacesTestUtils: "resource://testing-common/PlacesTestUtils.sys.mjs",
@@ -46,7 +47,6 @@ ChromeUtils.defineESModuleGetters(this, {
 });
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  NetUtil: "resource://gre/modules/NetUtil.jsm",
   ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
 });
 
@@ -80,11 +80,6 @@ var gTestDir = do_get_cwd();
 
 // Initialize profile.
 var gProfD = do_get_profile(true);
-
-Services.prefs.setBoolPref("browser.urlbar.usepreloadedtopurls.enabled", false);
-registerCleanupFunction(() =>
-  Services.prefs.clearUserPref("browser.urlbar.usepreloadedtopurls.enabled")
-);
 
 // Remove any old database.
 clearDB();

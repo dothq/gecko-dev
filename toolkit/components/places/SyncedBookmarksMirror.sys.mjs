@@ -615,7 +615,6 @@ export class SyncedBookmarksMirror {
           // Places relies on observer notifications to update internal caches.
           // If notifying observers failed, these caches may be inconsistent,
           // so we invalidate them just in case.
-          lazy.PlacesUtils.invalidateCachedGuids();
           await lazy.PlacesUtils.keywords.invalidateCachedKeywords();
           lazy.MirrorLog.warn("Error notifying Places observers", ex);
         } finally {
@@ -2162,12 +2161,26 @@ class BookmarkObserverRecorder {
     lazy.MirrorLog.trace("Recording observer notifications for new items");
     await this.db.execute(
       `SELECT b.id, p.id AS parentId, b.position, b.type,
-              (SELECT h.url FROM moz_places h WHERE h.id = b.fk) AS url,
               IFNULL(b.title, '') AS title, b.dateAdded, b.guid,
-              p.guid AS parentGuid, n.isTagging, n.keywordChanged
+              p.guid AS parentGuid, n.isTagging, n.keywordChanged,
+              h.url AS url, IFNULL(h.frecency, 0) AS frecency,
+              IFNULL(h.hidden, 0) AS hidden,
+              IFNULL(h.visit_count, 0) AS visit_count,
+              h.last_visit_date,
+              (
+                SELECT GROUP_CONCAT(t.title, ',')
+                FROM moz_bookmarks t
+                LEFT JOIN moz_bookmarks ref ON ref.fk = h.id
+                WHERE t.id = +ref.parent
+                  AND t.parent = (
+                    SELECT id FROM moz_bookmarks
+                    WHERE guid = '${lazy.PlacesUtils.bookmarks.tagsGuid}'
+                  )
+              ) AS tags
        FROM itemsAdded n
        JOIN moz_bookmarks b ON b.guid = n.guid
        JOIN moz_bookmarks p ON p.id = b.parent
+       LEFT JOIN moz_places h ON h.id = b.fk
        ${this.orderBy("n.level", "b.parent", "b.position")}`,
       null,
       (row, cancel) => {
@@ -2175,6 +2188,9 @@ class BookmarkObserverRecorder {
           cancel();
           return;
         }
+
+        let lastVisitDate = row.getResultByName("last_visit_date");
+
         let info = {
           id: row.getResultByName("id"),
           parentId: row.getResultByName("parentId"),
@@ -2186,7 +2202,15 @@ class BookmarkObserverRecorder {
           guid: row.getResultByName("guid"),
           parentGuid: row.getResultByName("parentGuid"),
           isTagging: row.getResultByName("isTagging"),
+          frecency: row.getResultByName("frecency"),
+          hidden: row.getResultByName("hidden"),
+          visitCount: row.getResultByName("visit_count"),
+          lastVisitDate: lastVisitDate
+            ? lazy.PlacesUtils.toDate(lastVisitDate).getTime()
+            : null,
+          tags: row.getResultByName("tags"),
         };
+
         this.noteItemAdded(info);
         if (row.getResultByName("keywordChanged")) {
           this.shouldInvalidateKeywords = true;
@@ -2204,11 +2228,25 @@ class BookmarkObserverRecorder {
       `SELECT b.id, b.guid, b.type, p.guid AS newParentGuid, c.oldParentGuid,
               b.position AS newPosition, c.oldPosition,
               gp.guid AS grandParentGuid,
-              (SELECT h.url FROM moz_places h WHERE h.id = b.fk) AS url
+              h.url AS url, IFNULL(b.title, '') AS title,
+              IFNULL(h.frecency, 0) AS frecency, IFNULL(h.hidden, 0) AS hidden,
+              IFNULL(h.visit_count, 0) AS visit_count,
+              h.last_visit_date,
+              (
+                SELECT GROUP_CONCAT(t.title, ',')
+                FROM moz_bookmarks t
+                LEFT JOIN moz_bookmarks ref ON ref.fk = h.id
+                WHERE t.id = +ref.parent
+                  AND t.parent = (
+                    SELECT id FROM moz_bookmarks
+                    WHERE guid = '${lazy.PlacesUtils.bookmarks.tagsGuid}'
+                  )
+              ) AS tags
        FROM itemsMoved c
        JOIN moz_bookmarks b ON b.id = c.itemId
        JOIN moz_bookmarks p ON p.id = b.parent
        LEFT JOIN moz_bookmarks gp ON gp.id = p.parent
+       LEFT JOIN moz_places h ON h.id = b.fk
        ${this.orderBy("c.level", "b.parent", "b.position")}`,
       null,
       (row, cancel) => {
@@ -2216,6 +2254,7 @@ class BookmarkObserverRecorder {
           cancel();
           return;
         }
+        let lastVisitDate = row.getResultByName("last_visit_date");
         let info = {
           id: row.getResultByName("id"),
           guid: row.getResultByName("guid"),
@@ -2226,6 +2265,14 @@ class BookmarkObserverRecorder {
           oldPosition: row.getResultByName("oldPosition"),
           urlHref: row.getResultByName("url"),
           grandParentGuid: row.getResultByName("grandParentGuid"),
+          title: row.getResultByName("title"),
+          frecency: row.getResultByName("frecency"),
+          hidden: row.getResultByName("hidden"),
+          visitCount: row.getResultByName("visit_count"),
+          lastVisitDate: lastVisitDate
+            ? lazy.PlacesUtils.toDate(lastVisitDate).getTime()
+            : null,
+          tags: row.getResultByName("tags"),
         };
         this.noteItemMoved(info);
       }
@@ -2303,12 +2350,16 @@ class BookmarkObserverRecorder {
         source: lazy.PlacesUtils.bookmarks.SOURCES.SYNC,
         itemType: info.type,
         isTagging: info.isTagging,
+        tags: info.tags,
+        frecency: info.frecency,
+        hidden: info.hidden,
+        visitCount: info.visitCount,
+        lastVisitDate: info.lastVisitDate,
       })
     );
   }
 
   noteGuidChanged(info) {
-    lazy.PlacesUtils.invalidateCachedGuidFor(info.id);
     this.placesEvents.push(
       new PlacesBookmarkGuid({
         id: info.id,
@@ -2331,6 +2382,7 @@ class BookmarkObserverRecorder {
         id: info.id,
         itemType: info.type,
         url: info.urlHref,
+        title: info.title,
         guid: info.guid,
         parentGuid: info.newParentGuid,
         source: lazy.PlacesUtils.bookmarks.SOURCES.SYNC,
@@ -2340,6 +2392,11 @@ class BookmarkObserverRecorder {
         isTagging:
           info.newParentGuid === lazy.PlacesUtils.bookmarks.tagsGuid ||
           info.grandParentGuid === lazy.PlacesUtils.bookmarks.tagsGuid,
+        tags: info.tags,
+        frecency: info.frecency,
+        hidden: info.hidden,
+        visitCount: info.visitCount,
+        lastVisitDate: info.lastVisitDate,
       })
     );
   }

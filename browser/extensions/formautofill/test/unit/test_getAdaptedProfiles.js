@@ -194,11 +194,11 @@ const TESTCASES = [
     expectedResult: [
       {
         guid: "123",
-        "street-address": "2 Harrison St line2 line3",
+        "street-address": "2 Harrison St\nline2\nline3",
         "-moz-street-address-one-line": "2 Harrison St line2 line3",
         // Since the form is missing address-line2 field, the value of
         // address-line1 should contain line2 value as well.
-        "address-line1": "2 Harrison St line2",
+        "address-line1": "2 Harrison St",
         "address-line2": "line2",
         "address-line3": "line3",
         "address-level1": "CA",
@@ -986,6 +986,20 @@ const TESTCASES = [
       },
     ],
     expectedOptionElements: [],
+  },
+  {
+    description:
+      "Fill a cc-exp field using label (MM - RR) as expiry string placeholder",
+    document: `<form>
+                <input autocomplete="cc-number">
+                <input id="cc-exp" autocomplete="cc-exp">
+                <label for="cc-exp">MM/RR</label>
+              </form>
+              `,
+    profileData: [DEFAULT_CREDITCARD_RECORD],
+    expectedResult: [
+      { ...DEFAULT_EXPECTED_CREDITCARD_RECORD, "cc-exp": "01/25" },
+    ],
   },
   {
     description:

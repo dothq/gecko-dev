@@ -6,6 +6,7 @@ import {
   html,
   ifDefined,
   styleMap,
+  when,
 } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 
@@ -32,6 +33,7 @@ if (!window.IS_STORYBOOK) {
 /**
  * A list of clickable tab items
  *
+ * @property {boolean} compactRows - Whether to hide the URL and date/time for each tab.
  * @property {string} dateTimeFormat - Expected format for date and/or time
  * @property {string} hasPopup - The aria-haspopup attribute for the secondary action, if required
  * @property {number} maxTabsLength - The max number of tabs for the list
@@ -48,11 +50,13 @@ export default class FxviewTabList extends MozLitElement {
     this.dateTimeFormat = "relative";
     this.maxTabsLength = 25;
     this.tabItems = [];
+    this.compactRows = false;
     this.#register();
   }
 
   static properties = {
     activeIndex: { type: Number },
+    compactRows: { type: Boolean },
     currentActiveElementId: { type: String },
     dateTimeFormat: { type: String },
     hasPopup: { type: String },
@@ -191,7 +195,10 @@ export default class FxviewTabList extends MozLitElement {
     : "chrome://browser/content/firefoxview/fxview-tab-list.css";
 
   render() {
-    this.tabItems = this.tabItems.slice(0, this.maxTabsLength);
+    if (this.maxTabsLength > 0) {
+      // Can set maxTabsLength to -1 to have no max
+      this.tabItems = this.tabItems.slice(0, this.maxTabsLength);
+    }
     const {
       activeIndex,
       currentActiveElementId,
@@ -213,6 +220,7 @@ export default class FxviewTabList extends MozLitElement {
               <fxview-tab-row
                 exportparts="secondary-button"
                 ?active=${i == activeIndex}
+                ?compact=${this.compactRows}
                 .hasPopup=${hasPopup}
                 .currentActiveElementId=${currentActiveElementId}
                 .dateTimeFormat=${dateTimeFormat}
@@ -223,6 +231,7 @@ export default class FxviewTabList extends MozLitElement {
                 .secondaryL10nId=${tabItem.secondaryL10nId}
                 .secondaryL10nArgs=${ifDefined(tabItem.secondaryL10nArgs)}
                 .tabid=${ifDefined(tabItem.tabid || tabItem.closedId)}
+                .tabElement=${ifDefined(tabItem.tabElement)}
                 .time=${(tabItem.time || tabItem.closedAt).toString().length ===
                 16
                   ? (tabItem.time || tabItem.closedAt) / 1000
@@ -245,6 +254,7 @@ customElements.define("fxview-tab-list", FxviewTabList);
  * A tab item that displays favicon, title, url, and time of last access
  *
  * @property {boolean} active - Should current item have focus on keydown
+ * @property {boolean} compact - Whether to hide the URL and date/time for this tab.
  * @property {string} currentActiveElementId - ID of currently focused element within each tab item
  * @property {string} dateTimeFormat - Expected format for date and/or time
  * @property {string} hasPopup - The aria-haspopup attribute for the secondary action, if required
@@ -254,6 +264,7 @@ customElements.define("fxview-tab-list", FxviewTabList);
  * @property {string} primaryL10nArgs - The l10n args used for the primary action element
  * @property {string} secondaryL10nId - The l10n id used for the secondary action button
  * @property {string} secondaryL10nArgs - The l10n args used for the secondary action element
+ * @property {object} tabElement - The MozTabbrowserTab element for the tab item.
  * @property {number} time - The timestamp for when the tab was last accessed.
  * @property {string} title - The title for the tab item.
  * @property {string} url - The url for the tab item.
@@ -268,6 +279,7 @@ export class FxviewTabRow extends MozLitElement {
 
   static properties = {
     active: { type: Boolean },
+    compact: { type: Boolean },
     currentActiveElementId: { type: String },
     dateTimeFormat: { type: String },
     favicon: { type: String },
@@ -277,6 +289,7 @@ export class FxviewTabRow extends MozLitElement {
     secondaryL10nId: { type: String },
     secondaryL10nArgs: { type: String },
     tabid: { type: Number },
+    tabElement: { type: Object },
     time: { type: Number },
     title: { type: String },
     timeMsPref: { type: Number },
@@ -452,10 +465,18 @@ export class FxviewTabRow extends MozLitElement {
         <span class="fxview-tab-row-title" id="fxview-tab-row-title">
           ${title}
         </span>
-        <span class="fxview-tab-row-url" id="fxview-tab-row-url">
+        <span
+          class="fxview-tab-row-url"
+          id="fxview-tab-row-url"
+          ?hidden=${this.compact}
+        >
           ${this.formatURIForDisplay(this.url)}
         </span>
-        <span class="fxview-tab-row-date" id="fxview-tab-row-date">
+        <span
+          class="fxview-tab-row-date"
+          id="fxview-tab-row-date"
+          ?hidden=${this.compact}
+        >
           <span
             ?hidden=${relativeString || !dateString}
             data-l10n-id=${ifDefined(dateString)}
@@ -466,26 +487,29 @@ export class FxviewTabRow extends MozLitElement {
         <span
           class="fxview-tab-row-time"
           id="fxview-tab-row-time"
-          ?hidden=${!timeString}
+          ?hidden=${this.compact || !timeString}
           data-timestamp=${this.time}
           data-l10n-id=${ifDefined(timeString)}
           data-l10n-args=${timeArgs}
         >
         </span>
       </a>
-      <button
-        class="fxview-tab-row-button ghost-button icon-button semi-transparent"
-        id="fxview-tab-row-secondary-button"
-        part="secondary-button"
-        data-l10n-id=${this.secondaryL10nId}
-        data-l10n-args=${ifDefined(this.secondaryL10nArgs)}
-        aria-haspopup=${ifDefined(this.hasPopup)}
-        @click=${this.secondaryActionHandler}
-        tabindex="${this.active &&
-        this.currentActiveElementId === "fxview-tab-row-secondary-button"
-          ? "0"
-          : "-1"}"
-      ></button>
+      ${when(
+        this.secondaryL10nId && this.secondaryActionHandler,
+        () => html`<button
+          class="fxview-tab-row-button ghost-button icon-button semi-transparent"
+          id="fxview-tab-row-secondary-button"
+          part="secondary-button"
+          data-l10n-id=${this.secondaryL10nId}
+          data-l10n-args=${ifDefined(this.secondaryL10nArgs)}
+          aria-haspopup=${ifDefined(this.hasPopup)}
+          @click=${this.secondaryActionHandler}
+          tabindex="${this.active &&
+          this.currentActiveElementId === "fxview-tab-row-secondary-button"
+            ? "0"
+            : "-1"}"
+        ></button>`
+      )}
     `;
   }
 }

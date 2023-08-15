@@ -80,15 +80,11 @@
 
   window._gBrowser = {
     init() {
-      ChromeUtils.defineModuleGetter(
-        this,
-        "AsyncTabSwitcher",
-        "resource:///modules/AsyncTabSwitcher.jsm"
-      );
       ChromeUtils.defineESModuleGetters(this, {
+        AsyncTabSwitcher: "resource:///modules/AsyncTabSwitcher.sys.mjs",
+        PictureInPicture: "resource://gre/modules/PictureInPicture.sys.mjs",
         UrlbarProviderOpenTabs:
           "resource:///modules/UrlbarProviderOpenTabs.sys.mjs",
-        PictureInPicture: "resource://gre/modules/PictureInPicture.sys.mjs",
       });
       XPCOMUtils.defineLazyServiceGetters(this, {
         MacSharingService: [
@@ -104,11 +100,9 @@
       });
 
       if (AppConstants.MOZ_CRASHREPORTER) {
-        ChromeUtils.defineModuleGetter(
-          this,
-          "TabCrashHandler",
-          "resource:///modules/ContentCrashHandlers.jsm"
-        );
+        ChromeUtils.defineESModuleGetters(this, {
+          TabCrashHandler: "resource:///modules/ContentCrashHandlers.sys.mjs",
+        });
       }
 
       Services.obs.addObserver(this, "contextual-identity-updated");
@@ -754,7 +748,6 @@
     _updateTabBarForPinnedTabs() {
       this.tabContainer._unlockTabSizing();
       this.tabContainer._positionPinnedTabs();
-      this.tabContainer._setPositionalAttributes();
       this.tabContainer._updateCloseButtons();
     },
 
@@ -1381,6 +1374,14 @@
         if (!gMultiProcessBrowser) {
           this._adjustFocusBeforeTabSwitch(oldTab, newTab);
           this._adjustFocusAfterTabSwitch(newTab);
+        }
+
+        // Bug 1781806 - A forced update can indicate the tab was already
+        // selected. To ensure the internal state of the Urlbar is kept in
+        // sync, notify it as if focus changed. Alternatively, if there is no
+        // force update but the load context is not using remote tabs, there
+        // can be a focus change due to the _adjustFocus above.
+        if (aForceUpdate || !gMultiProcessBrowser) {
           gURLBar.afterTabSwitchFocusChange();
         }
       }
@@ -1395,8 +1396,6 @@
       newTab.setAttribute("touchdownstartsdrag", "true");
 
       if (!gMultiProcessBrowser) {
-        this.tabContainer._setPositionalAttributes();
-
         document.commandDispatcher.unlock();
 
         let event = new CustomEvent("TabSwitchDone", {
@@ -3277,7 +3276,6 @@
 
       if (tabs.length > 1 || !tabs[0].selected) {
         this._updateTabsAfterInsert();
-        this.tabContainer._setPositionalAttributes();
         TabBarVisibility.update();
 
         for (let tab of tabs) {
@@ -3503,7 +3501,6 @@
       if (pinned) {
         this._updateTabBarForPinnedTabs();
       }
-      this.tabContainer._setPositionalAttributes();
 
       TabBarVisibility.update();
     },
@@ -4235,14 +4232,6 @@
       // We are no longer the primary content area.
       browser.removeAttribute("primary");
 
-      // Remove this tab as the owner of any other tabs, since it's going away.
-      for (let tab of this.tabs) {
-        if ("owner" in tab && tab.owner == aTab) {
-          // |tab| is a child of the tab we're removing, make it an orphan
-          tab.owner = null;
-        }
-      }
-
       return true;
     },
 
@@ -4336,7 +4325,6 @@
 
       // update tab positional properties and attributes
       this.selectedTab._selected = true;
-      this.tabContainer._setPositionalAttributes();
 
       // Removing the panel requires fixing up selectedPanel immediately
       // (see below), which would be hindered by the potentially expensive
@@ -4566,6 +4554,10 @@
           ourBrowser.mute();
         }
         modifiedAttrs.push("muted");
+      }
+      if (aOtherTab.hasAttribute("undiscardable")) {
+        aOurTab.setAttribute("undiscardable", "true");
+        modifiedAttrs.push("undiscardable");
       }
       if (aOtherTab.hasAttribute("soundplaying")) {
         aOurTab.setAttribute("soundplaying", "true");
@@ -4851,8 +4843,6 @@
       this.tabContainer._updateCloseButtons();
       this.tabContainer._updateHiddenTabsStatus();
 
-      this.tabContainer._setPositionalAttributes();
-
       let event = document.createEvent("Events");
       event.initEvent("TabShow", true, false);
       aTab.dispatchEvent(event);
@@ -4875,8 +4865,6 @@
 
       this.tabContainer._updateCloseButtons();
       this.tabContainer._updateHiddenTabsStatus();
-
-      this.tabContainer._setPositionalAttributes();
 
       // Splice this tab out of any lines of succession before any events are
       // dispatched.
@@ -4934,7 +4922,6 @@
 
       // Play the tab closing animation to give immediate feedback while
       // waiting for the new window to appear.
-      // content area when the docshells are swapped.
       if (!gReduceMotion) {
         aTab.style.maxWidth = ""; // ensure that fade-out transition happens
         aTab.removeAttribute("fadein");
@@ -5081,8 +5068,6 @@
       if (aTab.pinned) {
         this.tabContainer._positionPinnedTabs();
       }
-
-      this.tabContainer._setPositionalAttributes();
 
       var evt = document.createEvent("UIEvents");
       evt.initUIEvent("TabMove", true, false, window, oldPosition);
@@ -5444,9 +5429,6 @@
         this._multiSelectChangeSelected = false;
         this._multiSelectChangeAdditions.clear();
         this._multiSelectChangeRemovals.clear();
-        if (noticeable) {
-          this.tabContainer._setPositionalAttributes();
-        }
         this.dispatchEvent(
           new CustomEvent("TabMultiSelect", { bubbles: true })
         );

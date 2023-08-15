@@ -348,7 +348,10 @@ class NotificationEventWorkerRunnable final
         mEventName(aEventName) {}
 
   void WorkerRunInternal(WorkerPrivate* aWorkerPrivate) override {
-    mNotification->DispatchTrustedEvent(mEventName);
+    if (aWorkerPrivate->GlobalScope() &&
+        !aWorkerPrivate->GlobalScope()->IsDying()) {
+      mNotification->DispatchTrustedEvent(mEventName);
+    }
   }
 };
 
@@ -365,10 +368,6 @@ class ReleaseNotificationRunnable final : public NotificationWorkerRunnable {
   }
 
   nsresult Cancel() override {
-    // We need to check first if cancel is called twice
-    nsresult rv = NotificationWorkerRunnable::Cancel();
-    NS_ENSURE_SUCCESS(rv, rv);
-
     mNotification->ReleaseObject();
     return NS_OK;
   }
@@ -1881,7 +1880,8 @@ nsresult Notification::GetOrigin(nsIPrincipal* aPrincipal, nsString& aOrigin) {
     return NS_ERROR_FAILURE;
   }
 
-  nsresult rv = nsContentUtils::GetUTFOrigin(aPrincipal, aOrigin);
+  nsresult rv =
+      nsContentUtils::GetWebExposedOriginSerialization(aPrincipal, aOrigin);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;

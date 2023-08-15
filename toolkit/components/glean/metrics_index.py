@@ -24,8 +24,11 @@ gecko_metrics = [
     "netwerk/metrics.yaml",
     "netwerk/protocol/http/metrics.yaml",
     "toolkit/components/cookiebanners/metrics.yaml",
+    "toolkit/components/extensions/metrics.yaml",
     "toolkit/components/glean/metrics.yaml",
+    "toolkit/components/passwordmgr/metrics.yaml",
     "toolkit/components/pdfjs/metrics.yaml",
+    "toolkit/components/resistfingerprinting/metrics.yaml",
     "toolkit/mozapps/extensions/metrics.yaml",
     "toolkit/components/processtools/metrics.yaml",
     "toolkit/components/translations/metrics.yaml",
@@ -42,7 +45,6 @@ firefox_desktop_metrics = [
     "browser/components/urlbar/metrics.yaml",
     "browser/modules/metrics.yaml",
     "toolkit/components/crashes/metrics.yaml",
-    "toolkit/components/extensions/metrics.yaml",
     "toolkit/components/nimbus/metrics.yaml",
     "toolkit/components/search/metrics.yaml",
     "toolkit/components/telemetry/dap/metrics.yaml",
@@ -97,6 +99,7 @@ gecko_pings = [
 # Order is lexicographical, enforced by t/c/glean/tests/pytest/test_yaml_indices.py
 firefox_desktop_pings = [
     "browser/components/newtab/pings.yaml",
+    "browser/components/urlbar/pings.yaml",
     "toolkit/components/crashes/pings.yaml",
     "toolkit/components/telemetry/pings.yaml",
     "toolkit/modules/pings.yaml",

@@ -164,7 +164,7 @@ nsresult HTMLEditor::InitEditorContentAndSelection() {
     }
   }
 
-  if (IsInPlaintextMode()) {
+  if (IsPlaintextMailComposer()) {
     // XXX Should we do this in HTMLEditor?  It's odd to guarantee that last
     //     empty line is visible only when it's in the plain text mode.
     nsresult rv = EnsurePaddingBRElementInMultilineEditor();
@@ -1258,7 +1258,7 @@ Result<EditActionResult, nsresult> HTMLEditor::HandleInsertText(
     // for efficiency, break out the pre case separately.  This is because
     // its a lot cheaper to search the input string for only newlines than
     // it is to search for both tabs and newlines.
-    if (!isWhiteSpaceCollapsible || IsInPlaintextMode()) {
+    if (!isWhiteSpaceCollapsible || IsPlaintextMailComposer()) {
       while (pos != -1 &&
              pos < AssertedCast<int32_t>(aInsertionString.Length())) {
         int32_t oldPos = pos;
@@ -2169,7 +2169,7 @@ Result<CreateElementResult, nsresult> HTMLEditor::HandleInsertBRElement(
 
   // First, insert a <br> element.
   RefPtr<Element> brElement;
-  if (IsInPlaintextMode()) {
+  if (IsPlaintextMailComposer()) {
     Result<CreateElementResult, nsresult> insertBRElementResult =
         InsertBRElement(WithTransaction::Yes, aPointToBreak);
     if (MOZ_UNLIKELY(insertBRElementResult.isErr())) {
@@ -3184,6 +3184,11 @@ HTMLEditor::InsertBRElementIfHardLineIsEmptyAndEndsWithBlockBoundary(
   if (!HTMLEditUtils::IsBlockElement(
           *aPointToInsert.ContainerAs<nsIContent>())) {
     return CaretPoint(EditorDOMPoint());
+  }
+
+  if (NS_WARN_IF(!HTMLEditUtils::IsSimplyEditableNode(
+          *aPointToInsert.ContainerAs<nsIContent>()))) {
+    return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
   }
 
   WSRunScanner wsRunScanner(ComputeEditingHost(), aPointToInsert);
@@ -5350,6 +5355,7 @@ nsresult HTMLEditor::HandleHTMLIndentAroundRanges(AutoRangeArray& aRanges,
     }
   }
 
+  // FIXME: Split ancestors when we consider to indent the range.
   Result<EditorDOMPoint, nsresult> splitAtBRElementsResult =
       MaybeSplitElementsAtEveryBRElement(arrayOfContents,
                                          EditSubAction::eIndent);
@@ -5375,7 +5381,18 @@ nsresult HTMLEditor::HandleHTMLIndentAroundRanges(AutoRangeArray& aRanges,
       return NS_ERROR_FAILURE;
     }
 
+    // If there is no element which can have <blockquote>, abort.
+    if (NS_WARN_IF(!HTMLEditUtils::GetInsertionPointInInclusiveAncestor(
+                        *nsGkAtoms::blockquote, pointToInsertBlockquoteElement,
+                        &aEditingHost)
+                        .IsSet())) {
+      return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
+    }
+
     // Make sure we can put a block here.
+    // XXX Unfortunately, this calls
+    // MaybeSplitAncestorsForInsertWithTransaction() then,
+    // HTMLEditUtils::GetInsertionPointInInclusiveAncestor() is called again.
     Result<CreateElementResult, nsresult> createNewBlockquoteElementResult =
         InsertElementWithSplittingAncestorsWithTransaction(
             *nsGkAtoms::blockquote, pointToInsertBlockquoteElement,
@@ -5455,6 +5472,11 @@ nsresult HTMLEditor::HandleHTMLIndentAroundRanges(AutoRangeArray& aRanges,
     // XXX We ignore non-editable nodes here, but not so in the above block.
     if (!EditorUtils::IsEditableContent(content, EditorType::HTML) ||
         !HTMLEditUtils::IsRemovableNode(content)) {
+      continue;
+    }
+
+    // If the content has been moved to different place, ignore it.
+    if (MOZ_UNLIKELY(!content->IsInclusiveDescendantOf(&aEditingHost))) {
       continue;
     }
 
@@ -9257,37 +9279,22 @@ HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(
 
   // The point must be descendant of editing host.
   // XXX Isn't it a valid case if it points a direct child of aEditingHost?
-  if (aStartOfDeepestRightNode.GetContainer() != &aEditingHost &&
-      !EditorUtils::IsDescendantOf(*aStartOfDeepestRightNode.GetContainer(),
-                                   aEditingHost)) {
-    NS_WARNING("aStartOfDeepestRightNode was not in editing host");
+  if (NS_WARN_IF(
+          !aStartOfDeepestRightNode.GetContainer()->IsInclusiveDescendantOf(
+              &aEditingHost))) {
     return Err(NS_ERROR_INVALID_ARG);
   }
 
   // Look for a node that can legally contain the tag.
-  EditorDOMPoint pointToInsert(aStartOfDeepestRightNode);
-  for (; pointToInsert.IsSet();
-       pointToInsert.Set(pointToInsert.GetContainer())) {
-    // We cannot split active editing host and its ancestor.  So, there is
-    // no element to contain the specified element.
-    if (pointToInsert.GetChild() == &aEditingHost) {
-      NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() reached "
-          "editing host");
-      return Err(NS_ERROR_FAILURE);
-    }
-
-    if (HTMLEditUtils::CanNodeContain(*pointToInsert.GetContainer(), aTag)) {
-      // Found an ancestor node which can contain the element.
-      break;
-    }
+  const EditorDOMPoint pointToInsert =
+      HTMLEditUtils::GetInsertionPointInInclusiveAncestor(
+          aTag, aStartOfDeepestRightNode, &aEditingHost);
+  if (MOZ_UNLIKELY(!pointToInsert.IsSet())) {
+    NS_WARNING(
+        "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() reached "
+        "editing host");
+    return Err(NS_ERROR_FAILURE);
   }
-
-  // If we got lost the editing host, we can do nothing.
-  if (NS_WARN_IF(!pointToInsert.IsSet())) {
-    return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
-  }
-
   // If the point itself can contain the tag, we don't need to split any
   // ancestor nodes.  In this case, we should return the given split point
   // as is.
@@ -9485,7 +9492,7 @@ nsresult HTMLEditor::JoinNearestEditableNodesWithTransaction(
 Element* HTMLEditor::GetMostDistantAncestorMailCiteElement(
     const nsINode& aNode) const {
   Element* mailCiteElement = nullptr;
-  const bool isPlaintextEditor = IsInPlaintextMode();
+  const bool isPlaintextEditor = IsPlaintextMailComposer();
   for (Element* element : aNode.InclusiveAncestorsOfType<Element>()) {
     if ((isPlaintextEditor && element->IsHTMLElement(nsGkAtoms::pre)) ||
         HTMLEditUtils::IsMailCite(*element)) {
@@ -9566,7 +9573,7 @@ nsresult HTMLEditor::GetInlineStyles(
       }
       if (inclusiveAncestor->IsHTMLElement(nsGkAtoms::font)) {
         if (NeedToAppend(*nsGkAtoms::font, nsGkAtoms::face)) {
-          inclusiveAncestor->GetAttr(kNameSpaceID_None, nsGkAtoms::face, value);
+          inclusiveAncestor->GetAttr(nsGkAtoms::face, value);
           if (!value.IsEmpty()) {
             aPendingStyleCacheArray.AppendElement(
                 PendingStyleCache(*nsGkAtoms::font, nsGkAtoms::face, value));
@@ -9574,7 +9581,7 @@ nsresult HTMLEditor::GetInlineStyles(
           }
         }
         if (NeedToAppend(*nsGkAtoms::font, nsGkAtoms::size)) {
-          inclusiveAncestor->GetAttr(kNameSpaceID_None, nsGkAtoms::size, value);
+          inclusiveAncestor->GetAttr(nsGkAtoms::size, value);
           if (!value.IsEmpty()) {
             aPendingStyleCacheArray.AppendElement(
                 PendingStyleCache(*nsGkAtoms::font, nsGkAtoms::size, value));
@@ -9582,8 +9589,7 @@ nsresult HTMLEditor::GetInlineStyles(
           }
         }
         if (NeedToAppend(*nsGkAtoms::font, nsGkAtoms::color)) {
-          inclusiveAncestor->GetAttr(kNameSpaceID_None, nsGkAtoms::color,
-                                     value);
+          inclusiveAncestor->GetAttr(nsGkAtoms::color, value);
           if (!value.IsEmpty()) {
             aPendingStyleCacheArray.AppendElement(
                 PendingStyleCache(*nsGkAtoms::font, nsGkAtoms::color, value));

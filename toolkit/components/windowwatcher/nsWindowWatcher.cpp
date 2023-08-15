@@ -30,7 +30,6 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DocumentInlines.h"
 #include "nsIDragService.h"
-#include "nsIDOMChromeWindow.h"
 #include "nsIPrompt.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsIScreen.h"
@@ -2299,8 +2298,7 @@ static void SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
   if (aIsCallerChrome) {
     // Only enable special privileges for chrome when chrome calls
     // open() on a chrome window
-    nsCOMPtr<nsIDOMChromeWindow> chromeWin(do_QueryInterface(aParent));
-    enabled = !aParent || chromeWin;
+    enabled = !aParent || nsGlobalWindowOuter::Cast(aParent)->IsChromeWindow();
   }
 
   const CSSIntCoord extraWidth = sizeChromeWidth ? CSSIntCoord(0) : chromeWidth;
@@ -2333,7 +2331,13 @@ static void SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
           screenDesktopRect.Size() / screenCssToDesktopScale;
 
       if (aSizeSpec.SizeSpecified()) {
-        if (!nsContentUtils::ShouldResistFingerprinting()) {
+        if (!nsContentUtils::ShouldResistFingerprinting(
+                "When RFP is enabled, we unconditionally round new window "
+                "sizes. The code paths that create new windows are "
+                "complicated, and this is a conservative behavior to avoid "
+                "exempting something that shouldn't be. It also presents a "
+                "uniform behavior for something that's very browser-related.",
+                RFPTarget::RoundWindowSize)) {
           /* Unlike position, force size out-of-bounds check only if
              size actually was specified. Otherwise, intrinsically sized
              windows are broken. */

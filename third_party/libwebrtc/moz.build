@@ -290,7 +290,7 @@ DIRS += [
     "/third_party/libwebrtc/modules/video_coding/svc/scalability_structures_gn",
     "/third_party/libwebrtc/modules/video_coding/svc/scalable_video_controller_gn",
     "/third_party/libwebrtc/modules/video_coding/svc/svc_rate_allocator_gn",
-    "/third_party/libwebrtc/modules/video_coding/timing/codec_timer_gn",
+    "/third_party/libwebrtc/modules/video_coding/timing/decode_time_percentile_filter_gn",
     "/third_party/libwebrtc/modules/video_coding/timing/frame_delay_variation_kalman_filter_gn",
     "/third_party/libwebrtc/modules/video_coding/timing/inter_frame_delay_gn",
     "/third_party/libwebrtc/modules/video_coding/timing/jitter_estimator_gn",
@@ -650,4 +650,18 @@ if CONFIG["CPU_ARCH"] == "x86_64" and CONFIG["OS_TARGET"] == "WINNT":
         "/third_party/libwebrtc/modules/audio_processing/aec3/aec3_avx2_gn",
         "/third_party/libwebrtc/modules/audio_processing/agc2/rnn_vad/vector_math_avx2_gn",
         "/third_party/libwebrtc/modules/desktop_capture/desktop_capture_differ_sse2_gn"
+    ]
+
+if CONFIG["CPU_ARCH"] == "ppc64" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TARGET"] == "Linux":
+
+    DIRS += [
+        "/third_party/libwebrtc/modules/desktop_capture/desktop_capture_gn",
+        "/third_party/libwebrtc/modules/desktop_capture/primitives_gn"
+    ]
+
+if CONFIG["CPU_ARCH"] == "riscv64" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TARGET"] == "Linux":
+
+    DIRS += [
+        "/third_party/libwebrtc/modules/desktop_capture/desktop_capture_gn",
+        "/third_party/libwebrtc/modules/desktop_capture/primitives_gn"
     ]

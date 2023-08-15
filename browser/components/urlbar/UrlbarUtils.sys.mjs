@@ -49,13 +49,11 @@ export var UrlbarUtils = {
     HEURISTIC_BOOKMARK_KEYWORD: "heuristicBookmarkKeyword",
     HEURISTIC_HISTORY_URL: "heuristicHistoryUrl",
     HEURISTIC_OMNIBOX: "heuristicOmnibox",
-    HEURISTIC_PRELOADED: "heuristicPreloaded",
     HEURISTIC_SEARCH_TIP: "heuristicSearchTip",
     HEURISTIC_TEST: "heuristicTest",
     HEURISTIC_TOKEN_ALIAS_ENGINE: "heuristicTokenAliasEngine",
     INPUT_HISTORY: "inputHistory",
     OMNIBOX: "extension",
-    PRELOADED: "preloaded",
     REMOTE_SUGGESTION: "remoteSuggestion",
     REMOTE_TAB: "remoteTab",
     SUGGESTED_INDEX: "suggestedIndex",
@@ -303,7 +301,7 @@ export var UrlbarUtils = {
     try {
       entry = await lazy.PlacesUtils.keywords.fetch(keyword);
     } catch (ex) {
-      console.error(`Unable to fetch Places keyword "${keyword}": ${ex}`);
+      console.error(`Unable to fetch Places keyword "${keyword}":`, ex);
     }
     if (!entry || !entry.url) {
       // This is not a Places keyword.
@@ -513,8 +511,6 @@ export var UrlbarUtils = {
           return UrlbarUtils.RESULT_GROUP.HEURISTIC_FALLBACK;
         case "Omnibox":
           return UrlbarUtils.RESULT_GROUP.HEURISTIC_OMNIBOX;
-        case "PreloadedSites":
-          return UrlbarUtils.RESULT_GROUP.HEURISTIC_PRELOADED;
         case "TokenAliasEngines":
           return UrlbarUtils.RESULT_GROUP.HEURISTIC_TOKEN_ALIAS_ENGINE;
         case "UrlbarProviderSearchTips":
@@ -542,8 +538,6 @@ export var UrlbarUtils = {
         return UrlbarUtils.RESULT_GROUP.ABOUT_PAGES;
       case "InputHistory":
         return UrlbarUtils.RESULT_GROUP.INPUT_HISTORY;
-      case "PreloadedSites":
-        return UrlbarUtils.RESULT_GROUP.PRELOADED;
       case "UrlbarProviderQuickSuggest":
         return UrlbarUtils.RESULT_GROUP.GENERAL_PARENT;
       default:
@@ -1187,7 +1181,7 @@ export var UrlbarUtils = {
         }
         if (result.payload.suggestion) {
           let type = result.payload.trending ? "trending" : "searchsuggestion";
-          if (result.payload.isRichSuggestion) {
+          if (result.isRichSuggestion) {
             type += "_rich";
           }
           return type;
@@ -1222,6 +1216,11 @@ export var UrlbarUtils = {
               return "dynamic_wikipedia";
           }
           return "quicksuggest";
+        }
+        if (result.providerName == "InputHistory") {
+          return result.source == UrlbarUtils.RESULT_SOURCE.BOOKMARKS
+            ? "bookmark_adaptive"
+            : "history_adaptive";
         }
         return result.source == UrlbarUtils.RESULT_SOURCE.BOOKMARKS
           ? "bookmark"
@@ -1291,7 +1290,7 @@ export var UrlbarUtils = {
         let group = result.payload.trending
           ? "trending_search"
           : "search_suggest";
-        if (result.payload.isRichSuggestion) {
+        if (result.isRichSuggestion) {
           group += "_rich";
         }
         return group;
@@ -1377,7 +1376,7 @@ export var UrlbarUtils = {
           let type = result.payload.trending
             ? "trending_search"
             : "search_suggest";
-          if (result.payload.isRichSuggestion) {
+          if (result.isRichSuggestion) {
             type += "_rich";
           }
           return type;
@@ -1533,9 +1532,6 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       isGeneralPurposeEngine: {
         type: "boolean",
       },
-      isRichSuggestion: {
-        type: "boolean",
-      },
       keyword: {
         type: "string",
       },
@@ -1587,7 +1583,39 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
             type: "string",
           },
           args: {
-            type: "array",
+            type: "object",
+            additionalProperties: true,
+          },
+        },
+      },
+      // l10n { id, args }
+      bottomTextL10n: {
+        type: "object",
+        required: ["id"],
+        properties: {
+          id: {
+            type: "string",
+          },
+          args: {
+            type: "object",
+            additionalProperties: true,
+          },
+        },
+      },
+      description: {
+        type: "string",
+      },
+      // l10n { id, args }
+      descriptionL10n: {
+        type: "object",
+        required: ["id"],
+        properties: {
+          id: {
+            type: "string",
+          },
+          args: {
+            type: "object",
+            additionalProperties: true,
           },
         },
       },
@@ -1609,7 +1637,8 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
             type: "string",
           },
           args: {
-            type: "array",
+            type: "object",
+            additionalProperties: true,
           },
         },
       },
@@ -1631,6 +1660,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       originalUrl: {
         type: "string",
       },
+      provider: {
+        type: "string",
+      },
       qsSuggestion: {
         type: "string",
       },
@@ -1638,6 +1670,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
         type: "string",
       },
       sendAttributionRequest: {
+        type: "boolean",
+      },
+      shouldShowUrl: {
         type: "boolean",
       },
       source: {
@@ -1815,7 +1850,8 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
             type: "string",
           },
           args: {
-            type: "array",
+            type: "object",
+            additionalProperties: true,
           },
         },
       },
@@ -1839,7 +1875,8 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
             type: "string",
           },
           args: {
-            type: "array",
+            type: "object",
+            additionalProperties: true,
           },
         },
       },
@@ -1990,7 +2027,7 @@ export class UrlbarQueryContext {
    * @returns {{ href: string; isSearch: boolean; }?}
    */
   get fixupInfo() {
-    if (this.trimmedSearchString && !this._fixupInfo) {
+    if (!this._fixupError && !this._fixupInfo && this.trimmedSearchString) {
       let flags =
         Ci.nsIURIFixup.FIXUP_FLAG_FIX_SCHEME_TYPOS |
         Ci.nsIURIFixup.FIXUP_FLAG_ALLOW_KEYWORD_LOOKUP;

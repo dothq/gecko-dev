@@ -76,6 +76,14 @@ pub enum NeedsSelectorFlags {
     Yes,
 }
 
+/// Whether we need to ignore nth child selectors for this match request (only expected during
+/// invalidation).
+#[derive(PartialEq)]
+pub enum IgnoreNthChildForInvalidation {
+    No,
+    Yes,
+}
+
 /// Which quirks mode is this document in.
 ///
 /// See: https://quirks.spec.whatwg.org/
@@ -97,6 +105,21 @@ impl QuirksMode {
             QuirksMode::Quirks => CaseSensitivity::AsciiCaseInsensitive,
         }
     }
+}
+
+/// Whether or not this matching considered relative selector.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RelativeSelectorMatchingState {
+    /// Was not considered for any relative selector.
+    None,
+    /// Relative selector was considered for a match, but the element to be
+    /// under matching would not anchor the relative selector. i.e. The
+    /// relative selector was not part of the first compound selector (in match
+    /// order).
+    Considered,
+    /// Same as above, but the relative selector was part of the first compound
+    /// selector (in match order).
+    ConsideredAnchor,
 }
 
 /// Data associated with the matching process for a element.  This context is
@@ -146,10 +169,15 @@ where
 
     /// The current element we're anchoring on for evaluating the relative selector.
     current_relative_selector_anchor: Option<OpaqueElement>,
-    pub considered_relative_selector: bool,
+    pub considered_relative_selector: RelativeSelectorMatchingState,
 
     quirks_mode: QuirksMode,
     needs_selector_flags: NeedsSelectorFlags,
+
+    /// Whether this match request should ignore nth child selectors (only expected during
+    /// invalidation).
+    ignores_nth_child_selectors_for_invalidation: IgnoreNthChildForInvalidation,
+
     classes_and_ids_case_sensitivity: CaseSensitivity,
     _impl: ::std::marker::PhantomData<Impl>,
 }
@@ -165,6 +193,7 @@ where
         nth_index_cache: &'a mut NthIndexCache,
         quirks_mode: QuirksMode,
         needs_selector_flags: NeedsSelectorFlags,
+        ignores_nth_child_selectors_for_invalidation: IgnoreNthChildForInvalidation,
     ) -> Self {
         Self::new_for_visited(
             matching_mode,
@@ -173,6 +202,7 @@ where
             VisitedHandlingMode::AllLinksUnvisited,
             quirks_mode,
             needs_selector_flags,
+            ignores_nth_child_selectors_for_invalidation,
         )
     }
 
@@ -184,6 +214,7 @@ where
         visited_handling: VisitedHandlingMode,
         quirks_mode: QuirksMode,
         needs_selector_flags: NeedsSelectorFlags,
+        ignores_nth_child_selectors_for_invalidation: IgnoreNthChildForInvalidation,
     ) -> Self {
         Self {
             matching_mode,
@@ -193,6 +224,7 @@ where
             quirks_mode,
             classes_and_ids_case_sensitivity: quirks_mode.classes_and_ids_case_sensitivity(),
             needs_selector_flags,
+            ignores_nth_child_selectors_for_invalidation,
             scope_element: None,
             current_host: None,
             nesting_level: 0,
@@ -200,7 +232,7 @@ where
             pseudo_element_matching_fn: None,
             extra_data: Default::default(),
             current_relative_selector_anchor: None,
-            considered_relative_selector: false,
+            considered_relative_selector: RelativeSelectorMatchingState::None,
             _impl: ::std::marker::PhantomData,
         }
     }
@@ -244,6 +276,12 @@ where
     #[inline]
     pub fn needs_selector_flags(&self) -> bool {
         self.needs_selector_flags == NeedsSelectorFlags::Yes
+    }
+
+    /// Whether we need to ignore nth child selectors (only expected during invalidation).
+    #[inline]
+    pub fn ignores_nth_child_selectors_for_invalidation(&self) -> bool {
+        self.ignores_nth_child_selectors_for_invalidation == IgnoreNthChildForInvalidation::Yes
     }
 
     /// The case-sensitivity for class and ID selectors
@@ -329,12 +367,14 @@ where
     where
         F: FnOnce(&mut Self) -> R,
     {
-        // TODO(dshin): Nesting should be rejected at parse time.
-        let original_relative_selector_anchor = self.current_relative_selector_anchor.take();
+        debug_assert!(
+            self.current_relative_selector_anchor.is_none(),
+            "Nesting should've been rejected at parse time"
+        );
         self.current_relative_selector_anchor = Some(anchor);
+        self.considered_relative_selector = RelativeSelectorMatchingState::Considered;
         let result = self.nest(f);
-        self.current_relative_selector_anchor = original_relative_selector_anchor;
-        self.considered_relative_selector = true;
+        self.current_relative_selector_anchor = None;
         result
     }
 

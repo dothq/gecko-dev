@@ -471,11 +471,13 @@ class CssLogic {
   selectorMatchesElement(domRule, idx) {
     let element = this.viewedElement;
     do {
-      if (InspectorUtils.selectorMatchesElement(element, domRule, idx)) {
+      if (domRule.selectorMatchesElement(idx, element)) {
         return true;
       }
     } while (
-      (element = element.parentNode) &&
+      // Loop on flattenedTreeParentNode instead of parentNode to reach the
+      // shadow host from the shadow dom.
+      (element = element.flattenedTreeParentNode) &&
       element.nodeType === nodeConstants.ELEMENT_NODE
     );
 
@@ -595,7 +597,9 @@ class CssLogic {
 
       distance--;
     } while (
-      (element = element.parentNode) &&
+      // Loop on flattenedTreeParentNode instead of parentNode to reach the
+      // shadow host from the shadow dom.
+      (element = element.flattenedTreeParentNode) &&
       element.nodeType === nodeConstants.ELEMENT_NODE
     );
   }
@@ -646,22 +650,22 @@ CssLogic.getShortName = function (element) {
  *
  * @param {DOMRule} domRule
  *        The DOMRule to parse.
+ * @param {Boolean} desugared
+ *        Set to true to get the desugared selector (see https://drafts.csswg.org/css-nesting-1/#nest-selector)
  * @return {Array}
  *         An array of string selectors.
  */
-CssLogic.getSelectors = function (domRule) {
+CssLogic.getSelectors = function (domRule, desugared = false) {
   if (domRule.type !== CSSRule.STYLE_RULE) {
-    // Return empty array since InspectorUtils.getSelectorCount() assumes
-    // only STYLE_RULE type.
+    // Return empty array since CSSRule#selectorCount assumes only STYLE_RULE type.
     return [];
   }
 
   const selectors = [];
 
-  const len = InspectorUtils.getSelectorCount(domRule);
+  const len = domRule.selectorCount;
   for (let i = 0; i < len; i++) {
-    const text = InspectorUtils.getSelectorText(domRule, i);
-    selectors.push(text);
+    selectors.push(domRule.selectorTextAt(i, desugared));
   }
   return selectors;
 };
@@ -934,7 +938,7 @@ class CssRule {
   /**
    * Information about a single CSSStyleRule.
    *
-   * @param {CSSSheet|null} cssSheet the CssSheet object of the stylesheet that
+   * @param {CSSStyleSheet|null} cssSheet the CssSheet object of the stylesheet that
    * holds the CSSStyleRule. If the rule comes from element.style, set this
    * argument to null.
    * @param {CSSStyleRule|object} domRule the DOM CSSStyleRule for which you want
@@ -1197,8 +1201,7 @@ class CssSelector {
     }
 
     if (typeof this._specificity !== "number") {
-      this._specificity = InspectorUtils.getSpecificity(
-        this.cssRule.domRule,
+      this._specificity = this.cssRule.domRule.selectorSpecificityAt(
         this.selectorIndex
       );
     }

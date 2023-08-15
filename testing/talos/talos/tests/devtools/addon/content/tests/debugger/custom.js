@@ -27,6 +27,7 @@ const {
   step,
   waitForSource,
   waitForText,
+  evalInFrame,
   waitUntil,
 } = require("./debugger-helpers");
 
@@ -37,6 +38,7 @@ const EXPECTED = {
   file: "App.js",
   sourceURL: `${IFRAME_BASE_URL}custom/debugger/static/js/App.js`,
   text: "import React, { Component } from 'react';",
+  threadsCount: 2,
 };
 
 const EXPECTED_FUNCTION = "window.hitBreakpoint()";
@@ -54,6 +56,13 @@ module.exports = async function () {
 
   dump("Creating context\n");
   const dbg = await createContext(panel);
+
+  // Note that all sources added via eval, and all sources added by this function
+  // will be gone when reloading the page in the next step.
+  await testAddingSources(dbg, tab, toolbox);
+
+  // Reselect App.js as that's the source expected to be selected after page reload
+  await selectSource(dbg, EXPECTED.file);
 
   await reloadDebuggerAndLog("custom", toolbox, EXPECTED);
 
@@ -152,7 +161,6 @@ async function testPreview(dbg, tab, testFunction) {
   let test = runTest("custom.jsdebugger.preview.DAMP");
   await pauseDebugger(dbg, tab, testFunction, pauseLocation);
   await hoverOnToken(dbg, cx, "window.hitBreakpoint", "window");
-  dbg.actions.clearPreview(cx);
   test.done();
 
   await removeBreakpoints(dbg);
@@ -186,10 +194,15 @@ async function testOpeningLargeMinifiedFile(dbg, tab) {
   const fileFirstChars = `(()=>{var e,t,n,r,o={82603`;
 
   dump("Open minified.js (large minified file)\n");
+  const fullTest = runTest(
+    "custom.jsdebugger.open-large-minified-file.full-selection.DAMP"
+  );
   const test = runTest("custom.jsdebugger.open-large-minified-file.DAMP");
-  await selectSource(dbg, file);
+  const onSelected = selectSource(dbg, file);
   await waitForText(dbg, fileFirstChars);
   test.done();
+  await onSelected;
+  fullTest.done();
 
   dbg.actions.closeTabs(dbg.selectors.getContext(dbg.getState()), [file]);
 
@@ -237,4 +250,45 @@ async function testPrettyPrint(dbg) {
   ]);
 
   await garbageCollect();
+}
+
+async function testAddingSources(dbg, tab, toolbox) {
+  // Before running the test, select an existing source in the two folders
+  // where we add sources so that the added sources are made visible in the SourceTree.
+  await selectSource(dbg, "js/testfile.js?id=0");
+  await selectSource(dbg, "js/subfolder/testsubfolder.js");
+
+  // Disabled ResourceCommand throttling so that the source notified by the server
+  // is immediately processed by the client and we process each new source quickly.
+  // Otherwise each source processing is faster than the throttling and we would mostly measure the throttling.
+  toolbox.commands.resourceCommand.throttlingDisabled = true;
+  const test = runTest("custom.jsdebugger.adding-sources.DAMP");
+
+  for (let i = 0; i < 15; i++) {
+    // Load source from two distinct folders to extend coverage around the source tree
+    const sourceFilename =
+      (i % 2 == 0 ? "testfile.js" : "testsubfolder.js") + "?dynamic-" + i;
+    const sourcePath =
+      i % 2 == 0 ? sourceFilename : "subfolder/" + sourceFilename;
+
+    await evalInFrame(
+      tab,
+      `
+      const script = document.createElement("script");
+      script.src = "./js/${sourcePath}";
+      document.body.appendChild(script);
+    `
+    );
+    dump(`Wait for new source '${sourceFilename}'\n`);
+    // Wait for the source to be in the redux store to avoid executing expensive DOM selectors.
+    await waitUntil(() => findSource(dbg, sourceFilename));
+    await waitUntil(() => {
+      return Array.from(
+        dbg.win.document.querySelectorAll(".sources-list .tree-node")
+      ).some(e => e.textContent.includes(sourceFilename));
+    });
+  }
+
+  test.done();
+  toolbox.commands.resourceCommand.throttlingDisabled = false;
 }

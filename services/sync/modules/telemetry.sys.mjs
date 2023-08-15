@@ -238,35 +238,13 @@ export class ErrorSanitizer {
   // still sanitize ones that aren't in these maps to remove the translations etc - eg,
   // `ERROR_SHARING_VIOLATION` doesn't really have a unix equivalent, so doesn't appear here, but
   // we still strip the translations to avoid the variants.
-  static E_NO_SPACE_ON_DEVICE = "OS error [No space left on device]";
   static E_PERMISSION_DENIED = "OS error [Permission denied]";
   static E_NO_FILE_OR_DIR = "OS error [File/Path not found]";
-  static E_NO_MEM = "OS error [No memory]";
-
-  static WindowsErrorSubstitutions = {
-    2: this.E_NO_FILE_OR_DIR, // ERROR_FILE_NOT_FOUND
-    3: this.E_NO_FILE_OR_DIR, // ERROR_PATH_NOT_FOUND
-    5: this.E_PERMISSION_DENIED, // ERROR_ACCESS_DENIED
-    8: this.E_NO_MEM, // ERROR_NOT_ENOUGH_MEMORY
-    112: this.E_NO_SPACE_ON_DEVICE, // ERROR_DISK_FULL
-  };
-
-  static UnixErrorSubstitutions = {
-    2: this.E_NO_FILE_OR_DIR, // ENOENT
-    12: this.E_NO_MEM, // ENOMEM
-    13: this.E_PERMISSION_DENIED, // EACCESS
-    28: this.E_NO_SPACE_ON_DEVICE, // ENOSPC
-  };
 
   static DOMErrorSubstitutions = {
     NotFoundError: this.E_NO_FILE_OR_DIR,
     NotAllowedError: this.E_PERMISSION_DENIED,
   };
-
-  static reWinError =
-    /^(?<head>Win error (?<errno>\d+))(?<detail>.*) \(.*\r?\n?\)$/m;
-  static reUnixError =
-    /^(?<head>Unix error (?<errno>\d+))(?<detail>.*) \(.*\)$/;
 
   static #cleanOSErrorMessage(message, error = undefined) {
     if (DOMException.isInstance(error)) {
@@ -277,18 +255,6 @@ export class ErrorSanitizer {
       }
     }
 
-    let match = this.reWinError.exec(message);
-    if (match) {
-      let head =
-        this.WindowsErrorSubstitutions[match.groups.errno] || match.groups.head;
-      return head + match.groups.detail.replaceAll("\\", "/");
-    }
-    match = this.reUnixError.exec(message);
-    if (match) {
-      let head =
-        this.UnixErrorSubstitutions[match.groups.errno] || match.groups.head;
-      return head + match.groups.detail;
-    }
     return message;
   }
 
@@ -736,10 +702,15 @@ class SyncTelemetryImpl {
     this.events = [];
     this.histograms = {};
     this.migrations = [];
-    this.maxEventsCount = lazy.Svc.Prefs.get("telemetry.maxEventsCount", 1000);
-    this.maxPayloadCount = lazy.Svc.Prefs.get("telemetry.maxPayloadCount");
+    this.maxEventsCount = lazy.Svc.PrefBranch.getIntPref(
+      "telemetry.maxEventsCount",
+      1000
+    );
+    this.maxPayloadCount = lazy.Svc.PrefBranch.getIntPref(
+      "telemetry.maxPayloadCount"
+    );
     this.submissionInterval =
-      lazy.Svc.Prefs.get("telemetry.submissionInterval") * 1000;
+      lazy.Svc.PrefBranch.getIntPref("telemetry.submissionInterval") * 1000;
     this.lastSubmissionTime = Services.telemetry.msSinceProcessStart();
     this.lastUID = EMPTY_UID;
     this.lastSyncNodeType = null;

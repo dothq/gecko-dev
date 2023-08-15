@@ -2301,7 +2301,7 @@ void JS::TransitiveCompileOptions::copyPODTransitiveOptions(
 
   mutedErrors_ = rhs.mutedErrors_;
   forceStrictMode_ = rhs.forceStrictMode_;
-  shouldResistFingerprinting_ = rhs.shouldResistFingerprinting_;
+  alwaysUseFdlibm_ = rhs.alwaysUseFdlibm_;
   sourcePragmas_ = rhs.sourcePragmas_;
   skipFilenameValidation_ = rhs.skipFilenameValidation_;
   hideScriptFromDebugger_ = rhs.hideScriptFromDebugger_;
@@ -2345,25 +2345,26 @@ JS::OwningCompileOptions::OwningCompileOptions(JSContext* cx)
 
 void JS::OwningCompileOptions::release() {
   // OwningCompileOptions always owns these, so these casts are okay.
-  js_free(const_cast<char*>(filename_));
+  js_free(const_cast<char*>(filename_.c_str()));
   js_free(const_cast<char16_t*>(sourceMapURL_));
-  js_free(const_cast<char*>(introducerFilename_));
+  js_free(const_cast<char*>(introducerFilename_.c_str()));
 
-  filename_ = nullptr;
+  filename_ = JS::ConstUTF8CharsZ();
   sourceMapURL_ = nullptr;
-  introducerFilename_ = nullptr;
+  introducerFilename_ = JS::ConstUTF8CharsZ();
 }
 
 JS::OwningCompileOptions::~OwningCompileOptions() { release(); }
 
 size_t JS::OwningCompileOptions::sizeOfExcludingThis(
     mozilla::MallocSizeOf mallocSizeOf) const {
-  return mallocSizeOf(filename_) + mallocSizeOf(sourceMapURL_) +
-         mallocSizeOf(introducerFilename_);
+  return mallocSizeOf(filename_.c_str()) + mallocSizeOf(sourceMapURL_) +
+         mallocSizeOf(introducerFilename_.c_str());
 }
 
-bool JS::OwningCompileOptions::copy(JSContext* cx,
-                                    const ReadOnlyCompileOptions& rhs) {
+template <typename ContextT>
+bool JS::OwningCompileOptions::copyImpl(ContextT* cx,
+                                        const ReadOnlyCompileOptions& rhs) {
   // Release existing string allocations.
   release();
 
@@ -2371,10 +2372,11 @@ bool JS::OwningCompileOptions::copy(JSContext* cx,
   copyPODTransitiveOptions(rhs);
 
   if (rhs.filename()) {
-    filename_ = DuplicateString(cx, rhs.filename()).release();
-    if (!filename_) {
+    const char* str = DuplicateString(cx, rhs.filename().c_str()).release();
+    if (!str) {
       return false;
     }
+    filename_ = JS::ConstUTF8CharsZ(str);
   }
 
   if (rhs.sourceMapURL()) {
@@ -2385,14 +2387,25 @@ bool JS::OwningCompileOptions::copy(JSContext* cx,
   }
 
   if (rhs.introducerFilename()) {
-    introducerFilename_ =
-        DuplicateString(cx, rhs.introducerFilename()).release();
-    if (!introducerFilename_) {
+    const char* str =
+        DuplicateString(cx, rhs.introducerFilename().c_str()).release();
+    if (!str) {
       return false;
     }
+    introducerFilename_ = JS::ConstUTF8CharsZ(str);
   }
 
   return true;
+}
+
+bool JS::OwningCompileOptions::copy(JSContext* cx,
+                                    const ReadOnlyCompileOptions& rhs) {
+  return copyImpl(cx, rhs);
+}
+
+bool JS::OwningCompileOptions::copy(JS::FrontendContext* fc,
+                                    const ReadOnlyCompileOptions& rhs) {
+  return copyImpl(fc, rhs);
 }
 
 JS::CompileOptions::CompileOptions(JSContext* cx) : ReadOnlyCompileOptions() {
@@ -2425,8 +2438,7 @@ JS::CompileOptions::CompileOptions(JSContext* cx) : ReadOnlyCompileOptions() {
   // Note: If we parse outside of a specific realm, we do not inherit any realm
   // behaviours. These can still be set manually on the options though.
   if (Realm* realm = cx->realm()) {
-    shouldResistFingerprinting_ =
-        realm->behaviors().shouldResistFingerprinting();
+    alwaysUseFdlibm_ = realm->creationOptions().alwaysUseFdlibm();
     discardSource = realm->behaviors().discardSource();
   }
 }
@@ -3882,7 +3894,7 @@ static UniquePtr<JSErrorNotes::Note> CreateErrorNoteVA(
   }
 
   note->errorNumber = errorNumber;
-  note->filename = filename;
+  note->filename = JS::ConstUTF8CharsZ(filename);
   note->sourceId = sourceId;
   note->lineno = lineno;
   note->column = column;
@@ -4224,6 +4236,9 @@ JS_PUBLIC_API void JS_SetGlobalJitCompilerOption(JSContext* cx,
     case JSJITCOMPILER_SPECTRE_JIT_TO_CXX_CALLS:
       jit::JitOptions.spectreJitToCxxCalls = !!value;
       break;
+    case JSJITCOMPILER_WRITE_PROTECT_CODE:
+      jit::JitOptions.maybeSetWriteProtectCode(!!value);
+      break;
     case JSJITCOMPILER_WATCHTOWER_MEGAMORPHIC:
       jit::JitOptions.enableWatchtowerMegamorphic = !!value;
       break;
@@ -4312,6 +4327,9 @@ JS_PUBLIC_API bool JS_GetGlobalJitCompilerOption(JSContext* cx,
       break;
     case JSJITCOMPILER_SPECTRE_JIT_TO_CXX_CALLS:
       *valueOut = jit::JitOptions.spectreJitToCxxCalls ? 1 : 0;
+      break;
+    case JSJITCOMPILER_WRITE_PROTECT_CODE:
+      *valueOut = jit::JitOptions.writeProtectCode ? 1 : 0;
       break;
     case JSJITCOMPILER_WATCHTOWER_MEGAMORPHIC:
       *valueOut = jit::JitOptions.enableWatchtowerMegamorphic ? 1 : 0;

@@ -396,7 +396,9 @@ RefPtr<MediaSourceTrackDemuxer::SeekPromise> MediaSourceTrackDemuxer::DoSeek(
   RefPtr<MediaRawData> sample =
       mManager->GetSample(mType, TimeUnit::Zero(), result);
   MOZ_ASSERT(NS_SUCCEEDED(result) && sample);
-  mNextSample = Some(sample);
+  if (sample) {
+    mNextSample = Some(sample);
+  }
   mReset = false;
   {
     MonitorAutoLock mon(mMonitor);
@@ -438,24 +440,25 @@ MediaSourceTrackDemuxer::DoGetSamples(int32_t aNumSamples) {
     mReset = false;
   }
   RefPtr<MediaRawData> sample;
-  MediaResult result = NS_OK;
   if (mNextSample) {
     sample = mNextSample.ref();
     mNextSample.reset();
   } else {
+    MediaResult result = NS_OK;
     sample = mManager->GetSample(mType, MediaSourceDemuxer::EOS_FUZZ, result);
-  }
-  if (!sample) {
-    if (result == NS_ERROR_DOM_MEDIA_END_OF_STREAM ||
-        result == NS_ERROR_DOM_MEDIA_WAITING_FOR_DATA) {
-      return SamplesPromise::CreateAndReject(
-          (result == NS_ERROR_DOM_MEDIA_END_OF_STREAM && mManager->IsEnded())
-              ? NS_ERROR_DOM_MEDIA_END_OF_STREAM
-              : NS_ERROR_DOM_MEDIA_WAITING_FOR_DATA,
-          __func__);
+    if (!sample) {
+      if (result == NS_ERROR_DOM_MEDIA_END_OF_STREAM ||
+          result == NS_ERROR_DOM_MEDIA_WAITING_FOR_DATA) {
+        return SamplesPromise::CreateAndReject(
+            (result == NS_ERROR_DOM_MEDIA_END_OF_STREAM && mManager->IsEnded())
+                ? NS_ERROR_DOM_MEDIA_END_OF_STREAM
+                : NS_ERROR_DOM_MEDIA_WAITING_FOR_DATA,
+            __func__);
+      }
+      return SamplesPromise::CreateAndReject(result, __func__);
     }
-    return SamplesPromise::CreateAndReject(result, __func__);
   }
+  MOZ_DIAGNOSTIC_ASSERT(sample);
   RefPtr<SamplesHolder> samples = new SamplesHolder;
   samples->AppendSample(sample);
   {

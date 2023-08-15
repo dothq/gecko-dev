@@ -97,6 +97,8 @@
 #include "mozilla/Utf8.h"  // mozilla::Utf8Unit
 #include "nsIScriptError.h"
 #include "nsIAsyncOutputStream.h"
+#include "js/loader/ModuleLoaderBase.h"
+#include "mozilla/Maybe.h"
 
 using JS::SourceText;
 using namespace JS::loader;
@@ -344,10 +346,8 @@ static bool IsScriptEventHandler(ScriptKind kind, nsIContent* aScriptElement) {
   }
 
   nsAutoString forAttr, eventAttr;
-  if (!aScriptElement->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::_for,
-                                            forAttr) ||
-      !aScriptElement->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::event,
-                                            eventAttr)) {
+  if (!aScriptElement->AsElement()->GetAttr(nsGkAtoms::_for, forAttr) ||
+      !aScriptElement->AsElement()->GetAttr(nsGkAtoms::event, eventAttr)) {
     return false;
   }
 
@@ -408,6 +408,12 @@ nsresult ScriptLoader::CheckContentPolicy(Document* aDocument,
       aDocument->NodePrincipal(),  // triggering principal
       requestingNode, nsILoadInfo::SEC_ONLY_FOR_EXPLICIT_CONTENTSEC_CHECK,
       contentPolicyType);
+
+  if (aRequest->mIntegrity.IsValid()) {
+    MOZ_ASSERT(!aRequest->mIntegrity.IsEmpty());
+    secCheckLoadInfo->SetIntegrityMetadata(
+        aRequest->mIntegrity.GetIntegrityString());
+  }
 
   // snapshot the nonce at load start time for performing CSP checks
   if (contentPolicyType == nsIContentPolicy::TYPE_INTERNAL_SCRIPT ||
@@ -522,7 +528,7 @@ nsresult ScriptLoader::RestartLoad(ScriptLoadRequest* aRequest) {
   if (aRequest->IsModuleRequest()) {
     rv = aRequest->AsModuleRequest()->RestartModuleLoad();
   } else {
-    rv = StartLoad(aRequest, 0, Nothing());
+    rv = StartLoad(aRequest, Nothing());
   }
   if (NS_FAILED(rv)) {
     return rv;
@@ -534,17 +540,17 @@ nsresult ScriptLoader::RestartLoad(ScriptLoadRequest* aRequest) {
 }
 
 nsresult ScriptLoader::StartLoad(
-    ScriptLoadRequest* aRequest, uint64_t aEarlyHintPreloaderId,
+    ScriptLoadRequest* aRequest,
     const Maybe<nsAutoString>& aCharsetForPreload) {
   if (aRequest->IsModuleRequest()) {
     return aRequest->AsModuleRequest()->StartModuleLoad();
   }
 
-  return StartClassicLoad(aRequest, aEarlyHintPreloaderId, aCharsetForPreload);
+  return StartClassicLoad(aRequest, aCharsetForPreload);
 }
 
 nsresult ScriptLoader::StartClassicLoad(
-    ScriptLoadRequest* aRequest, uint64_t aEarlyHintPreloaderId,
+    ScriptLoadRequest* aRequest,
     const Maybe<nsAutoString>& aCharsetForPreload) {
   MOZ_ASSERT(aRequest->IsFetching());
   NS_ENSURE_TRUE(mDocument, NS_ERROR_NULL_POINTER);
@@ -569,8 +575,7 @@ nsresult ScriptLoader::StartClassicLoad(
 
   securityFlags |= nsILoadInfo::SEC_ALLOW_CHROME;
 
-  nsresult rv = StartLoadInternal(aRequest, securityFlags,
-                                  aEarlyHintPreloaderId, aCharsetForPreload);
+  nsresult rv = StartLoadInternal(aRequest, securityFlags, aCharsetForPreload);
 
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -589,7 +594,6 @@ static bool IsWebExtensionRequest(ScriptLoadRequest* aRequest) {
 
 nsresult ScriptLoader::StartLoadInternal(
     ScriptLoadRequest* aRequest, nsSecurityFlags securityFlags,
-    uint64_t aEarlyHintPreloaderId,
     const Maybe<nsAutoString>& aCharsetForPreload) {
   nsContentPolicyType contentPolicyType =
       ScriptLoadRequestToContentPolicyType(aRequest);
@@ -616,13 +620,20 @@ nsresult ScriptLoader::StartLoadInternal(
 
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (aEarlyHintPreloaderId) {
+  if (aRequest->mEarlyHintPreloaderId) {
     nsCOMPtr<nsIHttpChannelInternal> channelInternal =
         do_QueryInterface(channel);
     NS_ENSURE_TRUE(channelInternal != nullptr, NS_ERROR_FAILURE);
 
-    rv = channelInternal->SetEarlyHintPreloaderId(aEarlyHintPreloaderId);
+    rv = channelInternal->SetEarlyHintPreloaderId(
+        aRequest->mEarlyHintPreloaderId);
     NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
+  if (aRequest->mIntegrity.IsValid()) {
+    MOZ_ASSERT(!aRequest->mIntegrity.IsEmpty());
+    loadInfo->SetIntegrityMetadata(aRequest->mIntegrity.GetIntegrityString());
   }
 
   // snapshot the nonce at load start time for performing CSP checks
@@ -632,7 +643,6 @@ nsresult ScriptLoader::StartLoadInternal(
       nsString* cspNonce =
           static_cast<nsString*>(context->GetProperty(nsGkAtoms::nonce));
       if (cspNonce) {
-        nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
         loadInfo->SetCspNonce(*cspNonce);
       }
     }
@@ -758,7 +768,7 @@ nsresult ScriptLoader::StartLoadInternal(
   // Set the initiator type
   nsCOMPtr<nsITimedChannel> timedChannel(do_QueryInterface(httpChannel));
   if (timedChannel) {
-    if (aEarlyHintPreloaderId) {
+    if (aRequest->mEarlyHintPreloaderId) {
       timedChannel->SetInitiatorType(u"early-hints"_ns);
     } else if (aRequest->GetScriptLoadContext()->IsLinkPreloadScript()) {
       timedChannel->SetInitiatorType(u"link"_ns);
@@ -791,12 +801,13 @@ nsresult ScriptLoader::StartLoadInternal(
       aRequest->GetScriptLoadContext()->IsLinkPreloadScript(),
       aRequest->IsModuleRequest());
 
-  if (aEarlyHintPreloaderId) {
+  if (aRequest->mEarlyHintPreloaderId) {
     nsCOMPtr<nsIHttpChannelInternal> channelInternal =
         do_QueryInterface(channel);
     NS_ENSURE_TRUE(channelInternal != nullptr, NS_ERROR_FAILURE);
 
-    rv = channelInternal->SetEarlyHintPreloaderId(aEarlyHintPreloaderId);
+    rv = channelInternal->SetEarlyHintPreloaderId(
+        aRequest->mEarlyHintPreloaderId);
     NS_ENSURE_SUCCESS(rv, rv);
   }
   rv = channel->AsyncOpen(loader);
@@ -908,8 +919,7 @@ bool ScriptLoader::ProcessScriptElement(nsIScriptElement* aElement,
   // be ignored if it is)."
   if (mDocument->ModuleScriptsEnabled() && scriptKind == ScriptKind::eClassic &&
       scriptContent->IsHTMLElement() &&
-      scriptContent->AsElement()->HasAttr(kNameSpaceID_None,
-                                          nsGkAtoms::nomodule)) {
+      scriptContent->AsElement()->HasAttr(nsGkAtoms::nomodule)) {
     return false;
   }
 
@@ -955,8 +965,7 @@ bool ScriptLoader::ProcessExternalScript(nsIScriptElement* aElement,
   SRIMetadata sriMetadata;
   {
     nsAutoString integrity;
-    aScriptContent->AsElement()->GetAttr(kNameSpaceID_None,
-                                         nsGkAtoms::integrity, integrity);
+    aScriptContent->AsElement()->GetAttr(nsGkAtoms::integrity, integrity);
     GetSRIMetadata(integrity, &sriMetadata);
   }
 
@@ -972,6 +981,20 @@ bool ScriptLoader::ProcessExternalScript(nsIScriptElement* aElement,
     request->Cancel();
     AccumulateCategorical(LABELS_DOM_SCRIPT_PRELOAD_RESULT::RejectedByPolicy);
     return false;
+  }
+
+  // If there are a preloaded request and an import map, we won't use the
+  // preloaded request and will try to create a new one for this, because the
+  // import map isn't preloaded, and the preloaded request may have used the
+  // wrong module specifiers.
+  //
+  // We use IsModuleFetched() to check if the module has been fetched, if it
+  // hasn't been fetched we can simply just reuse it.
+  if (request && mModuleLoader->IsModuleFetched(request->mURI) &&
+      mModuleLoader->HasImportMapRegistered()) {
+    DebugOnly<bool> removed = mModuleLoader->RemoveFetchedModule(request->mURI);
+    MOZ_ASSERT(removed);
+    request = nullptr;
   }
 
   if (request) {
@@ -1024,7 +1047,7 @@ bool ScriptLoader::ProcessExternalScript(nsIScriptElement* aElement,
     LOG(("ScriptLoadRequest (%p): Created request for external script",
          request.get()));
 
-    nsresult rv = StartLoad(request, 0, Nothing());
+    nsresult rv = StartLoad(request, Nothing());
     if (NS_FAILED(rv)) {
       ReportErrorToConsole(request, rv);
 
@@ -1606,17 +1629,6 @@ nsresult ScriptLoader::StartOffThreadCompilation(
   nsresult rv = aRequest->GetScriptSource(aCx, &maybeSource);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (aRequest->IsModuleRequest()) {
-    auto compile = [&](auto& source) {
-      return JS::CompileModuleToStencilOffThread(aCx, aOptions, source,
-                                                 callback, aRunnable);
-    };
-
-    MOZ_ASSERT(!maybeSource.empty());
-    *aTokenOut = maybeSource.mapNonEmpty(compile);
-    return CompileResultForToken(*aTokenOut);
-  }
-
   if (ShouldApplyDelazifyStrategy(aRequest)) {
     ApplyDelazifyStrategy(&aOptions);
     mTotalFullParseSize +=
@@ -1629,6 +1641,17 @@ nsresult ScriptLoader::StartOffThreadCompilation(
          "url=%s mTotalFullParseSize=%u",
          aRequest, aRequest->mURI->GetSpecOrDefault().get(),
          mTotalFullParseSize));
+  }
+
+  if (aRequest->IsModuleRequest()) {
+    auto compile = [&](auto& source) {
+      return JS::CompileModuleToStencilOffThread(aCx, aOptions, source,
+                                                 callback, aRunnable);
+    };
+
+    MOZ_ASSERT(!maybeSource.empty());
+    *aTokenOut = maybeSource.mapNonEmpty(compile);
+    return CompileResultForToken(*aTokenOut);
   }
 
   if (StaticPrefs::dom_expose_test_interfaces()) {
@@ -3561,6 +3584,7 @@ void ScriptLoader::PreloadURI(nsIURI* aURI, const nsAString& aCharset,
   request->GetScriptLoadContext()->mScriptFromHead = aScriptFromHead;
   request->GetScriptLoadContext()->SetScriptMode(aDefer, aAsync, aLinkPreload);
   request->GetScriptLoadContext()->SetIsPreloadRequest();
+  request->mEarlyHintPreloaderId = aEarlyHintPreloaderId;
 
   if (LOG_ENABLED()) {
     nsAutoCString url;
@@ -3570,7 +3594,7 @@ void ScriptLoader::PreloadURI(nsIURI* aURI, const nsAString& aCharset,
   }
 
   nsAutoString charset(aCharset);
-  nsresult rv = StartLoad(request, aEarlyHintPreloaderId, Some(charset));
+  nsresult rv = StartLoad(request, Some(charset));
   if (NS_FAILED(rv)) {
     return;
   }

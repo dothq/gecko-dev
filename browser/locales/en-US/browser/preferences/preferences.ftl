@@ -319,15 +319,7 @@ manage-browser-languages-button =
 confirm-browser-language-change-description = Restart { -brand-short-name } to apply these changes
 confirm-browser-language-change-button = Apply and Restart
 
-translate-web-pages =
-    .label = Translate web content
-    .accesskey = T
-
 fx-translate-web-pages = { -translations-brand-name }
-
-# The <img> element is replaced by the logo of the provider
-# used to provide machine translations for web pages.
-translate-attribution = Translations by <img data-l10n-name="logo"/>
 
 translate-exceptions =
     .label = Exceptions…
@@ -892,10 +884,12 @@ prefs-sync-turn-on-syncing =
 
 prefs-sync-offer-setup-label2 = Synchronize your bookmarks, history, tabs, passwords, add-ons, and settings across all your devices.
 
-prefs-sync-now =
-    .labelnotsyncing = Sync Now
-    .accesskeynotsyncing = N
-    .labelsyncing = Syncing…
+prefs-sync-now-button =
+    .label = Sync Now
+    .accesskey = N
+
+prefs-syncing-button =
+    .label = Syncing…
 
 ## The list of things currently syncing.
 

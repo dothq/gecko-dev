@@ -6,6 +6,8 @@
 
 package org.mozilla.geckoview;
 
+import static org.mozilla.geckoview.GeckoSession.GeckoPrintException.ERROR_NO_PRINT_DELEGATE;
+
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.ContentResolver;
@@ -80,6 +82,9 @@ import org.mozilla.gecko.util.GeckoBundle;
 import org.mozilla.gecko.util.IntentUtils;
 import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.geckoview.GeckoDisplay.SurfaceInfo;
+import org.mozilla.geckoview.GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt;
+import org.mozilla.geckoview.GeckoSession.PromptDelegate.IdentityCredential.PrivacyPolicyPrompt;
+import org.mozilla.geckoview.GeckoSession.PromptDelegate.IdentityCredential.ProviderSelectorPrompt;
 
 public class GeckoSession {
   private static final String LOGTAG = "GeckoSession";
@@ -595,15 +600,21 @@ public class GeckoSession {
                     message.getBoolean("skipConfirmation"),
                     message.getBoolean("requestExternalApp"));
             if (result == null) {
-              callback.sendError("Failed to create response");
+              if (callback != null) {
+                callback.sendError("Failed to create response");
+              }
               return;
             }
             result.accept(
                 response ->
                     ThreadUtils.runOnUiThread(
                         () -> delegate.onExternalResponse(GeckoSession.this, response)),
-                exception -> callback.sendError("Failed to create response"));
-          } else if ("GeckoView:GetNimbusFeature".equals(event)) {
+                exception -> {
+                  if (callback != null) {
+                    callback.sendError("Failed to create response");
+                  }
+                });
+          } else if ("GeckoView:GetNimbusFeature".equals(event) && callback != null) {
             final String featureId = message.getString("featureId");
             final JSONObject res = delegate.onGetNimbusFeature(GeckoSession.this, featureId);
             if (res == null) {
@@ -4530,6 +4541,266 @@ public class GeckoSession {
       }
     }
 
+    /** Contains all the Identity credential prompts (FedCM) */
+    public final class IdentityCredential {
+      /**
+       * ProviderSelectorPrompt contains the information necessary to represent a prompt that allows
+       * the user to select the identity credential provider they would like to use.
+       */
+      public static class ProviderSelectorPrompt extends BasePrompt {
+        /** The providers from which the user could select. */
+        public final @NonNull Provider[] providers;
+
+        /**
+         * Creates a new {@link ProviderSelectorPrompt} with the given parameters.
+         *
+         * @param id The identification for this prompt.
+         * @param providers The providers from which the user could select.
+         * @param observer A callback to notify when the prompt has been completed.
+         */
+        protected ProviderSelectorPrompt(
+            @NonNull final String id,
+            @NonNull final Provider[] providers,
+            @NonNull final Observer observer) {
+          super(id, null, observer);
+          this.providers = providers;
+        }
+
+        /**
+         * Confirms the prompt and passes the provider index back to content.
+         *
+         * @param providerIndex providerIndex An integer representing the index of the provider
+         *     chosen by the user to be returned to content.
+         * @return A {@link PromptResponse} which can be used to complete the {@link GeckoResult}
+         *     associated with this prompt.
+         */
+        @UiThread
+        public @NonNull PromptResponse confirm(final int providerIndex) {
+          ensureResult().putInt("providerIndex", providerIndex);
+          return super.confirm();
+        }
+
+        /** A representation of an Identity Credential Provider. */
+        public static class Provider {
+          /** A base64 string for given icon for the provider; may be null. */
+          public final @Nullable String icon;
+
+          /** The name of the provider. */
+          public final @NonNull String name;
+
+          /** The id of the provider. */
+          public final int id;
+
+          /**
+           * Creates a new {@link Provider} with the given parameters.
+           *
+           * @param id The identification for this prompt.
+           * @param icon A string base64 icon.
+           * @param name The name of the {@link Provider}.
+           */
+          public Provider(final int id, final @NonNull String name, final @Nullable String icon) {
+            this.id = id;
+            this.icon = icon;
+            this.name = name;
+          }
+
+          /* package */
+          static @NonNull Provider fromBundle(final @NonNull GeckoBundle bundle) {
+            final int id = bundle.getInt("providerIndex");
+            final String icon = bundle.getString("icon");
+            final String name = bundle.getString("name");
+            return new Provider(id, name, icon);
+          }
+        }
+      }
+
+      /**
+       * AccountSelectorPrompt contains the information necessary to represent a prompt that allows
+       * the user to select the account they would like to use.
+       */
+      public static class AccountSelectorPrompt extends BasePrompt {
+        /** The accounts from which the user could select. */
+        public final @NonNull Account[] accounts;
+
+        /**
+         * Creates a new {@link AccountSelectorPrompt} with the given parameters.
+         *
+         * @param id The identification for this prompt.
+         * @param accounts The accounts from which the user could select.
+         * @param observer A callback to notify when the prompt has been completed.
+         */
+        public AccountSelectorPrompt(
+            @NonNull final String id, @NonNull final Account[] accounts, final Observer observer) {
+          super(id, null, observer);
+          this.accounts = accounts;
+        }
+
+        /**
+         * Confirms the prompt and passes the account index back to content.
+         *
+         * @param accountIndex An integer representing the index of the account chosen by the user
+         *     to be returned to content.
+         * @return A {@link PromptResponse} which can be used to complete the {@link GeckoResult}
+         *     associated with this prompt.
+         */
+        @UiThread
+        public @NonNull PromptResponse confirm(@NonNull final int accountIndex) {
+          ensureResult().putInt("accountIndex", accountIndex);
+          return super.confirm();
+        }
+
+        /** A representation of an Identity Credential Provider Accounts. */
+        public static class ProviderAccounts {
+          /** The name of the provider. */
+          public final @Nullable String provider;
+
+          /** The accounts available for this provider. */
+          public final @NonNull Account[] accounts;
+
+          /** The id of this prompt. */
+          public final int id;
+
+          /**
+           * Creates a new {@link ProviderAccounts} with the given parameters
+           *
+           * @param id The identification for this prompt.
+           * @param provider The name of the provider.
+           * @param accounts The list of {@link Account}s available for this provider.
+           */
+          public ProviderAccounts(
+              final int id, @Nullable final String provider, @NonNull final Account[] accounts) {
+            this.id = id;
+            this.provider = provider;
+            this.accounts = accounts;
+          }
+
+          /* package */
+          static @NonNull ProviderAccounts fromBundle(final @NonNull GeckoBundle bundle) {
+            final int id = bundle.getInt("accountIndex");
+            final String provider = bundle.getString("provider");
+            final GeckoBundle[] accountsBundle = bundle.getBundleArray("accounts");
+            if (accountsBundle == null) {
+              return new ProviderAccounts(id, provider, new Account[0]);
+            }
+
+            final Account[] accounts = new Account[accountsBundle.length];
+            for (int i = 0; i < accountsBundle.length; i++) {
+              accounts[i] = Account.fromBundle(accountsBundle[i]);
+            }
+            return new ProviderAccounts(id, provider, accounts);
+          }
+        }
+
+        /** A representation of an Identity Credential Account. */
+        public static class Account {
+          /** The id of the account. */
+          public final int id;
+
+          /** The email associated to this account. */
+          public final @NonNull String email;
+
+          /** The name of this account. */
+          public final @NonNull String name;
+
+          /** A base64 string for given icon for the account; may be null. */
+          public final @Nullable String icon;
+
+          /**
+           * Creates a new {@link Account} with the given parameters.
+           *
+           * @param id The identification for this account.
+           * @param email The email of this account.
+           * @param name The name of this account.
+           * @param icon A string base64 icon.
+           */
+          public Account(
+              final int id,
+              @NonNull final String email,
+              @NonNull final String name,
+              @Nullable final String icon) {
+            this.email = email;
+            this.name = name;
+            this.icon = icon;
+            this.id = id;
+          }
+
+          /* package */
+          static @NonNull Account fromBundle(final @NonNull GeckoBundle bundle) {
+            final int id = bundle.getInt("id");
+            final String icon = bundle.getString("icon");
+            final String name = bundle.getString("name");
+            final String email = bundle.getString("email");
+            return new Account(id, email, name, icon);
+          }
+        }
+      }
+
+      /**
+       * PrivacyPolicyPrompt contains the information necessary to represent a prompt that allows
+       * the user to indicate if agrees or not with the privacy policy of the identity credential
+       * provider.
+       */
+      public static class PrivacyPolicyPrompt extends BasePrompt {
+        /** The URL where the policy for using this provider is hosted. */
+        public final @NonNull String privacyPolicyUrl;
+
+        /** The URL where the terms of service for using this provider are hosted. */
+        public final @NonNull String termsOfServiceUrl;
+
+        /** The domain of the provider. */
+        public final @NonNull String providerDomain;
+
+        /** The host of the provider. */
+        public final @NonNull String host;
+
+        /** A base64 string for given icon for the provider; may be null. */
+        public final @Nullable String icon;
+
+        /**
+         * Creates a new {@link IdentityCredential.ProviderSelectorPrompt} with the given
+         * parameters.
+         *
+         * @param id The identification for this prompt.
+         * @param privacyPolicyUrl The URL where the policy for using this provider is hosted.
+         * @param termsOfServiceUrl The URL where the terms of service for using this provider are
+         *     hosted.
+         * @param providerDomain The domain of the provider.
+         * @param host The host of the provider.
+         * @param icon A base64 string for given icon for the provider; may be null.
+         * @param observer A callback to notify when the prompt has been completed.
+         */
+        protected PrivacyPolicyPrompt(
+            @NonNull final String id,
+            @NonNull final String privacyPolicyUrl,
+            @NonNull final String termsOfServiceUrl,
+            @NonNull final String providerDomain,
+            @NonNull final String host,
+            @Nullable final String icon,
+            @NonNull final Observer observer) {
+          super(id, null, observer);
+          this.privacyPolicyUrl = privacyPolicyUrl;
+          this.termsOfServiceUrl = termsOfServiceUrl;
+          this.providerDomain = providerDomain;
+          this.host = host;
+          this.icon = icon;
+        }
+
+        /**
+         * Confirms the prompt and passes the provider accept value back to content.
+         *
+         * @param accept A boolean indicating if the user accepts or not the Privacy Policy of the
+         *     provider.
+         * @return A {@link PromptResponse} which can be used to complete the {@link GeckoResult}
+         *     associated with this prompt.
+         */
+        @UiThread
+        public @NonNull PromptResponse confirm(final boolean accept) {
+          ensureResult().putBoolean("accept", accept);
+          return super.confirm();
+        }
+      }
+    }
+
     /**
      * ButtonPrompt contains the information necessary to represent a JavaScript confirm() call from
      * content.
@@ -5572,6 +5843,50 @@ public class GeckoSession {
     default @Nullable GeckoResult<PromptResponse> onLoginSelect(
         @NonNull final GeckoSession session,
         @NonNull final AutocompleteRequest<Autocomplete.LoginSelectOption> request) {
+      return null;
+    }
+
+    /**
+     * Handle an Identity Credential Provider selection prompt request. This is triggered by the
+     * user focusing on selecting a provider for authenticating.
+     *
+     * @param session The {@link GeckoSession} that triggered the request.
+     * @param prompt The {@link ProviderSelectorPrompt} containing the request details.
+     * @return A {@link GeckoResult} resolving to a {@link PromptResponse} which includes all
+     *     necessary information to resolve the prompt.
+     */
+    @UiThread
+    default @Nullable GeckoResult<PromptResponse> onSelectIdentityCredentialProvider(
+        @NonNull final GeckoSession session, @NonNull final ProviderSelectorPrompt prompt) {
+      return null;
+    }
+
+    /**
+     * Handle an Identity Credential Account selection prompt request. This is triggered by the user
+     * focusing on selecting a provider for authenticating.
+     *
+     * @param session The {@link GeckoSession} that triggered the request.
+     * @param prompt The {@link ProviderSelectorPrompt} containing the request details.
+     * @return A {@link GeckoResult} resolving to a {@link PromptResponse} which includes all
+     *     necessary information to resolve the prompt.
+     */
+    @UiThread
+    default @Nullable GeckoResult<PromptResponse> onSelectIdentityCredentialAccount(
+        @NonNull final GeckoSession session, @NonNull final AccountSelectorPrompt prompt) {
+      return null;
+    }
+
+    /**
+     * Handle an Identity Credential privacy policy prompt request.
+     *
+     * @param session The {@link GeckoSession} that triggered the request.
+     * @param prompt The {@link PrivacyPolicyPrompt} containing the request details.
+     * @return A {@link GeckoResult} resolving to a {@link PromptResponse} which includes all
+     *     necessary information to resolve the prompt.
+     */
+    @UiThread
+    default @Nullable GeckoResult<PromptResponse> onShowPrivacyPolicyIdentityCredential(
+        @NonNull final GeckoSession session, @NonNull final PrivacyPolicyPrompt prompt) {
       return null;
     }
 
@@ -7004,6 +7319,24 @@ public class GeckoSession {
     }
   }
 
+  /**
+   * Prints the currently displayed page and provides dialog finished status or if an exception
+   * occured.
+   *
+   * @return if the printing dialog finished or an exception.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<Boolean> didPrintPageContent() {
+    final PrintDelegate delegate = getPrintDelegate();
+    final GeckoResult<Boolean> result = new GeckoResult<>();
+    if (delegate == null) {
+      result.completeExceptionally(new GeckoPrintException(ERROR_NO_PRINT_DELEGATE));
+      return result;
+    }
+    return saveAsPdfByBrowsingContext(null)
+        .then(pdfStream -> delegate.onPrintWithStatus(pdfStream));
+  }
+
   private static String rgbaToArgb(final String color) {
     // We expect #rrggbbaa
     if (color.length() != 9 || !color.startsWith("#")) {
@@ -7115,6 +7448,9 @@ public class GeckoSession {
     /** An error happened while trying to find the activity context */
     public static final int ERROR_NO_ACTIVITY_CONTEXT = -5;
 
+    /** An error happened while trying to find the print delegate */
+    public static final int ERROR_NO_PRINT_DELEGATE = -6;
+
     @Retention(RetentionPolicy.SOURCE)
     @IntDef(
         value = {
@@ -7122,7 +7458,8 @@ public class GeckoSession {
           ERROR_UNABLE_TO_CREATE_PRINT_SETTINGS,
           ERROR_UNABLE_TO_RETRIEVE_CANONICAL_BROWSING_CONTEXT,
           ERROR_NO_ACTIVITY_CONTEXT_DELEGATE,
-          ERROR_NO_ACTIVITY_CONTEXT
+          ERROR_NO_ACTIVITY_CONTEXT,
+          ERROR_NO_PRINT_DELEGATE
         })
     public @interface Codes {}
 

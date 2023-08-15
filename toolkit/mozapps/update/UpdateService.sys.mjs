@@ -118,8 +118,11 @@ const URI_UPDATES_PROPERTIES =
 const KEY_EXECUTABLE = "XREExeF";
 const KEY_PROFILE_DIR = "ProfD";
 const KEY_UPDROOT = "UpdRootD";
+const KEY_OLD_UPDROOT = "OldUpdRootD";
 
 const DIR_UPDATES = "updates";
+const DIR_UPDATE_READY = "0";
+const DIR_UPDATE_DOWNLOADING = "downloading";
 
 const FILE_ACTIVE_UPDATE_XML = "active-update.xml";
 const FILE_BACKUP_UPDATE_LOG = "backup-update.log";
@@ -1051,7 +1054,16 @@ function getUpdateDirCreate(pathArray) {
     }
   }
 
-  return FileUtils.getDir(KEY_UPDROOT, pathArray, true);
+  let dir = FileUtils.getDir(KEY_UPDROOT, pathArray);
+  try {
+    dir.create(Ci.nsIFile.DIRECTORY_TYPE, FileUtils.PERMS_DIRECTORY);
+  } catch (ex) {
+    if (ex.result != Cr.NS_ERROR_FILE_ALREADY_EXISTS) {
+      throw ex;
+    }
+    // Ignore the exception due to a directory that already exists.
+  }
+  return dir;
 }
 
 /**
@@ -1154,7 +1166,7 @@ function getStatusTextFromCode(code, defaultCode) {
  * @return The ready updates directory, as a nsIFile object
  */
 function getReadyUpdateDir() {
-  return getUpdateDirCreate([DIR_UPDATES, "0"]);
+  return getUpdateDirCreate([DIR_UPDATES, DIR_UPDATE_READY]);
 }
 
 /**
@@ -1164,7 +1176,7 @@ function getReadyUpdateDir() {
  * @return The downloading update directory, as a nsIFile object
  */
 function getDownloadingUpdateDir() {
-  return getUpdateDirCreate([DIR_UPDATES, "downloading"]);
+  return getUpdateDirCreate([DIR_UPDATES, DIR_UPDATE_DOWNLOADING]);
 }
 
 /**
@@ -2875,41 +2887,29 @@ UpdateService.prototype = {
       return false;
     };
     if (channelChanged(updates)) {
+      let channel = lazy.UM.readyUpdate
+        ? lazy.UM.readyUpdate.channel
+        : lazy.UM.downloadingUpdate.channel;
       LOG(
-        "UpdateService:_postUpdateProcessing - channel has changed, " +
-          "reloading default preferences to workaround bug 802022"
+        "UpdateService:_postUpdateProcessing - update channel is " +
+          "different than application's channel, removing update. update " +
+          "channel: " +
+          channel +
+          ", expected channel: " +
+          lazy.UpdateUtils.UpdateChannel
       );
-      // Workaround to get the distribution preferences loaded (Bug 774618).
-      // This can be removed after bug 802022 is fixed. Now that this code runs
-      // later during startup this code may no longer be necessary but it
-      // shouldn't be removed until after bug 802022 is fixed.
-      let prefSvc = Services.prefs.QueryInterface(Ci.nsIObserver);
-      prefSvc.observe(null, "reload-default-prefs", null);
-      if (channelChanged(updates)) {
-        let channel = lazy.UM.readyUpdate
-          ? lazy.UM.readyUpdate.channel
-          : lazy.UM.downloadingUpdate.channel;
-        LOG(
-          "UpdateService:_postUpdateProcessing - update channel is " +
-            "different than application's channel, removing update. update " +
-            "channel: " +
-            channel +
-            ", expected channel: " +
-            lazy.UpdateUtils.UpdateChannel
-        );
-        // User switched channels, clear out the old active updates and remove
-        // partial downloads
-        for (let update of updates) {
-          update.state = STATE_FAILED;
-          update.errorCode = ERR_CHANNEL_CHANGE;
-          update.statusText =
-            lazy.gUpdateBundle.GetStringFromName("statusFailed");
-        }
-        let newStatus = STATE_FAILED + ": " + ERR_CHANNEL_CHANGE;
-        pingStateAndStatusCodes(updates[0], true, newStatus);
-        cleanupActiveUpdates();
-        return;
+      // User switched channels, clear out the old active updates and remove
+      // partial downloads
+      for (let update of updates) {
+        update.state = STATE_FAILED;
+        update.errorCode = ERR_CHANNEL_CHANGE;
+        update.statusText =
+          lazy.gUpdateBundle.GetStringFromName("statusFailed");
       }
+      let newStatus = STATE_FAILED + ": " + ERR_CHANNEL_CHANGE;
+      pingStateAndStatusCodes(updates[0], true, newStatus);
+      cleanupActiveUpdates();
+      return;
     }
 
     // Handle the case when the update is the same or older than the current
@@ -4900,6 +4900,69 @@ UpdateManager.prototype = {
     cleanupReadyUpdate();
   },
 
+  /**
+   * See nsIUpdateService.idl
+   */
+  doInstallCleanup: async function UM_doInstallCleanup(isUninstall) {
+    LOG("UpdateManager:doInstallCleanup - cleaning up");
+    let completionPromises = [];
+
+    const delete_or_log = path =>
+      IOUtils.remove(path).catch(ex =>
+        console.error(`Failed to delete ${path}`, ex)
+      );
+
+    for (const key of [KEY_OLD_UPDROOT, KEY_UPDROOT]) {
+      const root = Services.dirsvc.get(key, Ci.nsIFile);
+
+      const activeUpdateXml = root.clone();
+      activeUpdateXml.append(FILE_ACTIVE_UPDATE_XML);
+      completionPromises.push(delete_or_log(activeUpdateXml.path));
+
+      const downloadingMar = root.clone();
+      downloadingMar.append(DIR_UPDATES);
+      downloadingMar.append(DIR_UPDATE_DOWNLOADING);
+      downloadingMar.append(FILE_UPDATE_MAR);
+      completionPromises.push(delete_or_log(downloadingMar.path));
+
+      const readyDir = root.clone();
+      readyDir.append(DIR_UPDATES);
+      readyDir.append(DIR_UPDATE_READY);
+      const readyMar = readyDir.clone();
+      readyMar.append(FILE_UPDATE_MAR);
+      completionPromises.push(delete_or_log(readyMar.path));
+      const readyStatus = readyDir.clone();
+      readyStatus.append(FILE_UPDATE_STATUS);
+      completionPromises.push(delete_or_log(readyStatus.path));
+      const versionFile = readyDir.clone();
+      versionFile.append(FILE_UPDATE_VERSION);
+      completionPromises.push(delete_or_log(versionFile.path));
+    }
+
+    return Promise.allSettled(completionPromises);
+  },
+
+  /**
+   * See nsIUpdateService.idl
+   */
+  doUninstallCleanup: async function UM_doUninstallCleanup(isUninstall) {
+    LOG("UpdateManager:doUninstallCleanup - cleaning up.");
+    let completionPromises = [];
+
+    completionPromises.push(
+      IOUtils.remove(Services.dirsvc.get(KEY_UPDROOT, Ci.nsIFile).path, {
+        recursive: true,
+      }).catch(ex => console.error("Failed to remove update directory", ex))
+    );
+    completionPromises.push(
+      IOUtils.remove(Services.dirsvc.get(KEY_OLD_UPDROOT, Ci.nsIFile).path, {
+        recursive: true,
+      }).catch(ex => console.error("Failed to remove old update directory", ex))
+    );
+
+    return Promise.allSettled(completionPromises);
+  },
+
   classID: Components.ID("{093C2356-4843-4C65-8709-D7DBCBBE7DFB}"),
   QueryInterface: ChromeUtils.generateQI(["nsIUpdateManager", "nsIObserver"]),
 };
@@ -5985,7 +6048,19 @@ Downloader.prototype = {
         this._bitsActiveNotifications = true;
       }
 
-      let updateRootDir = FileUtils.getDir(KEY_UPDROOT, [], true);
+      let updateRootDir = FileUtils.getDir(KEY_UPDROOT, []);
+      try {
+        updateRootDir.create(
+          Ci.nsIFile.DIRECTORY_TYPE,
+          FileUtils.PERMS_DIRECTORY
+        );
+      } catch (ex) {
+        if (ex.result != Cr.NS_ERROR_FILE_ALREADY_EXISTS) {
+          throw ex;
+        }
+        // Ignore the exception due to a directory that already exists.
+      }
+
       let jobName = "MozillaUpdate " + updateRootDir.leafName;
       let updatePath = updateDir.path;
       if (!Bits.initialized) {

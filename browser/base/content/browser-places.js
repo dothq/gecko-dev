@@ -32,6 +32,7 @@ ChromeUtils.defineESModuleGetters(this, {
 });
 
 var StarUI = {
+  userHasTags: undefined,
   _itemGuids: null,
   _isNewBookmark: false,
   _isComposing: false,
@@ -241,8 +242,6 @@ var StarUI = {
       });
     }
 
-    this._setIconAndPreviewImage();
-
     let onPanelReady = fn => {
       let target = this.panel;
       if (target.parentNode) {
@@ -259,10 +258,24 @@ var StarUI = {
         { capture: true, once: true }
       );
     };
+
+    let hiddenRows = ["location", "keyword"];
+
+    if (this.userHasTags === undefined) {
+      // Cache must be initialized
+      const fetchedTags = await PlacesUtils.bookmarks.fetchTags();
+      this.userHasTags = !!fetchedTags.length;
+    }
+
+    if (!this.userHasTags) {
+      // Hide tags ui because user has no tags defined
+      hiddenRows.push("tags");
+    }
+
     await gEditItemOverlay.initPanel({
       node: aNode,
       onPanelReady,
-      hiddenRows: ["location", "keyword"],
+      hiddenRows,
       focusedElement: "preferred",
       isNewBookmark: this._isNewBookmark,
     });
@@ -278,27 +291,6 @@ var StarUI = {
       let clone = template.content.cloneNode(true);
       template.replaceWith(clone);
     }
-  },
-
-  _setIconAndPreviewImage() {
-    let faviconImage = this._element("editBookmarkPanelFavicon");
-    faviconImage.removeAttribute("iconloadingprincipal");
-    faviconImage.removeAttribute("src");
-
-    let tab = gBrowser.selectedTab;
-    if (tab.hasAttribute("image") && !tab.hasAttribute("busy")) {
-      faviconImage.setAttribute(
-        "iconloadingprincipal",
-        tab.getAttribute("iconloadingprincipal")
-      );
-      faviconImage.setAttribute("src", tab.getAttribute("image"));
-    }
-
-    let canvas = PageThumbs.createCanvas(window);
-    PageThumbs.captureToCanvas(gBrowser.selectedBrowser, canvas).catch(e =>
-      console.error(e)
-    );
-    document.mozSetImageElement("editBookmarkPanelImageCanvas", canvas);
   },
 
   removeBookmarkButtonCommand: function SU_removeBookmarkButtonCommand() {
@@ -559,8 +551,12 @@ var PlacesCommandHook = {
     }
   },
 
-  searchBookmarks() {
-    gURLBar.search(UrlbarTokenizer.RESTRICT.BOOKMARK, {
+  async searchBookmarks() {
+    let win = BrowserWindowTracker.getTopWindow();
+    if (!win) {
+      win = await BrowserUIUtils.openNewBrowserWindow();
+    }
+    win.gURLBar.search(UrlbarTokenizer.RESTRICT.BOOKMARK, {
       searchModeEntry: "bookmarkmenu",
     });
   },
@@ -1109,11 +1105,12 @@ var PlacesToolbarHelper = {
       viewElt
     );
 
-    if (
-      toolbar.id == "PersonalToolbar" &&
-      !toolbar.hasAttribute("initialized")
-    ) {
-      toolbar.setAttribute("initialized", "true");
+    if (toolbar.id == "PersonalToolbar") {
+      if (!toolbar.hasAttribute("initialized")) {
+        toolbar.setAttribute("initialized", "true");
+      }
+      // We just created a new view, thus we must check again the empty toolbar
+      // message, regardless of "initialized".
       BookmarkingUI.updateEmptyToolbarMessage().catch(console.error);
     }
   },
@@ -1245,15 +1242,11 @@ var PlacesToolbarHelper = {
         if (entry.name) {
           submenu.setAttribute("label", entry.name);
         } else {
-          submenu.setAttribute("data-l10n-id", "managed-bookmarks-subfolder");
+          document.l10n.setAttributes(submenu, "managed-bookmarks-subfolder");
         }
         submenu.setAttribute("container", "true");
-        submenu.setAttribute(
-          "class",
-          "menu-iconic bookmark-item subviewbutton"
-        );
+        submenu.classList.add("menu-iconic", "bookmark-item");
         let submenupopup = document.createXULElement("menupopup");
-        submenupopup.setAttribute("placespopup", "true");
         submenu.appendChild(submenupopup);
         menu.appendChild(submenu);
         this.addManagedBookmarks(submenupopup, entry.children);
@@ -1263,9 +1256,10 @@ var PlacesToolbarHelper = {
         let menuitem = document.createXULElement("menuitem");
         menuitem.setAttribute("label", entry.name);
         menuitem.setAttribute("image", "page-icon:" + preferredURI.spec);
-        menuitem.setAttribute(
-          "class",
-          "menuitem-iconic bookmark-item menuitem-with-favicon subviewbutton"
+        menuitem.classList.add(
+          "menuitem-iconic",
+          "menuitem-with-favicon",
+          "bookmark-item"
         );
         menuitem.link = preferredURI.spec;
         menu.appendChild(menuitem);
@@ -1419,9 +1413,11 @@ var BookmarkingUI = {
   },
 
   isOnNewTabPage({ currentURI }) {
-    // Prevent loading AboutNewTab.jsm during startup path if it
+    // Prevent loading AboutNewTab.sys.mjs during startup path if it
     // is only the newTabURL getter we are interested in.
-    let newTabURL = Cu.isModuleLoaded("resource:///modules/AboutNewTab.jsm")
+    let newTabURL = Cu.isESModuleLoaded(
+      "resource:///modules/AboutNewTab.sys.mjs"
+    )
       ? AboutNewTab.newTabURL
       : "about:newtab";
     // Don't treat a custom "about:blank" new tab URL as the "New Tab Page"
@@ -2051,6 +2047,9 @@ var BookmarkingUI = {
               1
             );
           }
+          if (ev.parentGuid == PlacesUtils.bookmarks.tagsGuid) {
+            StarUI.userHasTags = true;
+          }
           break;
         case "bookmark-removed":
           // If one of the tracked bookmarks has been removed, unregister it.
@@ -2248,8 +2247,8 @@ var BookmarkingUI = {
       is: "places-popup",
     });
     otherBookmarksPopup.setAttribute("placespopup", "true");
-    otherBookmarksPopup.setAttribute("type", "arrow");
     otherBookmarksPopup.setAttribute("context", "placesContext");
+    otherBookmarksPopup.classList.add("toolbar-menupopup");
     otherBookmarksPopup.id = "OtherBookmarksPopup";
 
     otherBookmarksPopup._placesNode = PlacesUtils.asContainer(node);

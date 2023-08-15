@@ -30,6 +30,10 @@
 #  include "nsIFile.h"
 #endif
 
+#if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
+#  include "mozilla/PSandboxTestingChild.h"
+#endif
+
 struct ChromePackage;
 class nsIObserver;
 struct SubstitutionMapping;
@@ -165,8 +169,6 @@ class ContentChild final : public PContentChild,
       Endpoint<PVRManagerChild>&& aVRBridge,
       Endpoint<PRemoteDecoderManagerChild>&& aVideoManager,
       nsTArray<uint32_t>&& namespaces);
-
-  mozilla::ipc::IPCResult RecvRequestPerformanceMetrics(const nsID& aID);
 
   mozilla::ipc::IPCResult RecvReinitRendering(
       Endpoint<PCompositorManagerChild>&& aCompositor,

@@ -1545,6 +1545,8 @@ APZEventResult APZCTreeManager::ReceiveInputEvent(
         return state.Finish(*this, std::move(aCallback));
       }
 
+      mOvershootDetector.Update(wheelInput);
+
       if (state.mHit.mTargetApzc) {
         MOZ_ASSERT(state.mHit.mHitResult != CompositorHitTestInvisibleToHit);
 
@@ -3654,8 +3656,8 @@ void APZCTreeManager::SendSubtreeTransformsToChromeMainThread(
 void APZCTreeManager::SetFixedLayerMargins(ScreenIntCoord aTop,
                                            ScreenIntCoord aBottom) {
   MutexAutoLock lock(mMapLock);
-  mCompositorFixedLayerMargins.top = aTop;
-  mCompositorFixedLayerMargins.bottom = aBottom;
+  mCompositorFixedLayerMargins.top = ScreenCoord(aTop);
+  mCompositorFixedLayerMargins.bottom = ScreenCoord(aBottom);
 }
 
 /*static*/

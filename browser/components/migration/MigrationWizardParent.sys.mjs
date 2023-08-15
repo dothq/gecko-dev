@@ -17,6 +17,7 @@ XPCOMUtils.defineLazyGetter(lazy, "gFluentStrings", function () {
 });
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  FirefoxProfileMigrator: "resource:///modules/FirefoxProfileMigrator.sys.mjs",
   InternalTestingProfileMigrator:
     "resource:///modules/InternalTestingProfileMigrator.sys.mjs",
   MigrationWizardConstants:
@@ -47,6 +48,7 @@ export class MigrationWizardParent extends JSWindowActorParent {
 
   didDestroy() {
     Services.obs.notifyObservers(this, "MigrationWizard:Destroyed");
+    MigrationUtils.finishMigration();
   }
 
   /**
@@ -97,32 +99,23 @@ export class MigrationWizardParent extends JSWindowActorParent {
             return b.lastModifiedDate - a.lastModifiedDate;
           });
 
-        for (let result of filteredResults) {
-          Services.telemetry.keyedScalarAdd(
-            "migration.discovered_migrators",
-            result.key,
-            1
-          );
-        }
         return filteredResults;
       }
 
       case "Migrate": {
+        let { migrationDetails, extraArgs } = message.data;
         if (
-          message.data.type ==
+          migrationDetails.type ==
           lazy.MigrationWizardConstants.MIGRATOR_TYPES.BROWSER
         ) {
-          await this.#doBrowserMigration(
-            message.data.key,
-            message.data.resourceTypes,
-            message.data.profile,
-            message.data.safariPasswordFilePath
-          );
+          return this.#doBrowserMigration(migrationDetails, extraArgs);
         } else if (
-          message.data.type == lazy.MigrationWizardConstants.MIGRATOR_TYPES.FILE
+          migrationDetails.type ==
+          lazy.MigrationWizardConstants.MIGRATOR_TYPES.FILE
         ) {
           let window = this.browsingContext.topChromeWindow;
-          await this.#doFileMigration(window, message.data.key);
+          await this.#doFileMigration(window, migrationDetails.key);
+          return extraArgs;
         }
         break;
       }
@@ -223,7 +216,7 @@ export class MigrationWizardParent extends JSWindowActorParent {
     let progress = {};
     for (let resourceType of fileMigrator.displayedResourceTypes) {
       progress[resourceType] = {
-        inProgress: true,
+        value: lazy.MigrationWizardConstants.PROGRESS_VALUE.LOADING,
         message: "",
       };
     }
@@ -238,11 +231,22 @@ export class MigrationWizardParent extends JSWindowActorParent {
       title: progressHeaderString,
       progress,
     });
-    let migrationResult = await fileMigrator.migrate(path);
+
+    let migrationResult;
+    try {
+      migrationResult = await fileMigrator.migrate(path);
+    } catch (e) {
+      this.sendAsyncMessage("FileImportProgressError", {
+        migratorKey: key,
+        fileImportErrorMessage: e.message,
+      });
+      return;
+    }
+
     let successProgress = {};
     for (let resourceType in migrationResult) {
       successProgress[resourceType] = {
-        inProgress: false,
+        value: lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS,
         message: migrationResult[resourceType],
       };
     }
@@ -296,52 +300,51 @@ export class MigrationWizardParent extends JSWindowActorParent {
    * Calls into MigrationUtils to perform a migration given the parameters
    * sent via the wizard.
    *
-   * @param {string} migratorKey
-   *   The unique identification key for a migrator.
-   * @param {string[]} resourceTypeNames
-   *   An array of strings, where each string represents a resource type
-   *   that can be imported for this migrator and profile. The strings
-   *   should be one of the key values of
-   *   MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.
-   * @param {object|null} profileObj
-   *   A description of the user profile that the migrator can import.
-   * @param {string} profileObj.id
-   *   A unique ID for the user profile.
-   * @param {string} profileObj.name
-   *   The display name for the user profile.
-   * @param {string} [safariPasswordFilePath=null]
-   *   An optional string argument that points to the path of a passwords
-   *   export file from Safari. This file will have password imported from if
-   *   supplied. This argument is ignored if the migratorKey is not for the
-   *   Safari browser.
-   * @returns {Promise<undefined>}
-   *   Resolves once the Migration:Ended observer notification has fired.
+   * @param {MigrationDetails} migrationDetails
+   *   See migration-wizard.mjs for a definition of MigrationDetails.
+   * @param {object} extraArgs
+   *   Extra argument object that will be passed to the Event Telemetry for
+   *   finishing the migration. This was initialized in the child actor, and
+   *   will be sent back down to it to write to Telemetry once migration
+   *   completes.
+   *
+   * @returns {Promise<object>}
+   *   Resolves once the Migration:Ended observer notification has fired,
+   *   passing the extraArgs for Telemetry back with any relevant properties
+   *   updated.
    */
-  async #doBrowserMigration(
-    migratorKey,
-    resourceTypeNames,
-    profileObj,
-    safariPasswordFilePath = null
-  ) {
-    let migrator = await MigrationUtils.getMigrator(migratorKey);
-    let availableResourceTypes = await migrator.getMigrateData(profileObj);
+  async #doBrowserMigration(migrationDetails, extraArgs) {
+    Services.telemetry
+      .getHistogramById("FX_MIGRATION_SOURCE_BROWSER")
+      .add(MigrationUtils.getSourceIdForTelemetry(migrationDetails.key));
+
+    let migrator = await MigrationUtils.getMigrator(migrationDetails.key);
+    let availableResourceTypes = await migrator.getMigrateData(
+      migrationDetails.profile
+    );
     let resourceTypesToMigrate = 0;
     let progress = {};
+    let migrationUsageHist =
+      Services.telemetry.getKeyedHistogramById("FX_MIGRATION_USAGE");
 
-    for (let resourceTypeName of resourceTypeNames) {
+    for (let resourceTypeName of migrationDetails.resourceTypes) {
       let resourceType = MigrationUtils.resourceTypes[resourceTypeName];
       if (availableResourceTypes & resourceType) {
         resourceTypesToMigrate |= resourceType;
         progress[resourceTypeName] = {
-          inProgress: true,
+          value: lazy.MigrationWizardConstants.PROGRESS_VALUE.LOADING,
           message: "",
         };
+
+        if (!migrationDetails.autoMigration) {
+          migrationUsageHist.add(migrationDetails.key, Math.log2(resourceType));
+        }
       }
     }
 
     if (
-      migratorKey == lazy.SafariProfileMigrator?.key &&
-      safariPasswordFilePath
+      migrationDetails.key == lazy.SafariProfileMigrator?.key &&
+      migrationDetails.safariPasswordFilePath
     ) {
       // The caller supplied a password export file for Safari. We're going to
       // pretend that there was a PASSWORDS resource for Safari to represent
@@ -349,21 +352,24 @@ export class MigrationWizardParent extends JSWindowActorParent {
       progress[
         lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PASSWORDS
       ] = {
-        inProgress: true,
+        value: lazy.MigrationWizardConstants.PROGRESS_VALUE.LOADING,
         message: "",
       };
 
-      this.sendAsyncMessage("UpdateProgress", { key: migratorKey, progress });
+      this.sendAsyncMessage("UpdateProgress", {
+        key: migrationDetails.key,
+        progress,
+      });
 
       let summary = await lazy.LoginCSVImport.importFromCSV(
-        safariPasswordFilePath
+        migrationDetails.safariPasswordFilePath
       );
       let quantity = summary.filter(entry => entry.result == "added").length;
 
       progress[
         lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PASSWORDS
       ] = {
-        inProgress: false,
+        value: lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS,
         message: await lazy.gFluentStrings.formatValue(
           "migration-wizard-progress-success-passwords",
           {
@@ -373,20 +379,26 @@ export class MigrationWizardParent extends JSWindowActorParent {
       };
     }
 
-    this.sendAsyncMessage("UpdateProgress", { key: migratorKey, progress });
+    this.sendAsyncMessage("UpdateProgress", {
+      key: migrationDetails.key,
+      progress,
+    });
 
     // It's possible that only a Safari password file path was sent up, and
     // there's nothing left to migrate, in which case we're done here.
-    if (safariPasswordFilePath && !resourceTypeNames.length) {
-      return;
+    if (
+      migrationDetails.safariPasswordFilePath &&
+      !migrationDetails.resourceTypes.length
+    ) {
+      return extraArgs;
     }
 
     try {
       await migrator.migrate(
         resourceTypesToMigrate,
         false,
-        profileObj,
-        async resourceTypeNum => {
+        migrationDetails.profile,
+        async (resourceTypeNum, success, details) => {
           // Unfortunately, MigratorBase hands us the the numeric value of the
           // MigrationUtils.resourceType for this callback. For now, we'll just
           // do a look-up to map it to the right constant.
@@ -406,17 +418,84 @@ export class MigrationWizardParent extends JSWindowActorParent {
               resourceTypeNum
             );
           } else {
-            // For now, we ignore errors in migration, and simply display
-            // the success state.
-            progress[foundResourceTypeName] = {
-              inProgress: false,
-              message: await this.#getStringForImportQuantity(
-                migratorKey,
-                foundResourceTypeName
-              ),
-            };
+            if (!success) {
+              Services.telemetry
+                .getKeyedHistogramById("FX_MIGRATION_ERRORS")
+                .add(migrationDetails.key, Math.log2(resourceTypeNum));
+            }
+            if (
+              foundResourceTypeName ==
+              lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS
+            ) {
+              if (!success) {
+                // did not match any extensions
+                extraArgs.extensions =
+                  lazy.MigrationWizardConstants.EXTENSIONS_IMPORT_RESULT.NONE_MATCHED;
+                progress[foundResourceTypeName] = {
+                  value: lazy.MigrationWizardConstants.PROGRESS_VALUE.WARNING,
+                  message: await lazy.gFluentStrings.formatValue(
+                    "migration-wizard-progress-no-matched-extensions"
+                  ),
+                  linkURL: Services.urlFormatter.formatURLPref(
+                    "extensions.getAddons.link.url"
+                  ),
+                  linkText: await lazy.gFluentStrings.formatValue(
+                    "migration-wizard-progress-extensions-addons-link"
+                  ),
+                };
+              } else if (
+                details?.progressValue ==
+                lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS
+              ) {
+                // did match all extensions
+                extraArgs.extensions =
+                  lazy.MigrationWizardConstants.EXTENSIONS_IMPORT_RESULT.ALL_MATCHED;
+                progress[foundResourceTypeName] = {
+                  value: lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS,
+                  message: await lazy.gFluentStrings.formatValue(
+                    "migration-wizard-progress-success-extensions",
+                    {
+                      quantity: details.totalExtensions.length,
+                    }
+                  ),
+                };
+              } else if (
+                details?.progressValue ==
+                lazy.MigrationWizardConstants.PROGRESS_VALUE.INFO
+              ) {
+                // did match some extensions
+                extraArgs.extensions =
+                  lazy.MigrationWizardConstants.EXTENSIONS_IMPORT_RESULT.PARTIAL_MATCH;
+                progress[foundResourceTypeName] = {
+                  value: lazy.MigrationWizardConstants.PROGRESS_VALUE.INFO,
+                  message: await lazy.gFluentStrings.formatValue(
+                    "migration-wizard-progress-partial-success-extensions",
+                    {
+                      matched: details.importedExtensions.length,
+                      quantity: details.totalExtensions.length,
+                    }
+                  ),
+                  linkURL:
+                    Services.urlFormatter.formatURLPref("app.support.baseURL") +
+                    "import-data-another-browser",
+                  linkText: await lazy.gFluentStrings.formatValue(
+                    "migration-wizard-progress-extensions-support-link"
+                  ),
+                };
+              }
+            } else {
+              progress[foundResourceTypeName] = {
+                value: success
+                  ? lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS
+                  : lazy.MigrationWizardConstants.PROGRESS_VALUE.WARNING,
+                message: await this.#getStringForImportQuantity(
+                  migrationDetails.key,
+                  foundResourceTypeName
+                ),
+              };
+            }
             this.sendAsyncMessage("UpdateProgress", {
-              key: migratorKey,
+              key: migrationDetails.key,
               progress,
             });
           }
@@ -425,6 +504,8 @@ export class MigrationWizardParent extends JSWindowActorParent {
     } catch (e) {
       console.error(e);
     }
+
+    return extraArgs;
   }
 
   /**
@@ -474,6 +555,12 @@ export class MigrationWizardParent extends JSWindowActorParent {
           return null;
         }
 
+        Services.telemetry.keyedScalarAdd(
+          "migration.discovered_migrators",
+          key,
+          sourceProfiles.length
+        );
+
         let result = [];
         for (let profile of sourceProfiles) {
           result.push(
@@ -482,6 +569,12 @@ export class MigrationWizardParent extends JSWindowActorParent {
         }
         return result;
       }
+
+      Services.telemetry.keyedScalarAdd(
+        "migration.discovered_migrators",
+        key,
+        1
+      );
       return this.#serializeMigratorAndProfile(migrator, sourceProfiles);
     } catch (e) {
       console.error(`Could not get migrator with key ${key}`, e);
@@ -570,6 +663,10 @@ export class MigrationWizardParent extends JSWindowActorParent {
    *   The success string for the resource type after migration has completed.
    */
   #getStringForImportQuantity(migratorKey, resourceTypeStr) {
+    if (migratorKey == lazy.FirefoxProfileMigrator.key) {
+      return "";
+    }
+
     switch (resourceTypeStr) {
       case lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.BOOKMARKS: {
         let quantity = MigrationUtils.getImportedCount("bookmarks");

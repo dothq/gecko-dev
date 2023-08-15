@@ -52,6 +52,7 @@ const EXPECTED_SPONSORED_URLBAR_RESULT = {
     sponsoredBlockId: 1,
     sponsoredAdvertiser: "TestAdvertiser",
     sponsoredIabCategory: "22 - Shopping",
+    descriptionL10n: { id: "urlbar-result-action-sponsored" },
     helpUrl: QuickSuggest.HELP_URL,
     helpL10n: {
       id: UrlbarPrefs.get("resultMenu")
@@ -65,6 +66,7 @@ const EXPECTED_SPONSORED_URLBAR_RESULT = {
         : "firefox-suggest-urlbar-block",
     },
     source: "remote-settings",
+    provider: "AdmWikipedia",
   },
 };
 
@@ -99,6 +101,7 @@ const EXPECTED_NONSPONSORED_URLBAR_RESULT = {
         : "firefox-suggest-urlbar-block",
     },
     source: "remote-settings",
+    provider: "AdmWikipedia",
   },
 };
 

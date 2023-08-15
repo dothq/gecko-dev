@@ -4413,6 +4413,23 @@ gfx:
       - 'main'
     release_channel_collection: opt-out
 
+apz:
+  scrollwheel_overshoot:
+    bug_numbers:
+      - 1836870
+    description: >
+      Count of overshoot events, where the user reverses scrollwheel direction soon after the last scrollwheel input.
+    expires: "121"
+    kind: uint
+    notification_emails:
+      - botond@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - 'main'
+      - 'gpu'
+    release_channel_collection: opt-out
+
 # The following section contains the form autofill related scalars.
 formautofill:
   availability:
@@ -7169,21 +7186,6 @@ urlbar.impression:
       - 'firefox'
     record_in_processes:
       - main
-  autofill_preloaded:
-    bug_numbers:
-      - 1774305
-      - 1780188
-    description: >
-      Counts how many times preloaded site type was autofilled per engagement.
-    expires: never
-    kind: uint
-    notification_emails:
-      - fx-search-telemetry@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-    record_in_processes:
-      - main
   autofill_url:
     bug_numbers:
       - 1774305
@@ -7306,23 +7308,6 @@ urlbar.picked:
       record_in_processes:
         - main
 
-    autofill_preloaded:
-      bug_numbers:
-        - 1770483
-      description: >
-        Counts how many times a preloaded site autofill result was picked at a
-        given index.
-      expires: never
-      kind: uint
-      keyed: true
-      notification_emails:
-        - fx-search-telemetry@mozilla.com
-      release_channel_collection: opt-out
-      products:
-        - 'firefox'
-      record_in_processes:
-        - main
-
     autofill_url:
       bug_numbers:
         - 1597791
@@ -7343,6 +7328,22 @@ urlbar.picked:
     bookmark:
       bug_numbers:
         - 1671508
+      description: >
+        Counts how many times this result type was picked at a given index.
+      expires: never
+      kind: uint
+      keyed: true
+      notification_emails:
+        - fx-search-telemetry@mozilla.com
+      release_channel_collection: opt-out
+      products:
+        - 'firefox'
+      record_in_processes:
+        - main
+
+    bookmark_adaptive:
+      bug_numbers:
+        - 1466103
       description: >
         Counts how many times this result type was picked at a given index.
       expires: never
@@ -7423,6 +7424,22 @@ urlbar.picked:
     history:
       bug_numbers:
         - 1671508
+      description: >
+        Counts how many times this result type was picked at a given index.
+      expires: never
+      kind: uint
+      keyed: true
+      notification_emails:
+        - fx-search-telemetry@mozilla.com
+      release_channel_collection: opt-out
+      products:
+        - 'firefox'
+      record_in_processes:
+        - main
+
+    history_adaptive:
+      bug_numbers:
+        - 1466103
       description: >
         Counts how many times this result type was picked at a given index.
       expires: never

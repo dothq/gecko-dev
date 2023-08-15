@@ -6,6 +6,7 @@
 #include "AccEvent.h"
 #include "LocalAccessible-inl.h"
 
+#include <stdint.h>
 #include "EmbeddedObjCollector.h"
 #include "AccAttributes.h"
 #include "AccGroupInfo.h"
@@ -14,15 +15,16 @@
 #include "CachedTableAccessible.h"
 #include "DocAccessible-inl.h"
 #include "mozilla/a11y/AccAttributes.h"
+#include "mozilla/a11y/DocAccessibleChild.h"
+#include "mozilla/a11y/TableAccessible.h"
+#include "mozilla/a11y/TableCellAccessible.h"
 #include "nsAccUtils.h"
 #include "nsAccessibilityService.h"
 #include "ApplicationAccessible.h"
-#include "nsAccessiblePivot.h"
 #include "nsGenericHTMLElement.h"
 #include "NotificationController.h"
 #include "nsEventShell.h"
 #include "nsTextEquivUtils.h"
-#include "DocAccessibleChild.h"
 #include "EventTree.h"
 #include "OuterDocAccessible.h"
 #include "Pivot.h"
@@ -33,14 +35,14 @@
 #include "StyleInfo.h"
 #include "TextLeafRange.h"
 #include "TextRange.h"
-#include "TableAccessible.h"
-#include "TableCellAccessible.h"
 #include "TreeWalker.h"
 #include "HTMLElementAccessibles.h"
 #include "HTMLSelectAccessible.h"
+#include "HTMLTableAccessible.h"
 #include "ImageAccessible.h"
 
 #include "nsComputedDOMStyle.h"
+#include "nsGkAtoms.h"
 #include "nsIDOMXULButtonElement.h"
 #include "nsIDOMXULSelectCntrlEl.h"
 #include "nsIDOMXULSelectCntrlItemEl.h"
@@ -151,14 +153,12 @@ ENameValueFlag LocalAccessible::Name(nsString& aName) const {
 
   // In the end get the name from tooltip.
   if (mContent->IsHTMLElement()) {
-    if (mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::title,
-                                       aName)) {
+    if (mContent->AsElement()->GetAttr(nsGkAtoms::title, aName)) {
       aName.CompressWhitespace();
       return eNameFromTooltip;
     }
   } else if (mContent->IsXULElement()) {
-    if (mContent->AsElement()->GetAttr(kNameSpaceID_None,
-                                       nsGkAtoms::tooltiptext, aName)) {
+    if (mContent->AsElement()->GetAttr(nsGkAtoms::tooltiptext, aName)) {
       aName.CompressWhitespace();
       return eNameFromTooltip;
     }
@@ -196,11 +196,9 @@ void LocalAccessible::Description(nsString& aDescription) const {
     if (aDescription.IsEmpty()) {
       // Keep the Name() method logic.
       if (mContent->IsHTMLElement()) {
-        mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::title,
-                                       aDescription);
+        mContent->AsElement()->GetAttr(nsGkAtoms::title, aDescription);
       } else if (mContent->IsXULElement()) {
-        mContent->AsElement()->GetAttr(kNameSpaceID_None,
-                                       nsGkAtoms::tooltiptext, aDescription);
+        mContent->AsElement()->GetAttr(nsGkAtoms::tooltiptext, aDescription);
       } else if (mContent->IsSVGElement()) {
         for (nsIContent* childElm = mContent->GetFirstChild(); childElm;
              childElm = childElm->GetNextSibling()) {
@@ -411,7 +409,7 @@ uint64_t LocalAccessible::NativeState() const {
 
   // Check if a XUL element has the popup attribute (an attached popup menu).
   if (HasOwnContent() && mContent->IsXULElement() &&
-      mContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::popup)) {
+      mContent->AsElement()->HasAttr(nsGkAtoms::popup)) {
     state |= states::HASPOPUP;
   }
 
@@ -819,7 +817,7 @@ void LocalAccessible::NameFromAssociatedXULLabel(DocAccessible* aDocument,
   XULLabelIterator iter(aDocument, aElm);
   while ((label = iter.Next())) {
     // Check if label's value attribute is used
-    label->Elm()->GetAttr(kNameSpaceID_None, nsGkAtoms::value, aName);
+    label->Elm()->GetAttr(nsGkAtoms::value, aName);
     if (aName.IsEmpty()) {
       // If no value attribute, a non-empty label must contain
       // children that define its text -- possibly using HTML
@@ -851,7 +849,7 @@ void LocalAccessible::XULElmName(DocAccessible* aDocument, nsIContent* aElm,
   nsCOMPtr<nsIDOMXULSelectControlElement> select =
       aElm->AsElement()->AsXULSelectControl();
   if (!select) {
-    aElm->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::label, aName);
+    aElm->AsElement()->GetAttr(nsGkAtoms::label, aName);
   }
 
   // CASE #2 -- label as <label control="id" ... ></label>
@@ -955,10 +953,8 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
           LocalAccessible* oldPosition = vcEvent->OldAccessible();
           ipcDoc->SendVirtualCursorChangeEvent(
               id, oldPosition ? oldPosition->ID() : 0,
-              vcEvent->OldStartOffset(), vcEvent->OldEndOffset(),
-              position ? position->ID() : 0, vcEvent->NewStartOffset(),
-              vcEvent->NewEndOffset(), vcEvent->Reason(),
-              vcEvent->BoundaryType(), vcEvent->IsFromUserInput());
+              position ? position->ID() : 0, vcEvent->Reason(),
+              vcEvent->IsFromUserInput());
           break;
         }
 #if defined(XP_WIN)
@@ -1126,8 +1122,7 @@ already_AddRefed<AccAttributes> LocalAccessible::NativeAttributes() {
 
   // Expose class because it may have useful microformat information.
   nsString _class;
-  if (mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::_class,
-                                     _class)) {
+  if (mContent->AsElement()->GetAttr(nsGkAtoms::_class, _class)) {
     attributes->SetAttribute(nsGkAtoms::_class, std::move(_class));
   }
 
@@ -1342,6 +1337,17 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
     IDRefsIterator iter(mDoc, elm, nsGkAtoms::aria_labelledby);
     if (!iter.NextElem()) {
       mDoc->FireDelayedEvent(nsIAccessibleEvent::EVENT_NAME_CHANGE, this);
+    }
+    return;
+  }
+
+  if (aAttribute == nsGkAtoms::aria_description) {
+    // A valid aria-describedby would take precedence so an aria-description
+    // change won't change the description.
+    IDRefsIterator iter(mDoc, elm, nsGkAtoms::aria_describedby);
+    if (!iter.NextElem()) {
+      mDoc->FireDelayedEvent(nsIAccessibleEvent::EVENT_DESCRIPTION_CHANGE,
+                             this);
     }
     return;
   }
@@ -1606,16 +1612,15 @@ void LocalAccessible::ApplyARIAState(uint64_t* aState) const {
   if ((roleMapEntry->Is(nsGkAtoms::gridcell) ||
        roleMapEntry->Is(nsGkAtoms::columnheader) ||
        roleMapEntry->Is(nsGkAtoms::rowheader)) &&
+      // Don't recurse infinitely for an authoring error like
+      // <table role="gridcell">. Without this check, we'd call TableFor(this)
+      // below, which would return this.
+      !IsTable() &&
       !nsAccUtils::HasDefinedARIAToken(mContent, nsGkAtoms::aria_readonly)) {
-    const TableCellAccessible* cell = AsTableCell();
-    if (cell) {
-      TableAccessible* table = cell->Table();
-      if (table) {
-        LocalAccessible* grid = table->AsAccessible();
-        uint64_t gridState = 0;
-        grid->ApplyARIAState(&gridState);
-        *aState |= gridState & states::READONLY;
-      }
+    if (const LocalAccessible* grid = nsAccUtils::TableFor(this)) {
+      uint64_t gridState = 0;
+      grid->ApplyARIAState(&gridState);
+      *aState |= gridState & states::READONLY;
     }
   }
 }
@@ -1802,12 +1807,9 @@ role LocalAccessible::ARIATransformRole(role aRole) const {
     // A cell inside an ancestor table element that has a grid role needs a
     // gridcell role
     // (https://www.w3.org/TR/html-aam-1.0/#html-element-role-mappings).
-    const TableCellAccessible* cell = AsTableCell();
-    if (cell) {
-      TableAccessible* table = cell->Table();
-      if (table && table->AsAccessible()->IsARIARole(nsGkAtoms::grid)) {
-        return roles::GRID_CELL;
-      }
+    const LocalAccessible* table = nsAccUtils::TableFor(this);
+    if (table && table->IsARIARole(nsGkAtoms::grid)) {
+      return roles::GRID_CELL;
     }
   }
 
@@ -3020,7 +3022,7 @@ uint32_t LocalAccessible::GetActionRule() const {
 
   // Return "click" action on elements that have an attached popup menu.
   if (mContent->IsXULElement()) {
-    if (mContent->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::popup)) {
+    if (mContent->AsElement()->HasAttr(nsGkAtoms::popup)) {
       return eClickAction;
     }
   }
@@ -3167,19 +3169,14 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
 
     if (IsImage()) {
       // Cache the src of images. This is used by some clients to help remediate
-      // inaccessible images. If the image has a name, it's accessible, so this
-      // isn't necessary.
+      // inaccessible images.
       MOZ_ASSERT(mContent, "Image must have mContent");
-      nsAutoString name;
-      Name(name);
-      if (name.IsEmpty()) {
-        nsString src;
-        mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::src, src);
-        if (!src.IsEmpty()) {
-          fields->SetAttribute(nsGkAtoms::src, std::move(src));
-        } else if (aUpdateType == CacheUpdateType::Update) {
-          fields->SetAttribute(nsGkAtoms::src, DeleteEntry());
-        }
+      nsString src;
+      mContent->AsElement()->GetAttr(nsGkAtoms::src, src);
+      if (!src.IsEmpty()) {
+        fields->SetAttribute(nsGkAtoms::src, std::move(src));
+      } else if (aUpdateType == CacheUpdateType::Update) {
+        fields->SetAttribute(nsGkAtoms::src, DeleteEntry());
       }
     }
   }
@@ -3295,6 +3292,7 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
   }
 
   bool boundsChanged = false;
+  nsIFrame* frame = GetFrame();
   if (aCacheDomain & CacheDomain::Bounds) {
     nsRect newBoundsRect = ParentRelativeBounds();
 
@@ -3344,6 +3342,12 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
 
       fields->SetAttribute(nsGkAtoms::relativeBounds, std::move(boundsArray));
     }
+
+    if (frame && frame->ScrollableOverflowRect().IsEmpty()) {
+      fields->SetAttribute(nsGkAtoms::clip_rule, true);
+    } else if (aUpdateType != CacheUpdateType::Initial) {
+      fields->SetAttribute(nsGkAtoms::clip_rule, DeleteEntry());
+    }
   }
 
   if (aCacheDomain & CacheDomain::Text) {
@@ -3377,7 +3381,6 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
     }
   }
 
-  nsIFrame* frame = GetFrame();
   if (aCacheDomain & (CacheDomain::Text | CacheDomain::Bounds) &&
       !HasChildren()) {
     // We cache line start offsets for both text and non-text leaf Accessibles
@@ -3488,10 +3491,18 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
     }
   }
 
-  if (aCacheDomain & CacheDomain::ScrollPosition) {
-    nsPoint scrollPosition;
-    std::tie(scrollPosition, std::ignore) = mDoc->ComputeScrollData(this);
-    if (scrollPosition.x || scrollPosition.y) {
+  if (aCacheDomain & CacheDomain::ScrollPosition && frame) {
+    const auto [scrollPosition, scrollRange] = mDoc->ComputeScrollData(this);
+    if (scrollRange.width || scrollRange.height) {
+      // If the scroll range is 0 by 0, this acc is not scrollable. We
+      // can't simply check scrollPosition != 0, since it's valid for scrollable
+      // frames to have a (0, 0) position. We also can't check IsEmpty or
+      // ZeroArea because frames with only one scrollable dimension will return
+      // a height/width of zero for the non-scrollable dimension, yielding zero
+      // area even if the width/height for the scrollable dimension is nonzero.
+      // We also cache (0, 0) for accs with overflow:auto or overflow:scroll,
+      // even if the content is not currently large enough to be scrollable
+      // right now -- these accs have a non-zero scroll range.
       nsTArray<int32_t> positionArr(2);
       positionArr.AppendElement(scrollPosition.x);
       positionArr.AppendElement(scrollPosition.y);
@@ -3600,16 +3611,27 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
     } else if (aUpdateType != CacheUpdateType::Initial) {
       fields->SetAttribute(nsGkAtoms::position, DeleteEntry());
     }
+
+    if (frame) {
+      nsAutoCString overflow;
+      frame->Style()->GetComputedPropertyValue(eCSSProperty_overflow, overflow);
+      RefPtr<nsAtom> overflowAtom = NS_Atomize(overflow);
+      if (overflowAtom == nsGkAtoms::hidden) {
+        fields->SetAttribute(nsGkAtoms::overflow, nsGkAtoms::hidden);
+      } else if (aUpdateType != CacheUpdateType::Initial) {
+        fields->SetAttribute(nsGkAtoms::overflow, DeleteEntry());
+      }
+    }
   }
 
   if (aCacheDomain & CacheDomain::Table) {
-    if (TableAccessible* table = AsTable()) {
+    if (auto* table = HTMLTableAccessible::GetFrom(this)) {
       if (table->IsProbablyLayoutTable()) {
         fields->SetAttribute(nsGkAtoms::layout_guess, true);
       } else if (aUpdateType == CacheUpdateType::Update) {
         fields->SetAttribute(nsGkAtoms::layout_guess, DeleteEntry());
       }
-    } else if (TableCellAccessible* cell = AsTableCell()) {
+    } else if (auto* cell = HTMLTableCellAccessible::GetFrom(this)) {
       // For HTML table cells, we must use the HTMLTableCellAccessible
       // GetRow/ColExtent methods rather than using the DOM attributes directly.
       // This is because of things like rowspan="0" which depend on knowing
@@ -3628,8 +3650,7 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
       } else if (aUpdateType == CacheUpdateType::Update) {
         fields->SetAttribute(nsGkAtoms::colspan, DeleteEntry());
       }
-      if (mContent->AsElement()->HasAttr(kNameSpaceID_None,
-                                         nsGkAtoms::headers)) {
+      if (mContent->AsElement()->HasAttr(nsGkAtoms::headers)) {
         nsTArray<uint64_t> headers;
         IDRefsIterator iter(mDoc, mContent, nsGkAtoms::headers);
         while (LocalAccessible* cell = iter.Next()) {
@@ -3672,7 +3693,7 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
       // requested. Computing LINKS_TO also requires we cache `name` on
       // anchor elements.
       nsString name;
-      mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::name, name);
+      mContent->AsElement()->GetAttr(nsGkAtoms::name, name);
       if (!name.IsEmpty()) {
         fields->SetAttribute(nsGkAtoms::attributeName, std::move(name));
       } else if (aUpdateType != CacheUpdateType::Initial) {
@@ -3805,6 +3826,24 @@ void LocalAccessible::MaybeQueueCacheUpdateForStyleChanges() {
 
   if (nsIFrame* frame = GetFrame()) {
     const ComputedStyle* newStyle = frame->Style();
+
+    nsAutoCString oldOverflow, newOverflow;
+    mOldComputedStyle->GetComputedPropertyValue(eCSSProperty_overflow,
+                                                oldOverflow);
+    newStyle->GetComputedPropertyValue(eCSSProperty_overflow, newOverflow);
+
+    if (oldOverflow != newOverflow) {
+      if (oldOverflow.Equals("hidden"_ns) || newOverflow.Equals("hidden"_ns)) {
+        mDoc->QueueCacheUpdate(this, CacheDomain::Style);
+      }
+      if (oldOverflow.Equals("auto"_ns) || newOverflow.Equals("auto"_ns) ||
+          oldOverflow.Equals("scroll"_ns) || newOverflow.Equals("scroll"_ns)) {
+        // We cache a (0,0) scroll position for frames that have overflow
+        // styling which means they _could_ become scrollable, even if the
+        // content within them doesn't currently scroll.
+        mDoc->QueueCacheUpdate(this, CacheDomain::ScrollPosition);
+      }
+    }
 
     nsAutoCString oldDisplay, newDisplay;
     mOldComputedStyle->GetComputedPropertyValue(eCSSProperty_display,
@@ -3981,18 +4020,18 @@ void LocalAccessible::StaticAsserts() const {
       "LocalAccessible::mContextFlags was oversized by eLastContextFlag!");
 }
 
-TableAccessibleBase* LocalAccessible::AsTableBase() {
+TableAccessible* LocalAccessible::AsTable() {
   if (IsTable() && !mContent->IsXULElement()) {
     return CachedTableAccessible::GetFrom(this);
   }
-  return AsTable();
+  return nullptr;
 }
 
-TableCellAccessibleBase* LocalAccessible::AsTableCellBase() {
+TableCellAccessible* LocalAccessible::AsTableCell() {
   if (IsTableCell() && !mContent->IsXULElement()) {
     return CachedTableCellAccessible::GetFrom(this);
   }
-  return AsTableCell();
+  return nullptr;
 }
 
 Maybe<int32_t> LocalAccessible::GetIntARIAAttr(nsAtom* aAttrName) const {

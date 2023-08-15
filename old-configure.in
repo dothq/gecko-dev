@@ -40,7 +40,7 @@ dnl ========================================================
 MOZ_USE_PTHREADS=
 _PTHREAD_LDFLAGS=""
 
-LDFLAGS="$LDFLAGS $LINKER_LDFLAGS"
+LDFLAGS="$LDFLAGS $LINKER_LDFLAGS $PACK_REL_RELOC_FLAGS"
 HOST_LDFLAGS="$HOST_LDFLAGS $HOST_LINKER_LDFLAGS"
 
 if test "$COMPILE_ENVIRONMENT"; then
@@ -379,23 +379,27 @@ case "$target" in
     if test -z "$CLANG_CC"; then
         MOZ_OPTIMIZE_FLAGS="-freorder-blocks -fno-reorder-functions -Os"
     else
-        # From https://github.com/android-ndk/ndk/issues/133#issuecomment-308549264
-        # -Oz is smaller than -Os on clang.
-        MOZ_OPTIMIZE_FLAGS="-Oz"
-        # Disable the outliner, which causes performance regressions, and is
-        # enabled on some platforms at -Oz.
-        if test -z "$MOZ_LTO"; then
-            DISABLE_OUTLINER="-mno-outline"
-            _SAVE_CFLAGS=$CFLAGS
-            CFLAGS="$CFLAGS $DISABLE_OUTLINER"
-            AC_TRY_COMPILE(,,[MOZ_OPTIMIZE_FLAGS="$MOZ_OPTIMIZE_FLAGS $DISABLE_OUTLINER"])
-            CFLAGS="$_SAVE_CFLAGS"
+        if test -n "$NIGHTLY_BUILD"; then
+            MOZ_OPTIMIZE_FLAGS="-O2"
         else
-            DISABLE_OUTLINER="-Wl,-plugin-opt=-enable-machine-outliner=never"
-            _SAVE_LDFLAGS=$LDFLAGS
-            LDFLAGS="$LDFLAGS $MOZ_LTO_LDFLAGS $DISABLE_OUTLINER"
-            AC_TRY_LINK(,,[MOZ_OPTIMIZE_LDFLAGS="$MOZ_OPTIMIZE_LDFLAGS $DISABLE_OUTLINER"])
-            LDFLAGS="$_SAVE_LDFLAGS"
+            # From https://github.com/android-ndk/ndk/issues/133#issuecomment-308549264
+            # -Oz is smaller than -Os on clang.
+            MOZ_OPTIMIZE_FLAGS="-Oz"
+            # Disable the outliner, which causes performance regressions, and is
+            # enabled on some platforms at -Oz.
+            if test -z "$MOZ_LTO"; then
+                DISABLE_OUTLINER="-mno-outline"
+                _SAVE_CFLAGS=$CFLAGS
+                CFLAGS="$CFLAGS $DISABLE_OUTLINER"
+                AC_TRY_COMPILE(,,[MOZ_OPTIMIZE_FLAGS="$MOZ_OPTIMIZE_FLAGS $DISABLE_OUTLINER"])
+                CFLAGS="$_SAVE_CFLAGS"
+            else
+                DISABLE_OUTLINER="-Wl,-plugin-opt=-enable-machine-outliner=never"
+                _SAVE_LDFLAGS=$LDFLAGS
+                LDFLAGS="$LDFLAGS $MOZ_LTO_LDFLAGS $DISABLE_OUTLINER"
+                AC_TRY_LINK(,,[MOZ_OPTIMIZE_LDFLAGS="$MOZ_OPTIMIZE_LDFLAGS $DISABLE_OUTLINER"])
+                LDFLAGS="$_SAVE_LDFLAGS" 
+            fi
         fi
     fi
     ;;
@@ -1175,11 +1179,33 @@ else
   MOZ_CHILD_PROCESS_NAME="libplugin-container.so"
 fi
 MOZ_CHILD_PROCESS_BUNDLE="plugin-container.app/Contents/MacOS/"
-MOZ_CHILD_PROCESS_BUNDLENAME="${MOZ_APP_DISPLAYNAME}CP"
+MOZ_CHILD_PROCESS_BUNDLEID=${MOZ_DISTRIBUTION_ID}.plugincontainer
+MOZ_CHILD_PROCESS_BUNDLENAME="plugin-container.app"
+MOZ_CHILD_PROCESS_APPNAME="${MOZ_APP_DISPLAYNAME}CP"
 
 AC_SUBST(MOZ_CHILD_PROCESS_NAME)
 AC_SUBST(MOZ_CHILD_PROCESS_BUNDLE)
+AC_SUBST(MOZ_CHILD_PROCESS_BUNDLEID)
+AC_SUBST(MOZ_CHILD_PROCESS_APPNAME)
 AC_SUBST(MOZ_CHILD_PROCESS_BUNDLENAME)
+
+dnl ==========================================================
+dnl = Mac Media Plugin Helper (GMP Child) Process Name for IPC
+dnl ==========================================================
+MOZ_EME_PROCESS_NAME="media-plugin-helper"
+MOZ_EME_PROCESS_NAME_BRANDED="$MOZ_APP_DISPLAYNAME Media Plugin Helper"
+MOZ_EME_PROCESS_BUNDLENAME="${MOZ_EME_PROCESS_NAME}.app"
+# Generate a lower case string with no spaces to be used as the bundle ID
+# for the EME helper .app of the form org.mozilla.<executable-name>.
+MOZ_EME_PROCESS_BUNDLEID=`echo "$MOZ_APP_DISPLAYNAME" | tr ' ' '-'`
+MOZ_EME_PROCESS_BUNDLEID=`echo "$MOZ_EME_PROCESS_BUNDLEID" | tr 'A-Z' 'a-z'`
+MOZ_EME_PROCESS_BUNDLEID=${MOZ_EME_PROCESS_BUNDLEID}-${MOZ_EME_PROCESS_NAME}
+MOZ_EME_PROCESS_BUNDLEID=${MOZ_DISTRIBUTION_ID}.${MOZ_EME_PROCESS_BUNDLEID}
+
+AC_SUBST(MOZ_EME_PROCESS_NAME)
+AC_SUBST(MOZ_EME_PROCESS_NAME_BRANDED)
+AC_SUBST(MOZ_EME_PROCESS_BUNDLENAME)
+AC_SUBST(MOZ_EME_PROCESS_BUNDLEID)
 
 # The following variables are available to branding and application
 # configuration ($BRANDING/configure.sh and $APPLICATION/confvars.sh):

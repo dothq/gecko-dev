@@ -28,6 +28,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/MemoryReportingProcess.h"
 #include "mozilla/MozPromise.h"
+#include "mozilla/RecursiveMutex.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
@@ -343,6 +344,8 @@ class ContentParent final : public PContentParent,
 
   virtual nsresult DoSendAsyncMessage(const nsAString& aMessage,
                                       StructuredCloneData& aData) override;
+
+  RecursiveMutex& ThreadsafeHandleMutex();
 
   /** Notify that a tab is about to send Destroy to its child. */
   void NotifyTabWillDestroy();
@@ -846,28 +849,24 @@ class ContentParent final : public PContentParent,
     SEND_SHUTDOWN_MESSAGE,
     // Close the channel ourselves and let the subprocess clean up itself.
     CLOSE_CHANNEL,
-    // Close the channel with error and let the subprocess clean up itself.
-    CLOSE_CHANNEL_WITH_ERROR,
   };
 
-  void MaybeAsyncSendShutDownMessage();
+  void AsyncSendShutDownMessage();
 
   /**
    * Exit the subprocess and vamoose.  After this call IsAlive()
    * will return false and this ContentParent will not be returned
    * by the Get*() funtions.  However, the shutdown sequence itself
    * may be asynchronous.
-   *
-   * If aMethod is CLOSE_CHANNEL_WITH_ERROR and this is the first call
-   * to ShutDownProcess, then we'll close our channel using CloseWithError()
-   * rather than vanilla Close().  CloseWithError() indicates to IPC that this
-   * is an abnormal shutdown (e.g. a crash).
    */
   bool ShutDownProcess(ShutDownMethod aMethod);
 
   // Perform any steps necesssary to gracefully shtudown the message
   // manager and null out mMessageManager.
   void ShutDownMessageManager();
+
+  // Start the send shutdown timer on shutdown.
+  void StartSendShutdownTimer();
 
   // Start the force-kill timer on shutdown.
   void StartForceKillTimer();
@@ -880,6 +879,7 @@ class ContentParent final : public PContentParent,
   void EnsurePermissionsByKey(const nsACString& aKey,
                               const nsACString& aOrigin);
 
+  static void SendShutdownTimerCallback(nsITimer* aTimer, void* aClosure);
   static void ForceKillTimerCallback(nsITimer* aTimer, void* aClosure);
 
   bool CanOpenBrowser(const IPCTabContext& aContext);
@@ -895,8 +895,6 @@ class ContentParent final : public PContentParent,
       Endpoint<mozilla::ipc::PBackgroundStarterParent>&& aEndpoint);
 
   mozilla::ipc::IPCResult RecvAddMemoryReport(const MemoryReport& aReport);
-  mozilla::ipc::IPCResult RecvAddPerformanceMetrics(
-      const nsID& aID, nsTArray<PerformanceInfo>&& aMetrics);
 
   bool DeallocPRemoteSpellcheckEngineParent(PRemoteSpellcheckEngineParent*);
 
@@ -1256,6 +1254,7 @@ class ContentParent final : public PContentParent,
       const Maybe<
           ContentBlockingNotifier::StorageAccessPermissionGrantedReason>&
           aReason,
+      const bool& aFrameOnly,
       StorageAccessPermissionGrantedForOriginResolver&& aResolver);
 
   mozilla::ipc::IPCResult RecvCompleteAllowAccessFor(
@@ -1502,6 +1501,12 @@ class ContentParent final : public PContentParent,
   // nsFakePluginTag::NOT_JSPLUGIN.
   int32_t mJSPluginID;
 
+  // After we destroy the last Browser, we also start a timer to ensure
+  // that even content processes that are not responding will get a
+  // second chance and a shutdown message.
+  nsCOMPtr<nsITimer> mSendShutdownTimer;
+  bool mSentShutdownMessage = false;
+
   // After we initiate shutdown, we also start a timer to ensure
   // that even content processes that are 100% blocked (say from
   // SIGSTOP), are still killed eventually.  This task enforces that
@@ -1680,13 +1685,15 @@ class ThreadsafeContentParentHandle final {
     MaybeRegisterRemoteWorkerActor([](uint32_t, bool) { return true; });
   }
 
+  RecursiveMutex& Mutex() { return mMutex; }
+
  private:
   ThreadsafeContentParentHandle(ContentParent* aActor, ContentParentId aChildID,
                                 const nsACString& aRemoteType)
       : mChildID(aChildID), mRemoteType(aRemoteType), mWeakActor(aActor) {}
   ~ThreadsafeContentParentHandle() { MOZ_ASSERT(!mWeakActor); }
 
-  mozilla::Mutex mMutex{"ContentParentIdentity"};
+  mozilla::RecursiveMutex mMutex{"ContentParentIdentity"};
 
   const ContentParentId mChildID;
 

@@ -40,6 +40,7 @@
 #include "nsIURIMutator.h"
 #include "nsIWritablePropertyBag2.h"
 #include "nsReadLine.h"
+#include "nsStringFwd.h"
 #include "nsTHashSet.h"
 #include "nsToolkitCompsCID.h"
 
@@ -169,8 +170,9 @@ bool IsOAForceStripPermission(const nsACString& aType) {
 // Array of permission prefixes which should be isolated only by site.
 // These site-scoped permissions are stored under their site's principal.
 // GetAllForPrincipal also needs to look for these especially.
-static constexpr std::array<nsLiteralCString, 2> kSiteScopedPermissions = {
-    {"3rdPartyStorage^"_ns, "AllowStorageAccessRequest^"_ns}};
+static constexpr std::array<nsLiteralCString, 3> kSiteScopedPermissions = {
+    {"3rdPartyStorage^"_ns, "AllowStorageAccessRequest^"_ns,
+     "3rdPartyFrameStorage^"_ns}};
 
 bool IsSiteScopedPermission(const nsACString& aType) {
   if (aType.IsEmpty()) {
@@ -2608,10 +2610,12 @@ NS_IMETHODIMP PermissionManager::Observe(nsISupports* aSubject,
 
 nsresult PermissionManager::RemoveAllModifiedSince(int64_t aModificationTime) {
   ENSURE_NOT_CHILD_PROCESS;
-
+  // Skip remove calls for default permissions to avoid
+  // creating UNKNOWN_ACTION overrides in AddInternal
   return RemovePermissionEntries(
       [aModificationTime](const PermissionEntry& aPermEntry) {
-        return aModificationTime <= aPermEntry.mModificationTime;
+        return aModificationTime <= aPermEntry.mModificationTime &&
+               aPermEntry.mID != cIDPermissionIsDefault;
       });
 }
 

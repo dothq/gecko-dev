@@ -21,8 +21,7 @@ job-defaults:
             safari:
                 - .*macos.*shippable.*
             custom-car:
-                - linux.*shippable.*
-                - windows10-64.*shippable.*
+                - .*64.*shippable.*
             default: []
     test-manifest-loader: null  # don't load tests in the taskgraph
     tier: 3
@@ -54,6 +53,10 @@ job-defaults:
                             - win64-custom-car
                             - win64-minidump-stackwalk
                             - win64-fix-stacks
+                        macos.*:
+                            - macosx64-custom-car
+                            - macosx64-minidump-stackwalk
+                            - macosx64-fix-stacks
                         default: []
                 default:
                     by-test-platform:
@@ -82,7 +85,7 @@ browsertime-tp6:
                 safari:
                     - .*macos.*shippable.*
                 custom-car:
-                    - (windows10-64|linux).*shippable.*
+                    - .*64.*shippable.*
                 default: []
         max-run-time:
             by-subtest:
@@ -96,12 +99,10 @@ browsertime-tp6:
                         - --browsertime-no-ffwindowrecorder
                         - --conditioned-profile=settled
                         - --extra-profiler-run
-                        - --extra-summary-methods=geomean
                     default:
                         - --chimera
                         - --conditioned-profile=settled
                         - --extra-profiler-run
-                        - --extra-summary-methods=geomean
         run-on-projects:
             by-subtest:
                 netflix:  # Bug 1756212 - Disable temporarily due to perma on mac
@@ -204,12 +205,10 @@ browsertime-tp6-essential:
                         - --conditioned-profile=settled
                         - --collect-perfstats
                         - --extra-profiler-run
-                        - --extra-summary-methods=geomean
                     default:
                         - --chimera
                         - --conditioned-profile=settled
                         - --extra-profiler-run
-                        - --extra-summary-methods=geomean
         raptor:
             apps: [firefox, chrome, chromium, custom-car]
             test: tp6

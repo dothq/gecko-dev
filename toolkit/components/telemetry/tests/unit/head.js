@@ -12,7 +12,7 @@ ChromeUtils.defineESModuleGetters(this, {
   AddonTestUtils: "resource://testing-common/AddonTestUtils.sys.mjs",
   FileUtils: "resource://gre/modules/FileUtils.sys.mjs",
   Log: "resource://gre/modules/Log.sys.mjs",
-  Preferences: "resource://gre/modules/Preferences.sys.mjs",
+  NetUtil: "resource://gre/modules/NetUtil.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
   TelemetryController: "resource://gre/modules/TelemetryController.sys.mjs",
   TelemetryScheduler: "resource://gre/modules/TelemetryScheduler.sys.mjs",
@@ -23,7 +23,6 @@ ChromeUtils.defineESModuleGetters(this, {
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   HttpServer: "resource://testing-common/httpd.js",
-  NetUtil: "resource://gre/modules/NetUtil.jsm",
 });
 
 const gIsWindows = AppConstants.platform == "win";
@@ -292,7 +291,7 @@ async function loadAddonManager(...args) {
 
   // As we're not running in application, we need to setup the features directory
   // used by system add-ons.
-  const distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "app0"], true);
+  const distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "app0"]);
   AddonTestUtils.registerDirectory("XREAppFeat", distroDir);
   await AddonTestUtils.overrideBuiltIns({
     system: ["tel-system-xpi@tests.mozilla.org"],

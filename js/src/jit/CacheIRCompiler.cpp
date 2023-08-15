@@ -5619,7 +5619,7 @@ bool CacheIRCompiler::emitArrayPush(ObjOperandId objId, ValOperandId rhsId) {
   Address elementsInitLength(scratch,
                              ObjectElements::offsetOfInitializedLength());
   Address elementsLength(scratch, ObjectElements::offsetOfLength());
-  Address elementsFlags(scratch, ObjectElements::offsetOfFlags());
+  Address capacity(scratch, ObjectElements::offsetOfCapacity());
 
   // Fail if length != initLength.
   masm.load32(elementsInitLength, scratchLength);
@@ -5629,7 +5629,6 @@ bool CacheIRCompiler::emitArrayPush(ObjOperandId objId, ValOperandId rhsId) {
   // If scratchLength < capacity, we can add a dense element inline. If not we
   // need to allocate more elements.
   Label allocElement, addNewElement;
-  Address capacity(scratch, ObjectElements::offsetOfCapacity());
   masm.spectreBoundsCheck32(scratchLength, capacity, InvalidReg, &allocElement);
   masm.jump(&addNewElement);
 
@@ -7097,7 +7096,7 @@ void CacheIRCompiler::emitPostBarrierShared(Register obj,
   if (maybeIndex != InvalidReg) {
     masm.passABIArg(maybeIndex);
     using Fn = void (*)(JSRuntime* rt, JSObject* obj, int32_t index);
-    masm.callWithABI<Fn, PostWriteElementBarrier<IndexInBounds::Yes>>();
+    masm.callWithABI<Fn, PostWriteElementBarrier>();
   } else {
     using Fn = void (*)(JSRuntime* rt, js::gc::Cell* cell);
     masm.callWithABI<Fn, PostWriteBarrier>();

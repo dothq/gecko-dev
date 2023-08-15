@@ -227,7 +227,6 @@ avoid-blacklist-and-whitelist:
         - testing/mozharness/configs/unittests/win_unittest.py
         - testing/profiles/unittest-required/user.js
         - testing/raptor/browsertime/browsertime_scenario.js
-        - testing/raptor/raptor/control_server.py
         - testing/talos/talos/tests/devtools/addon/content/pages/custom/debugger/static/js/main.js
         - testing/web-platform/tests/tools/manifest/tests/test_manifest.py
         - toolkit/actors/RemotePageChild.sys.mjs
@@ -271,7 +270,7 @@ avoid-blacklist-and-whitelist:
         - toolkit/modules/tests/browser/browser_AsyncPrefs.js
         - toolkit/modules/tests/browser/browser_web_channel.js
         - toolkit/modules/tests/xpcshell/test_PermissionsUtils.js
-        - toolkit/modules/third_party/jsesc/jsesc.js
+        - toolkit/modules/third_party/jsesc/jsesc.mjs
         - toolkit/modules/Troubleshoot.sys.mjs
         - toolkit/mozapps/extensions/internal/XPIInstall.jsm
         - toolkit/mozapps/extensions/test/browser/browser_html_discover_view.js

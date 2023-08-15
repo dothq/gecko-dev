@@ -312,11 +312,6 @@ checkbox {
   margin: 4px 0;
 }
 
-#translationAttributionImage {
-  width: 70px;
-  cursor: pointer;
-}
-
 #activeLanguages > richlistitem {
   padding: 0.3em;
 }
@@ -479,7 +474,7 @@ richlistitem[selected] .actionsMenu:focus-visible {
   margin-inline-start: 0;
 }
 
-a[is="moz-support-link"] {
+a[is="moz-support-link"]:not(.sidebar-footer-link) {
   display: inline-block;
   white-space: initial;
 }
@@ -1457,7 +1452,7 @@ richlistitem .text-link:hover {
 
 #translations-manage-install-list {
   height: 220px;
-  overflow: scroll;
+  overflow: auto;
   background-color: var(--in-content-box-background);
   border: 1px solid var(--in-content-box-border-color);
   border-radius: 4px;
@@ -1472,13 +1467,13 @@ richlistitem .text-link:hover {
 }
 
 .translations-manage-language {
-	align-items: center;
+  align-items: center;
   padding: 0 8px;
 }
 
-.translations-manage-language label {
-	flex: 1;
-	margin: 0 15px;
+.translations-manage-language > label {
+  flex: 1;
+  margin: 0 15px;
 }
 
 #translations-manage-error {

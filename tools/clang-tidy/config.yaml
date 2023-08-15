@@ -134,6 +134,10 @@ clang_checkers:
     reliability: high
   - name: cppcoreguidelines-pro-type-member-init
     reliability: medium
+  - name: misc-include-cleaner
+    # Disable this checker until we move to before/after
+    reliability: high
+    publish: !!bool no
   - name: misc-non-copyable-objects
     reliability: high
   - name: misc-redundant-expression

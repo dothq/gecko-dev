@@ -63,6 +63,8 @@
 
 struct JSContext;
 
+class nsIChannel;
+
 namespace mozilla {
 class WidgetKeyboardEvent;
 namespace dom {
@@ -145,7 +147,7 @@ enum TimerPrecisionType {
 // NOLINTNEXTLINE(bugprone-macro-parentheses)
 #define ITEM_VALUE(name, val) name = val,
 
-enum class RFPTarget : uint32_t {
+enum class RFPTarget : uint64_t {
 #include "RFPTargets.inc"
 };
 
@@ -182,8 +184,7 @@ class nsRFPService final : public nsIObserver {
                                                  RTPCallerType aRTPCallerType);
 
   // Used by the JS Engine, as it doesn't know about the TimerPrecisionType enum
-  static double ReduceTimePrecisionAsUSecsWrapper(
-      double aTime, bool aShouldResistFingerprinting, JSContext* aCx);
+  static double ReduceTimePrecisionAsUSecsWrapper(double aTime, JSContext* aCx);
 
   // Public only for testing purposes
   static double ReduceTimePrecisionImpl(double aTime, TimeScale aTimeScale,
@@ -264,8 +265,7 @@ class nsRFPService final : public nsIObserver {
 
   // The method to generate the key for randomization. It can return nothing if
   // the session key is not available due to the randomization is disabled.
-  static Maybe<nsTArray<uint8_t>> GenerateKey(nsIURI* aTopLevelURI,
-                                              bool aIsPrivate);
+  static Maybe<nsTArray<uint8_t>> GenerateKey(nsIChannel* aChannel);
 
   // The method to add random noises to the image data based on the random key
   // of the given cookieJarSettings.
@@ -282,9 +282,6 @@ class nsRFPService final : public nsIObserver {
 
   ~nsRFPService() = default;
 
-  nsCString mInitialTZValue;
-
-  void UpdateRFPPref();
   void UpdateFPPOverrideList();
   void StartShutdown();
 

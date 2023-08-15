@@ -52,6 +52,7 @@ import java.lang.Class;
 import java.lang.Double;
 import java.lang.Exception;
 import java.lang.Float;
+import java.lang.FunctionalInterface;
 import java.lang.Integer;
 import java.lang.Long;
 import java.lang.Object;
@@ -59,6 +60,7 @@ import java.lang.Runnable;
 import java.lang.RuntimeException;
 import java.lang.SafeVarargs;
 import java.lang.String;
+import java.lang.Thread;
 import java.lang.Throwable;
 import java.lang.Void;
 import java.lang.annotation.Documented;
@@ -80,6 +82,7 @@ import org.mozilla.geckoview.Autofill;
 import org.mozilla.geckoview.CompositorController;
 import org.mozilla.geckoview.ContentBlocking;
 import org.mozilla.geckoview.ContentBlockingController;
+import org.mozilla.geckoview.CrashHandler;
 import org.mozilla.geckoview.GeckoDisplay;
 import org.mozilla.geckoview.GeckoResult;
 import org.mozilla.geckoview.GeckoRuntime;
@@ -614,6 +617,26 @@ package org.mozilla.geckoview {
   @Retention(value=RetentionPolicy.SOURCE) public static interface ContentBlockingController.LogEntry.BlockingData.LogEvent {
   }
 
+  @FunctionalInterface public class CrashHandler implements Thread.UncaughtExceptionHandler {
+    ctor public CrashHandler(@Nullable Class<? extends android.app.Service>);
+    ctor public CrashHandler(@Nullable Context, @Nullable Class<? extends android.app.Service>);
+    ctor public CrashHandler(Thread, Class<? extends android.app.Service>);
+    ctor public CrashHandler(@Nullable Thread, Context, Class<? extends android.app.Service>);
+    method @AnyThread @NonNull public static CrashHandler createDefaultCrashHandler(@NonNull Context);
+    method @AnyThread @Nullable public Context getAppContext();
+    method @AnyThread @Nullable public String getAppPackageName();
+    method @AnyThread @NonNull public byte[] getCrashDump(@Nullable Thread, @Nullable Throwable);
+    method @AnyThread @NonNull public Bundle getCrashExtras(@NonNull Thread, @NonNull Throwable);
+    method @AnyThread @NonNull public static String getExceptionStackTrace(@NonNull Throwable);
+    method @AnyThread @NonNull public static Throwable getRootException(@NonNull Throwable);
+    method @AnyThread @NonNull public String getServerUrl(@NonNull Bundle);
+    method @AnyThread public boolean launchCrashReporter(@NonNull String, @NonNull String);
+    method @AnyThread public static void logException(@NonNull Thread, @NonNull Throwable);
+    method @AnyThread public boolean reportException(@NonNull Thread, @NonNull Throwable);
+    method @AnyThread public static void terminateProcess();
+    method @AnyThread public void unregister();
+  }
+
   public class CrashReporter {
     ctor public CrashReporter();
     method @AnyThread @NonNull public static GeckoResult<String> sendCrashReport(@NonNull Context, @NonNull Intent, @NonNull String);
@@ -883,6 +906,7 @@ package org.mozilla.geckoview {
     method @NonNull @UiThread public GeckoDisplay acquireDisplay();
     method @UiThread public void close();
     method @AnyThread @NonNull public GeckoResult<Boolean> containsFormData();
+    method @AnyThread @NonNull public GeckoResult<Boolean> didPrintPageContent();
     method @AnyThread public void exitFullScreen();
     method @NonNull @UiThread public SessionAccessibility getAccessibility();
     method @Nullable @UiThread public Autofill.Delegate getAutofillDelegate();
@@ -1041,6 +1065,7 @@ package org.mozilla.geckoview {
     ctor protected GeckoPrintException();
     field public static final int ERROR_NO_ACTIVITY_CONTEXT = -5;
     field public static final int ERROR_NO_ACTIVITY_CONTEXT_DELEGATE = -4;
+    field public static final int ERROR_NO_PRINT_DELEGATE = -6;
     field public static final int ERROR_PRINT_SETTINGS_SERVICE_NOT_AVAILABLE = -1;
     field public static final int ERROR_UNABLE_TO_CREATE_PRINT_SETTINGS = -2;
     field public static final int ERROR_UNABLE_TO_RETRIEVE_CANONICAL_BROWSING_CONTEXT = -3;
@@ -1276,7 +1301,10 @@ package org.mozilla.geckoview {
     method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onLoginSelect(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.AutocompleteRequest<Autocomplete.LoginSelectOption>);
     method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onPopupPrompt(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.PopupPrompt);
     method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onRepostConfirmPrompt(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.RepostConfirmPrompt);
+    method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onSelectIdentityCredentialAccount(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt);
+    method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onSelectIdentityCredentialProvider(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.IdentityCredential.ProviderSelectorPrompt);
     method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onSharePrompt(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.SharePrompt);
+    method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onShowPrivacyPolicyIdentityCredential(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.IdentityCredential.PrivacyPolicyPrompt);
     method @Nullable @UiThread default public GeckoResult<GeckoSession.PromptDelegate.PromptResponse> onTextPrompt(@NonNull GeckoSession, @NonNull GeckoSession.PromptDelegate.TextPrompt);
   }
 
@@ -1450,6 +1478,54 @@ package org.mozilla.geckoview {
     ctor protected Type();
     field public static final int MULTIPLE = 2;
     field public static final int SINGLE = 1;
+  }
+
+  public static final class GeckoSession.PromptDelegate.IdentityCredential {
+    ctor public IdentityCredential();
+  }
+
+  public static class GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt extends GeckoSession.PromptDelegate.BasePrompt {
+    ctor public AccountSelectorPrompt(@NonNull String, @NonNull GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt.Account[], GeckoSession.PromptDelegate.BasePrompt.Observer);
+    method @NonNull @UiThread public GeckoSession.PromptDelegate.PromptResponse confirm(@NonNull int);
+    field @NonNull public final GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt.Account[] accounts;
+  }
+
+  public static class GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt.Account {
+    ctor public Account(int, @NonNull String, @NonNull String, @Nullable String);
+    field @NonNull public final String email;
+    field @Nullable public final String icon;
+    field public final int id;
+    field @NonNull public final String name;
+  }
+
+  public static class GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt.ProviderAccounts {
+    ctor public ProviderAccounts(int, @Nullable String, @NonNull GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt.Account[]);
+    field @NonNull public final GeckoSession.PromptDelegate.IdentityCredential.AccountSelectorPrompt.Account[] accounts;
+    field public final int id;
+    field @Nullable public final String provider;
+  }
+
+  public static class GeckoSession.PromptDelegate.IdentityCredential.PrivacyPolicyPrompt extends GeckoSession.PromptDelegate.BasePrompt {
+    ctor protected PrivacyPolicyPrompt(@NonNull String, @NonNull String, @NonNull String, @NonNull String, @NonNull String, @Nullable String, @NonNull GeckoSession.PromptDelegate.BasePrompt.Observer);
+    method @NonNull @UiThread public GeckoSession.PromptDelegate.PromptResponse confirm(boolean);
+    field @NonNull public final String host;
+    field @Nullable public final String icon;
+    field @NonNull public final String privacyPolicyUrl;
+    field @NonNull public final String providerDomain;
+    field @NonNull public final String termsOfServiceUrl;
+  }
+
+  public static class GeckoSession.PromptDelegate.IdentityCredential.ProviderSelectorPrompt extends GeckoSession.PromptDelegate.BasePrompt {
+    ctor protected ProviderSelectorPrompt(@NonNull String, @NonNull GeckoSession.PromptDelegate.IdentityCredential.ProviderSelectorPrompt.Provider[], @NonNull GeckoSession.PromptDelegate.BasePrompt.Observer);
+    method @NonNull @UiThread public GeckoSession.PromptDelegate.PromptResponse confirm(int);
+    field @NonNull public final GeckoSession.PromptDelegate.IdentityCredential.ProviderSelectorPrompt.Provider[] providers;
+  }
+
+  public static class GeckoSession.PromptDelegate.IdentityCredential.ProviderSelectorPrompt.Provider {
+    ctor public Provider(int, @NonNull String, @Nullable String);
+    field @Nullable public final String icon;
+    field public final int id;
+    field @NonNull public final String name;
   }
 
   public static class GeckoSession.PromptDelegate.PopupPrompt extends GeckoSession.PromptDelegate.BasePrompt {

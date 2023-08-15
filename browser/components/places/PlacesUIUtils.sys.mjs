@@ -11,18 +11,15 @@ import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   CustomizableUI: "resource:///modules/CustomizableUI.sys.mjs",
   MigrationUtils: "resource:///modules/MigrationUtils.sys.mjs",
+  OpenInTabsUtils: "resource:///modules/OpenInTabsUtils.sys.mjs",
   PlacesTransactions: "resource://gre/modules/PlacesTransactions.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
   Weave: "resource://services-sync/main.sys.mjs",
-});
-
-XPCOMUtils.defineLazyModuleGetters(lazy, {
-  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
-  OpenInTabsUtils: "resource:///modules/OpenInTabsUtils.jsm",
 });
 
 const gInContentProcess =
@@ -63,11 +60,7 @@ let InternalFaviconLoader = {
       request.cancel();
     } catch (ex) {
       console.error(
-        "When cancelling a request for " +
-          uri.spec +
-          " because " +
-          reason +
-          ", it was already canceled!"
+        `When cancelling a request for ${uri.spec} because ${reason}, it was already canceled!`
       );
     }
   },
@@ -1071,14 +1064,13 @@ export var PlacesUIUtils = {
   openNodeWithEvent: function PUIU_openNodeWithEvent(aNode, aEvent) {
     let window = aEvent.target.ownerGlobal;
 
-    let browserWindow = getBrowserWindow(window);
-
     let where = window.whereToOpenLink(aEvent, false, true);
     if (this.loadBookmarksInTabs && lazy.PlacesUtils.nodeIsBookmark(aNode)) {
       if (where == "current" && !aNode.uri.startsWith("javascript:")) {
         where = "tab";
       }
-      if (where == "tab" && browserWindow.gBrowser.selectedTab.isEmpty) {
+      let browserWindow = getBrowserWindow(window);
+      if (where == "tab" && browserWindow?.gBrowser.selectedTab.isEmpty) {
         where = "current";
       }
     }
@@ -1190,7 +1182,7 @@ export var PlacesUIUtils = {
   shouldShowTabsFromOtherComputersMenuitem() {
     let weaveOK =
       lazy.Weave.Status.checkSetup() != lazy.Weave.CLIENT_NOT_CONFIGURED &&
-      lazy.Weave.Svc.Prefs.get("firstSync", "") != "notReady";
+      lazy.Weave.Svc.PrefBranch.getCharPref("firstSync", "") != "notReady";
     return weaveOK;
   },
 
@@ -1243,17 +1235,11 @@ export var PlacesUIUtils = {
     }
 
     let parent = {
-      itemId: await lazy.PlacesUtils.promiseItemId(aFetchInfo.parentGuid),
       bookmarkGuid: aFetchInfo.parentGuid,
       type: Ci.nsINavHistoryResultNode.RESULT_TYPE_FOLDER,
     };
 
-    let itemId =
-      aFetchInfo.guid === lazy.PlacesUtils.bookmarks.unsavedGuid
-        ? undefined
-        : await lazy.PlacesUtils.promiseItemId(aFetchInfo.guid);
     return Object.freeze({
-      itemId,
       bookmarkGuid: aFetchInfo.guid,
       title: aFetchInfo.title,
       uri: aFetchInfo.url !== undefined ? aFetchInfo.url.href : "",

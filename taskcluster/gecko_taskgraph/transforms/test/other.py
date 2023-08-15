@@ -287,7 +287,7 @@ def setup_browsertime(config, tasks):
         # files, the transition is straight-forward.
         extra_options = task.get("mozharness", {}).get("extra-options", [])
 
-        if task["suite"] != "raptor" or "--webext" in extra_options:
+        if task["suite"] != "raptor":
             yield task
             continue
 
@@ -618,10 +618,6 @@ def handle_tier(config, tasks):
                 "linux1804-64-shippable-qr/opt",
                 "linux1804-64-asan-qr/opt",
                 "linux1804-64-tsan-qr/opt",
-                "windows7-32-qr/debug",
-                "windows7-32-qr/opt",
-                "windows7-32-devedition-qr/opt",
-                "windows7-32-shippable-qr/opt",
                 "windows10-32-qr/debug",
                 "windows10-32-qr/opt",
                 "windows10-32-shippable-qr/opt",
@@ -1068,14 +1064,5 @@ def enable_parallel_marking_in_tsan_tests(config, tasks):
                 extra_options.append(
                     "--setpref=javascript.options.mem.gc_parallel_marking=true"
                 )
-
-        yield task
-
-
-@transforms.add
-def apply_windows7_optimization(config, tasks):
-    for task in tasks:
-        if task["test-platform"].startswith("windows7"):
-            task["optimization"] = {"skip-unless-backstop": None}
 
         yield task

@@ -55,6 +55,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   LightweightThemeManager:
     "resource://gre/modules/LightweightThemeManager.sys.mjs",
   Log: "resource://gre/modules/Log.sys.mjs",
+  NetUtil: "resource://gre/modules/NetUtil.sys.mjs",
   SITEPERMS_ADDON_TYPE:
     "resource://gre/modules/addons/siteperms-addon-utils.sys.mjs",
   Schemas: "resource://gre/modules/Schemas.sys.mjs",
@@ -62,10 +63,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   extensionStorageSync: "resource://gre/modules/ExtensionStorageSync.sys.mjs",
   permissionToL10nId:
     "resource://gre/modules/ExtensionPermissionMessages.sys.mjs",
-});
-
-XPCOMUtils.defineLazyModuleGetters(lazy, {
-  NetUtil: "resource://gre/modules/NetUtil.jsm",
+  QuarantinedDomains: "resource://gre/modules/ExtensionPermissions.sys.mjs",
 });
 
 XPCOMUtils.defineLazyGetter(lazy, "resourceProtocol", () =>
@@ -514,6 +512,8 @@ var ExtensionAddonObserver = {
     // since only extensions have uuid's.
     lazy.ExtensionPermissions.removeAll(addon.id);
 
+    lazy.QuarantinedDomains.clearUserPref(addon.id);
+
     let uuid = UUIDMap.get(addon.id, false);
     if (!uuid) {
       return;
@@ -632,6 +632,22 @@ var ExtensionAddonObserver = {
     if (!Services.prefs.getBoolPref(LEAVE_UUID_PREF, false)) {
       // Clear the entry in the UUID map
       UUIDMap.remove(addon.id);
+    }
+  },
+
+  onPropertyChanged(addon, properties) {
+    let extension = GlobalManager.extensionMap.get(addon.id);
+    if (extension && properties.includes("quarantineIgnoredByUser")) {
+      extension.ignoreQuarantine = addon.quarantineIgnoredByUser;
+      extension.policy.ignoreQuarantine = addon.quarantineIgnoredByUser;
+
+      extension.setSharedData("", extension.serialize());
+      Services.ppmm.sharedData.flush();
+
+      extension.broadcast("Extension:UpdateIgnoreQuarantine", {
+        id: extension.id,
+        ignoreQuarantine: addon.quarantineIgnoredByUser,
+      });
     }
   },
 };
@@ -1479,6 +1495,16 @@ export class ExtensionData {
     ) {
       const { strict_min_version, strict_max_version } =
         manifest.browser_specific_settings.gecko_android;
+
+      // When the manifest doesn't define `browser_specific_settings.gecko`, it
+      // is still possible to reach this block but `manifest.applications`
+      // won't be defined yet.
+      if (!manifest?.applications) {
+        manifest.applications = {
+          // All properties should be optional in `gecko` so we omit them here.
+          gecko: {},
+        };
+      }
 
       if (strict_min_version?.length) {
         manifest.applications.gecko.strict_min_version = strict_min_version;
@@ -2728,7 +2754,9 @@ export class Extension extends ExtensionData {
     // practice (but we still set the ignoreQuarantine flag here accordingly
     // to the expected behavior for consistency).
     this.ignoreQuarantine =
-      addonData.isPrivileged || !!addonData.recommendationState?.states?.length;
+      addonData.isPrivileged ||
+      !!addonData.recommendationState?.states?.length ||
+      lazy.QuarantinedDomains.isUserAllowedAddonId(this.id);
 
     this.views = new Set();
     this._backgroundPageFrameLoader = null;

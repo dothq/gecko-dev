@@ -3,8 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use crate::attr::{AttrSelectorOperator, AttrSelectorWithOptionalNamespace};
-use crate::attr::{NamespaceConstraint, ParsedAttrSelectorOperation};
-use crate::attr::{ParsedCaseSensitivity, SELECTOR_WHITESPACE};
+use crate::attr::{NamespaceConstraint, ParsedAttrSelectorOperation, ParsedCaseSensitivity};
 use crate::bloom::BLOOM_HASH_MASK;
 use crate::builder::{
     relative_selector_list_specificity_and_flags, selector_list_specificity_and_flags,
@@ -19,7 +18,7 @@ use cssparser::{BasicParseError, BasicParseErrorKind, ParseError, ParseErrorKind
 use cssparser::{CowRcStr, Delimiter, SourceLocation};
 use cssparser::{Parser as CssParser, ToCss, Token};
 use precomputed_hash::PrecomputedHash;
-use servo_arc::{HeaderWithLength, ThinArc, UniqueArc};
+use servo_arc::{ThinArc, UniqueArc};
 use smallvec::SmallVec;
 use std::borrow::{Borrow, Cow};
 use std::fmt::{self, Debug};
@@ -372,9 +371,12 @@ enum ForgivingParsing {
 
 /// Flag indicating if we're parsing relative selectors.
 #[derive(Copy, Clone, PartialEq)]
-enum ParseRelative {
+pub enum ParseRelative {
     /// Expect selectors to start with a combinator, assuming descendant combinator if not present.
-    Yes,
+    ForHas,
+    /// Allow selectors to start with a combinator, prepending a parent selector if so. Do nothing
+    /// otherwise
+    ForNesting,
     /// Treat as parse error if any selector begins with a combinator.
     No,
 }
@@ -392,6 +394,7 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
     pub fn parse<'i, 't, P>(
         parser: &P,
         input: &mut CssParser<'i, 't>,
+        parse_relative: ParseRelative,
     ) -> Result<Self, ParseError<'i, P::Error>>
     where
         P: Parser<'i, Impl = Impl>,
@@ -401,7 +404,7 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
             input,
             SelectorParsingState::empty(),
             ForgivingParsing::No,
-            ParseRelative::No,
+            parse_relative,
         )
     }
 
@@ -445,6 +448,11 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
                 }
             }
         }
+    }
+
+    /// Replaces the parent selector in all the items of the selector list.
+    pub fn replace_parent_selector(&self, parent: &[Selector<Impl>]) -> Self {
+        Self(self.0.iter().map(|selector| selector.replace_parent_selector(parent)).collect())
     }
 
     /// Creates a SelectorList from a Vec of selectors. Used in tests.
@@ -612,6 +620,7 @@ impl AncestorHashes {
     }
 }
 
+#[inline]
 pub fn namespace_empty_string<Impl: SelectorImpl>() -> Impl::NamespaceUrl {
     // Rust type’s default, not default namespace
     Impl::NamespaceUrl::default()
@@ -640,7 +649,7 @@ pub struct Selector<Impl: SelectorImpl>(
 impl<Impl: SelectorImpl> Selector<Impl> {
     /// See Arc::mark_as_intentionally_leaked
     pub fn mark_as_intentionally_leaked(&self) {
-        self.0.with_arc(|a| a.mark_as_intentionally_leaked())
+        self.0.mark_as_intentionally_leaked()
     }
 
     fn ampersand() -> Self {
@@ -655,32 +664,32 @@ impl<Impl: SelectorImpl> Selector<Impl> {
 
     #[inline]
     pub fn specificity(&self) -> u32 {
-        self.0.header.header.specificity()
+        self.0.header.specificity()
     }
 
     #[inline]
     fn flags(&self) -> SelectorFlags {
-        self.0.header.header.flags
+        self.0.header.flags
     }
 
     #[inline]
     pub fn has_pseudo_element(&self) -> bool {
-        self.0.header.header.has_pseudo_element()
+        self.0.header.has_pseudo_element()
     }
 
     #[inline]
     pub fn has_parent_selector(&self) -> bool {
-        self.0.header.header.has_parent_selector()
+        self.0.header.has_parent_selector()
     }
 
     #[inline]
     pub fn is_slotted(&self) -> bool {
-        self.0.header.header.is_slotted()
+        self.0.header.is_slotted()
     }
 
     #[inline]
     pub fn is_part(&self) -> bool {
-        self.0.header.header.is_part()
+        self.0.header.is_part()
     }
 
     #[inline]
@@ -770,7 +779,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         }
 
         SelectorIter {
-            iter: self.0.slice[..self.len() - 2].iter(),
+            iter: self.0.slice()[..self.len() - 2].iter(),
             next_combinator: None,
         }
     }
@@ -802,7 +811,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     /// skipping the rightmost |offset| Components.
     #[inline]
     pub fn iter_from(&self, offset: usize) -> SelectorIter<Impl> {
-        let iter = self.0.slice[offset..].iter();
+        let iter = self.0.slice()[offset..].iter();
         SelectorIter {
             iter,
             next_combinator: None,
@@ -813,7 +822,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     /// or panics if the component is not a combinator.
     #[inline]
     pub fn combinator_at_match_order(&self, index: usize) -> Combinator {
-        match self.0.slice[index] {
+        match self.0.slice()[index] {
             Component::Combinator(c) => c,
             ref other => panic!(
                 "Not a combinator: {:?}, {:?}, index: {}",
@@ -826,14 +835,14 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     /// combinators, in matching order (from right to left).
     #[inline]
     pub fn iter_raw_match_order(&self) -> slice::Iter<Component<Impl>> {
-        self.0.slice.iter()
+        self.0.slice().iter()
     }
 
     /// Returns the combinator at index `index` (zero-indexed from the left),
     /// or panics if the component is not a combinator.
     #[inline]
     pub fn combinator_at_parse_order(&self, index: usize) -> Combinator {
-        match self.0.slice[self.len() - index - 1] {
+        match self.0.slice()[self.len() - index - 1] {
             Component::Combinator(c) => c,
             ref other => panic!(
                 "Not a combinator: {:?}, {:?}, index: {}",
@@ -847,7 +856,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     /// `offset`.
     #[inline]
     pub fn iter_raw_parse_order_from(&self, offset: usize) -> Rev<slice::Iter<Component<Impl>>> {
-        self.0.slice[..self.len() - offset].iter().rev()
+        self.0.slice()[..self.len() - offset].iter().rev()
     }
 
     /// Creates a Selector from a vec of Components, specified in parse order. Used in tests.
@@ -972,8 +981,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                 .chain(std::iter::once(Component::Is(
                     parent.to_vec().into_boxed_slice(),
                 )));
-            let header = HeaderWithLength::new(specificity_and_flags, len);
-            UniqueArc::from_header_and_iter_with_size(header, iter, len)
+            UniqueArc::from_header_and_iter_with_size(specificity_and_flags, iter, len)
         } else {
             let iter = self.iter_raw_match_order().map(|component| {
                 use self::Component::*;
@@ -1065,17 +1073,16 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     )),
                 }
             });
-            let header = HeaderWithLength::new(specificity_and_flags, iter.len());
-            UniqueArc::from_header_and_iter(header, iter)
+            UniqueArc::from_header_and_iter(specificity_and_flags, iter)
         };
         items.header_mut().specificity = specificity.into();
-        Selector(items.shareable_thin())
+        Selector(items.shareable())
     }
 
     /// Returns count of simple selectors and combinators in the Selector.
     #[inline]
     pub fn len(&self) -> usize {
-        self.0.slice.len()
+        self.0.len()
     }
 
     /// Returns the address on the heap of the ThinArc for memory reporting.
@@ -1474,13 +1481,13 @@ impl<Impl: SelectorImpl> NthOfSelectorData<Impl> {
     /// Returns the An+B part of the selector
     #[inline]
     pub fn nth_data(&self) -> &NthSelectorData {
-        &self.0.header.header
+        &self.0.header
     }
 
     /// Returns the selector list part of the selector
     #[inline]
     pub fn selectors(&self) -> &[Selector<Impl>] {
-        &self.0.slice
+        self.0.slice()
     }
 }
 
@@ -1643,7 +1650,6 @@ pub enum Component<Impl: SelectorImpl> {
         #[shmem(field_bound)]
         value: Impl::AttrValue,
         case_sensitivity: ParsedCaseSensitivity,
-        never_matches: bool,
     },
     // Use a Box in the less common cases with more data to keep size_of::<Component>() small.
     AttributeOther(Box<AttrSelectorWithOptionalNamespace<Impl>>),
@@ -1821,11 +1827,7 @@ impl<Impl: SelectorImpl> Component<Impl> {
                     return false;
                 }
             },
-            AttributeInNoNamespace {
-                ref local_name,
-                never_matches,
-                ..
-            } if !never_matches => {
+            AttributeInNoNamespace { ref local_name, .. } => {
                 if !visitor.visit_attribute_selector(
                     &NamespaceConstraint::Specific(&namespace_empty_string::<Impl>()),
                     local_name,
@@ -1834,7 +1836,7 @@ impl<Impl: SelectorImpl> Component<Impl> {
                     return false;
                 }
             },
-            AttributeOther(ref attr_selector) if !attr_selector.never_matches => {
+            AttributeOther(ref attr_selector) => {
                 let empty_string;
                 let namespace = match attr_selector.namespace() {
                     Some(ns) => ns,
@@ -2275,11 +2277,11 @@ impl<Impl: SelectorImpl> ToCss for AttrSelectorWithOptionalNamespace<Impl> {
             ParsedAttrSelectorOperation::WithValue {
                 operator,
                 case_sensitivity,
-                ref expected_value,
+                ref value,
             } => {
                 operator.to_css(dest)?;
                 dest.write_char('"')?;
-                expected_value.to_css(dest)?;
+                value.to_css(dest)?;
                 dest.write_char('"')?;
                 match case_sensitivity {
                     ParsedCaseSensitivity::CaseSensitive |
@@ -2317,11 +2319,27 @@ where
     Impl: SelectorImpl,
 {
     let mut builder = SelectorBuilder::default();
-    if parse_relative == ParseRelative::Yes {
-        builder.push_simple_selector(Component::RelativeSelectorAnchor);
-        // Do we see a combinator? If so, push that. Otherwise, push a descendant combinator.
-        builder
-            .push_combinator(parse_combinator::<P, Impl>(input).unwrap_or(Combinator::Descendant));
+
+    // Helps rewind less, but also simplifies dealing with relative combinators below.
+    input.skip_whitespace();
+
+    if parse_relative != ParseRelative::No {
+        let combinator = try_parse_combinator::<P, Impl>(input);
+        match parse_relative {
+            ParseRelative::ForHas => {
+                builder.push_simple_selector(Component::RelativeSelectorAnchor);
+                // Do we see a combinator? If so, push that. Otherwise, push a descendant
+                // combinator.
+                builder.push_combinator(combinator.unwrap_or(Combinator::Descendant));
+            },
+            ParseRelative::ForNesting => {
+                if let Ok(combinator) = combinator {
+                    builder.push_simple_selector(Component::ParentSelector);
+                    builder.push_combinator(combinator);
+                }
+            },
+            ParseRelative::No => unreachable!(),
+        }
     }
     'outer_loop: loop {
         // Parse a sequence of simple selectors.
@@ -2343,7 +2361,7 @@ where
             break;
         }
 
-        let combinator = if let Ok(c) = parse_combinator::<P, Impl>(input) {
+        let combinator = if let Ok(c) = try_parse_combinator::<P, Impl>(input) {
             c
         } else {
             break 'outer_loop;
@@ -2358,7 +2376,7 @@ where
     return Ok(Selector(builder.build()));
 }
 
-fn parse_combinator<'i, 't, P, Impl>(input: &mut CssParser<'i, 't>) -> Result<Combinator, ()> {
+fn try_parse_combinator<'i, 't, P, Impl>(input: &mut CssParser<'i, 't>) -> Result<Combinator, ()> {
     let mut any_whitespace = false;
     loop {
         let before_this_token = input.state();
@@ -2647,7 +2665,6 @@ where
                         local_name,
                         local_name_lower,
                         operation: ParsedAttrSelectorOperation::Exists,
-                        never_matches: false,
                     },
                 )));
             } else {
@@ -2685,18 +2702,8 @@ where
         }) => return Err(location.new_custom_error(SelectorParseErrorKind::BadValueInAttr(t))),
         Err(e) => return Err(e.into()),
     };
-    let never_matches = match operator {
-        AttrSelectorOperator::Equal | AttrSelectorOperator::DashMatch => false,
-
-        AttrSelectorOperator::Includes => value.is_empty() || value.contains(SELECTOR_WHITESPACE),
-
-        AttrSelectorOperator::Prefix |
-        AttrSelectorOperator::Substring |
-        AttrSelectorOperator::Suffix => value.is_empty(),
-    };
 
     let attribute_flags = parse_attribute_flags(input)?;
-
     let value = value.as_ref().into();
     let local_name_lower;
     let local_name_is_ascii_lowercase;
@@ -2715,11 +2722,10 @@ where
                 namespace,
                 local_name,
                 local_name_lower,
-                never_matches,
                 operation: ParsedAttrSelectorOperation::WithValue {
                     operator,
                     case_sensitivity,
-                    expected_value: value,
+                    value,
                 },
             },
         )))
@@ -2729,7 +2735,6 @@ where
             operator,
             value,
             case_sensitivity,
-            never_matches,
         })
     }
 }
@@ -2968,7 +2973,7 @@ where
             SelectorParsingState::DISALLOW_PSEUDOS |
             SelectorParsingState::DISALLOW_RELATIVE_SELECTOR,
         ForgivingParsing::No,
-        ParseRelative::Yes,
+        ParseRelative::ForHas,
     )?;
     Ok(Component::Has(RelativeSelector::from_selector_list(inner)))
 }
@@ -3511,7 +3516,14 @@ pub mod tests {
     fn parse<'i>(
         input: &'i str,
     ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
-        parse_ns(input, &DummyParser::default())
+        parse_relative(input, ParseRelative::No)
+    }
+
+    fn parse_relative<'i>(
+        input: &'i str,
+        parse_relative: ParseRelative,
+    ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
+        parse_ns_relative(input, &DummyParser::default(), parse_relative)
     }
 
     fn parse_expected<'i, 'a>(
@@ -3521,11 +3533,27 @@ pub mod tests {
         parse_ns_expected(input, &DummyParser::default(), expected)
     }
 
+    fn parse_relative_expected<'i, 'a>(
+        input: &'i str,
+        parse_relative: ParseRelative,
+        expected: Option<&'a str>,
+    ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
+        parse_ns_relative_expected(input, &DummyParser::default(), parse_relative, expected)
+    }
+
     fn parse_ns<'i>(
         input: &'i str,
         parser: &DummyParser,
     ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
-        parse_ns_expected(input, parser, None)
+        parse_ns_relative(input, parser, ParseRelative::No)
+    }
+
+    fn parse_ns_relative<'i>(
+        input: &'i str,
+        parser: &DummyParser,
+        parse_relative: ParseRelative,
+    ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
+        parse_ns_relative_expected(input, parser, parse_relative, None)
     }
 
     fn parse_ns_expected<'i, 'a>(
@@ -3533,8 +3561,17 @@ pub mod tests {
         parser: &DummyParser,
         expected: Option<&'a str>,
     ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
+        parse_ns_relative_expected(input, parser, ParseRelative::No, expected)
+    }
+
+    fn parse_ns_relative_expected<'i, 'a>(
+        input: &'i str,
+        parser: &DummyParser,
+        parse_relative: ParseRelative,
+        expected: Option<&'a str>,
+    ) -> Result<SelectorList<DummySelectorImpl>, SelectorParseError<'i>> {
         let mut parser_input = ParserInput::new(input);
-        let result = SelectorList::parse(parser, &mut CssParser::new(&mut parser_input));
+        let result = SelectorList::parse(parser, &mut CssParser::new(&mut parser_input), parse_relative);
         if let Ok(ref selectors) = result {
             // We can't assume that the serialized parsed selector will equal
             // the input; for example, if there is no default namespace, '*|foo'
@@ -3557,7 +3594,7 @@ pub mod tests {
     #[test]
     fn test_empty() {
         let mut input = ParserInput::new(":empty");
-        let list = SelectorList::parse(&DummyParser::default(), &mut CssParser::new(&mut input));
+        let list = SelectorList::parse(&DummyParser::default(), &mut CssParser::new(&mut input), ParseRelative::No);
         assert!(list.is_ok());
     }
 
@@ -3890,7 +3927,6 @@ pub mod tests {
                     local_name: DummyAtom::from("attr"),
                     operator: AttrSelectorOperator::DashMatch,
                     value: DummyAttrValue::from("foo"),
-                    never_matches: false,
                     case_sensitivity: ParsedCaseSensitivity::CaseSensitive,
                 }],
                 specificity(0, 1, 0),
@@ -4072,21 +4108,24 @@ pub mod tests {
         let parent = parse(".bar, div .baz").unwrap();
         let child = parse("#foo &.bar").unwrap();
         assert_eq!(
-            SelectorList::from_vec(vec![child.0[0].replace_parent_selector(&parent.0)]),
+            child.replace_parent_selector(&parent.0),
             parse("#foo :is(.bar, div .baz).bar").unwrap()
         );
 
         let has_child = parse("#foo:has(&.bar)").unwrap();
         assert_eq!(
-            SelectorList::from_vec(vec![has_child.0[0].replace_parent_selector(&parent.0)]),
+            has_child.replace_parent_selector(&parent.0),
             parse("#foo:has(:is(.bar, div .baz).bar)").unwrap()
         );
 
         let child = parse("#foo").unwrap();
         assert_eq!(
-            SelectorList::from_vec(vec![child.0[0].replace_parent_selector(&parent.0)]),
+            child.replace_parent_selector(&parent.0),
             parse(":is(.bar, div .baz) #foo").unwrap()
         );
+
+        let child = parse_relative_expected("+ #foo", ParseRelative::ForNesting, Some("& + #foo")).unwrap();
+        assert_eq!(child, parse("& + #foo").unwrap());
     }
 
     #[test]

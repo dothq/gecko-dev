@@ -663,6 +663,21 @@
     "releaseChannelCollection": "opt-out",
     "description": "GPU Device Reset Reason (ok, hung, removed, reset, internal error, invalid call, out of memory)"
   },
+  "FINGERPRINTING_PROTECTION_CANVAS_NOISE_CALCULATE_TIME_MS": {
+    "record_in_processes": ["content"],
+    "products": ["firefox"],
+    "alert_emails": [
+      "tihuang@mozilla.com",
+      "tom@mozilla.com",
+      "tschuster@mozilla.com"
+    ],
+    "expires_in_version": "never",
+    "bug_numbers": [1838856],
+    "kind": "exponential",
+    "high": 600000,
+    "n_buckets": 100,
+    "description": "Counts how long to generate canvas random noises."
+  },
   "FORCED_DEVICE_RESET_REASON": {
     "record_in_processes": ["main", "content", "gpu"],
     "products": ["firefox", "fennec"],
@@ -8884,6 +8899,19 @@
     "keyed": true,
     "description": "How many credit card entries we imported from another browser, keyed by the name of the browser."
   },
+  "FX_MIGRATION_EXTENSIONS_QUANTITY": {
+    "record_in_processes": ["main"],
+    "products": ["firefox"],
+    "bug_numbers": [1834545],
+    "alert_emails": ["mconley@mozilla.com"],
+    "expires_in_version": "never",
+    "kind": "exponential",
+    "n_buckets": 20,
+    "high": 1000,
+    "releaseChannelCollection": "opt-out",
+    "keyed": true,
+    "description": "How many extensions were matched to be imported from another browser, keyed by the name of the browser."
+  },
   "PWMGR_IMPORT_LOGINS_FROM_FILE_CATEGORICAL": {
     "record_in_processes": ["main"],
     "products": ["firefox"],
@@ -10707,13 +10735,6 @@
     "kind": "boolean",
     "description": "New tab page is enabled."
   },
-  "NEWTAB_PAGE_ENHANCED": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "expires_in_version": "default",
-    "kind": "boolean",
-    "description": "New tab page is enhanced (showing suggestions)."
-  },
   "NEWTAB_PAGE_PINNED_SITES_COUNT": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "fennec"],
@@ -10991,27 +11012,6 @@
     "high": 1000000,
     "n_buckets": 202,
     "description": "Size (in bytes) of the compressed crash store JSON file."
-  },
-  "PLUGINS_NOTIFICATION_SHOWN": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "releaseChannelCollection": "opt-out",
-    "expires_in_version": "never",
-    "kind": "boolean",
-    "description": "The number of times the click-to-activate notification was shown: false: shown by in-content activation true: shown by location bar activation",
-    "bug_numbers": [902075, 1345894],
-    "alert_emails": ["flashvideo-2015@mozilla.com"]
-  },
-  "PLUGINS_NOTIFICATION_USER_ACTION_2": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox", "fennec"],
-    "releaseChannelCollection": "opt-out",
-    "expires_in_version": "never",
-    "kind": "enumerated",
-    "n_values": 8,
-    "description": "User actions taken in the plugin notification: 0: allownow 1: allowalways 2: block 3: blockalways; Note: 1 and 3 are unused from Firefox 69 onwards.",
-    "bug_numbers": [902075, 1345894, 1398972],
-    "alert_emails": ["flashvideo-2015@mozilla.com"]
   },
   "POPUP_NOTIFICATION_STATS": {
     "record_in_processes": ["main"],
@@ -17646,21 +17646,6 @@
     "n_buckets": 56,
     "description": "How much time (in hours) passed between the current cookie purging activity and the one before that (cookie purging is run on 'daily idle')"
   },
-  "COOKIE_RETRIEVAL_SAMESITE_PROBLEM": {
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox"],
-    "alert_emails": [
-      "fbraun@mozilla.com",
-      "tschuster@mozilla.com",
-      "seceng-telemetry@mozilla.com"
-    ],
-    "bug_numbers": [1763367],
-    "expires_in_version": "116",
-    "kind": "enumerated",
-    "n_values": 32,
-    "description": "Whether a cookie was skipped in GetCookiesForURI because of a same-site issue. This is a bit field.",
-    "releaseChannelCollection": "opt-out"
-  },
   "REFERRER_POLICY_COUNT": {
     "products": ["firefox"],
     "record_in_processes": ["main"],
@@ -18087,6 +18072,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["farre@mozilla.com"],
+    "releaseChannelCollection": "opt-out",
     "expires_in_version": "never",
     "kind": "exponential",
     "keyed": true,
@@ -18100,6 +18086,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["farre@mozilla.com"],
+    "releaseChannelCollection": "opt-out",
     "expires_in_version": "never",
     "kind": "exponential",
     "keyed": true,
@@ -18113,6 +18100,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["farre@mozilla.com"],
+    "releaseChannelCollection": "opt-out",
     "expires_in_version": "never",
     "kind": "boolean",
     "bug_numbers": [1812051],
@@ -18122,6 +18110,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["sefeng@mozilla.com", "afarre@mozilla.com"],
+    "releaseChannelCollection": "opt-out",
     "expires_in_version": "never",
     "kind": "categorical",
     "labels": [
@@ -18144,15 +18133,32 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["sefeng@mozilla.com", "afarre@mozilla.com"],
+    "releaseChannelCollection": "opt-out",
     "expires_in_version": "never",
     "kind": "categorical",
     "labels": [
+      "INVALID",
+      "OTHER",
       "FILTERED_FETCH",
       "BLOCKED_FETCH",
-      "IMAGE",
       "SCRIPT",
+      "IMAGE",
+      "STYLESHEET",
+      "XMLHTTPREQUEST",
+      "DTD",
+      "FONT",
       "MEDIA",
-      "OTHER"
+      "CSP_REPORT",
+      "XSLT",
+      "IMAGESET",
+      "WEB_MANIFEST",
+      "SPECULATIVE",
+      "UA_FONT",
+      "PROXIED_WEBRTC_MEDIA",
+      "PING",
+      "BEACON",
+      "WEB_TRANSPORT",
+      "EXCLUDED"
     ],
     "bug_numbers": [1833216],
     "description": "The initiator of this ORB blocked request."

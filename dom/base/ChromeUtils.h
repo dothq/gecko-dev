@@ -189,9 +189,6 @@ class ChromeUtils {
 
   static void ClearStyleSheetCache(GlobalObject& aGlobal);
 
-  static already_AddRefed<Promise> RequestPerformanceMetrics(
-      GlobalObject& aGlobal, ErrorResult& aRv);
-
   static void SetPerfStatsCollectionMask(GlobalObject& aGlobal, uint64_t aMask);
 
   static already_AddRefed<Promise> CollectPerfStats(GlobalObject& aGlobal,
@@ -302,6 +299,9 @@ class ChromeUtils {
 
   static void GetAllPossibleUtilityActorNames(GlobalObject& aGlobal,
                                               nsTArray<nsCString>& aNames);
+
+  static bool ShouldResistFingerprinting(GlobalObject& aGlobal,
+                                         JSRFPTarget aTarget);
 
  private:
   // Number of DevTools session debugging the current process

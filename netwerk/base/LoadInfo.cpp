@@ -379,7 +379,8 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow, nsIURI* aURI,
   bool shouldResistFingerprinting =
       nsContentUtils::ShouldResistFingerprinting_dangerous(
           aURI, mOriginAttributes,
-          "We are creating CookieJarSettings, so we can't have one already.");
+          "We are creating CookieJarSettings, so we can't have one already.",
+          RFPTarget::IsAlwaysEnabledForPrecompute);
   mCookieJarSettings = CookieJarSettings::Create(
       isPrivate ? CookieJarSettings::ePrivate : CookieJarSettings::eRegular,
       shouldResistFingerprinting);
@@ -420,14 +421,27 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
   }
 #endif
 
-  // Let's take the current cookie behavior and current cookie permission
-  // for the documents' loadInfo. Note that for any other loadInfos,
-  // cookieBehavior will be BEHAVIOR_REJECT for security reasons.
-  bool isPrivate = mOriginAttributes.mPrivateBrowsingId > 0;
+  // If we think we should not resist fingerprinting, defer to the opener's
+  // RFP bit (if there is an opener.)  If the opener is also exempted, it stays
+  // true, otherwise we will put a false into the CJS and that will be respected
+  // on this document.
   bool shouldResistFingerprinting =
       nsContentUtils::ShouldResistFingerprinting_dangerous(
           aURI, mOriginAttributes,
-          "We are creating CookieJarSettings, so we can't have one already.");
+          "We are creating CookieJarSettings, so we can't have one already.",
+          RFPTarget::IsAlwaysEnabledForPrecompute);
+  RefPtr<BrowsingContext> opener = aBrowsingContext->GetOpener();
+  if (!shouldResistFingerprinting && opener &&
+      opener->GetCurrentWindowContext()) {
+    shouldResistFingerprinting =
+        opener->GetCurrentWindowContext()->ShouldResistFingerprinting();
+  }
+
+  const bool isPrivate = mOriginAttributes.mPrivateBrowsingId > 0;
+
+  // Let's take the current cookie behavior and current cookie permission
+  // for the documents' loadInfo. Note that for any other loadInfos,
+  // cookieBehavior will be BEHAVIOR_REJECT for security reasons.
   mCookieJarSettings = CookieJarSettings::Create(
       isPrivate ? CookieJarSettings::ePrivate : CookieJarSettings::eRegular,
       shouldResistFingerprinting);
@@ -611,6 +625,7 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
       mNeedForCheckingAntiTrackingHeuristic(
           rhs.mNeedForCheckingAntiTrackingHeuristic),
       mCspNonce(rhs.mCspNonce),
+      mIntegrityMetadata(rhs.mIntegrityMetadata),
       mSkipContentSniffing(rhs.mSkipContentSniffing),
       mHttpsOnlyStatus(rhs.mHttpsOnlyStatus),
       mHstsStatus(rhs.mHstsStatus),
@@ -664,7 +679,8 @@ LoadInfo::LoadInfo(
     bool aServiceWorkerTaintingSynthesized, bool aDocumentHasUserInteracted,
     bool aAllowListFutureDocumentsCreatedFromThisRedirectChain,
     bool aNeedForCheckingAntiTrackingHeuristic, const nsAString& aCspNonce,
-    bool aSkipContentSniffing, uint32_t aHttpsOnlyStatus, bool aHstsStatus,
+    const nsAString& aIntegrityMetadata, bool aSkipContentSniffing,
+    uint32_t aHttpsOnlyStatus, bool aHstsStatus,
     bool aHasValidUserGestureActivation, bool aAllowDeprecatedSystemRequests,
     bool aIsInDevToolsContext, bool aParserCreatedScript,
     nsILoadInfo::StoragePermissionState aStoragePermission, bool aIsMetaRefresh,
@@ -730,6 +746,7 @@ LoadInfo::LoadInfo(
       mNeedForCheckingAntiTrackingHeuristic(
           aNeedForCheckingAntiTrackingHeuristic),
       mCspNonce(aCspNonce),
+      mIntegrityMetadata(aIntegrityMetadata),
       mSkipContentSniffing(aSkipContentSniffing),
       mHttpsOnlyStatus(aHttpsOnlyStatus),
       mHstsStatus(aHstsStatus),
@@ -1057,7 +1074,8 @@ LoadInfo::GetCookieJarSettings(nsICookieJarSettings** aCookieJarSettings) {
     bool shouldResistFingerprinting =
         nsContentUtils::ShouldResistFingerprinting_dangerous(
             loadingPrincipal,
-            "CookieJarSettings can't exist yet, we're creating it");
+            "CookieJarSettings can't exist yet, we're creating it",
+            RFPTarget::IsAlwaysEnabledForPrecompute);
     mCookieJarSettings = CreateCookieJarSettings(
         mInternalContentPolicyType, isPrivate, shouldResistFingerprinting);
   }
@@ -1800,6 +1818,20 @@ LoadInfo::SetCspNonce(const nsAString& aCspNonce) {
   MOZ_ASSERT(!mInitialSecurityCheckDone,
              "setting the nonce is only allowed before any sec checks");
   mCspNonce = aCspNonce;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetIntegrityMetadata(nsAString& aIntegrityMetadata) {
+  aIntegrityMetadata = mIntegrityMetadata;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetIntegrityMetadata(const nsAString& aIntegrityMetadata) {
+  MOZ_ASSERT(!mInitialSecurityCheckDone,
+             "setting the nonce is only allowed before any sec checks");
+  mIntegrityMetadata = aIntegrityMetadata;
   return NS_OK;
 }
 

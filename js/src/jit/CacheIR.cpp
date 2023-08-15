@@ -6609,7 +6609,8 @@ static JitCode* GetOrCreateRegExpStub(JSContext* cx, InlinableNative native) {
       MOZ_CRASH("Unexpected native");
   }
   if (!code) {
-    cx->recoverFromOutOfMemory();
+    MOZ_ASSERT(cx->isThrowingOutOfMemory() || cx->isThrowingOverRecursed());
+    cx->clearPendingException();
     return nullptr;
   }
   return code;
@@ -7975,7 +7976,7 @@ AttachDecision InlinableNativeIRGenerator::tryAttachMathFunction(
   }
 
   if (math_use_fdlibm_for_sin_cos_tan() ||
-      callee_->realm()->behaviors().shouldResistFingerprinting()) {
+      callee_->realm()->creationOptions().alwaysUseFdlibm()) {
     switch (fun) {
       case UnaryMathFunction::SinNative:
         fun = UnaryMathFunction::SinFdlibm;

@@ -3459,18 +3459,14 @@ void RestyleManager::TakeSnapshotForAttributeChange(Element& aElement,
 
 // For some attribute changes we must restyle the whole subtree:
 //
-// * <td> is affected by the cellpadding on its ancestor table
 // * lang="" and xml:lang="" can affect all descendants due to :lang()
 // * exportparts can affect all descendant parts. We could certainly integrate
 //   it better in the invalidation machinery if it was necessary.
 static inline bool AttributeChangeRequiresSubtreeRestyle(
     const Element& aElement, nsAtom* aAttr) {
-  if (aAttr == nsGkAtoms::cellpadding) {
-    return aElement.IsHTMLElement(nsGkAtoms::table);
-  }
-  // TODO(emilio, bug 1598094): Maybe finer-grained invalidation for exportparts
-  // attribute changes?
   if (aAttr == nsGkAtoms::exportparts) {
+    // TODO(emilio, bug 1598094): Maybe finer-grained invalidation for
+    // exportparts attribute changes?
     return !!aElement.GetShadowRoot();
   }
   return aAttr == nsGkAtoms::lang;
@@ -3492,9 +3488,6 @@ void RestyleManager::AttributeChanged(Element* aElement, int32_t aNameSpaceID,
     restyleHint |= RestyleHint::RESTYLE_STYLE_ATTRIBUTE;
   } else if (AttributeChangeRequiresSubtreeRestyle(*aElement, aAttribute)) {
     restyleHint |= RestyleHint::RestyleSubtree();
-  } else if (aElement->IsAttributeMapped(aAttribute)) {
-    // FIXME(emilio): Does this really need to re-selector-match?
-    restyleHint |= RestyleHint::RESTYLE_SELF;
   } else if (aElement->IsInShadowTree() && aAttribute == nsGkAtoms::part) {
     // TODO(emilio, bug 1598094): Maybe finer-grained invalidation for part
     // attribute changes?
@@ -3693,23 +3686,6 @@ void RestyleManager::DoReparentComputedStyleForFirstLine(
   Element* ourElement = isElement ? aFrame->GetContent()->AsElement() : nullptr;
   ComputedStyle* newParent = newParentStyle;
 
-  ComputedStyle* newParentIgnoringFirstLine;
-  if (newParent->GetPseudoType() == PseudoStyleType::firstLine) {
-    MOZ_ASSERT(
-        providerFrame && providerFrame->GetParent()->IsBlockFrameOrSubclass(),
-        "How could we get a ::first-line parent style without having "
-        "a ::first-line provider frame?");
-    // If newParent is a ::first-line style, get the parent blockframe, and then
-    // correct it for our pseudo as needed (e.g. stepping out of anon boxes).
-    // Use the resulting style for the "parent style ignoring ::first-line".
-    nsIFrame* blockFrame = providerFrame->GetParent();
-    nsIFrame* correctedFrame = nsIFrame::CorrectStyleParentFrame(
-        blockFrame, oldStyle->GetPseudoType());
-    newParentIgnoringFirstLine = correctedFrame->Style();
-  } else {
-    newParentIgnoringFirstLine = newParent;
-  }
-
   if (!providerFrame) {
     // No providerFrame means we inherited from a display:contents thing.  Our
     // layout parent style is the style of our nearest ancestor frame.  But we
@@ -3727,8 +3703,7 @@ void RestyleManager::DoReparentComputedStyleForFirstLine(
   ComputedStyle* layoutParent = providerFrame->Style();
 
   RefPtr<ComputedStyle> newStyle = aStyleSet.ReparentComputedStyle(
-      oldStyle, newParent, newParentIgnoringFirstLine, layoutParent,
-      ourElement);
+      oldStyle, newParent, layoutParent, ourElement);
   aFrame->SetComputedStyle(newStyle);
 
   // This logic somewhat mirrors the logic in
@@ -3742,7 +3717,7 @@ void RestyleManager::DoReparentComputedStyleForFirstLine(
                aFrame->GetAdditionalComputedStyle(index)) {
       RefPtr<ComputedStyle> newAdditionalContext =
           aStyleSet.ReparentComputedStyle(oldAdditionalStyle, newStyle,
-                                          newStyle, newStyle, nullptr);
+                                          newStyle, nullptr);
       aFrame->SetAdditionalComputedStyle(index, newAdditionalContext);
       ++index;
     }

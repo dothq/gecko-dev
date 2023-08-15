@@ -17,6 +17,12 @@
 namespace mozilla {
 namespace gfx {
 
+struct Circle {
+  Point origin;
+  float radius;
+  bool closed = false;
+};
+
 class PathOps {
  public:
   PathOps() = default;
@@ -62,6 +68,8 @@ class PathOps {
     mPathData.resize(oldSize + sizeof(OpType));
     *reinterpret_cast<OpType*>(mPathData.data() + oldSize) = OpType::OP_CLOSE;
   }
+
+  Maybe<Circle> AsCircle() const;
 
  private:
   enum class OpType : uint32_t {
@@ -205,6 +213,8 @@ class PathRecording final : public Path {
     EnsurePath();
     return mPath->AsRect();
   }
+
+  Maybe<Circle> AsCircle() const { return mPathOps.AsCircle(); }
 
   void StreamToSink(PathSink* aSink) const final {
     mPathOps.StreamToSink(*aSink);

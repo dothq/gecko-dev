@@ -78,7 +78,7 @@ const modifiedStyleSheets = new WeakMap();
 class StyleSheetsManager extends EventEmitter {
   _styleSheetCount = 0;
   _styleSheetMap = new Map();
-  // List of all watched media queries. Change listeners are being registered from getAtRules.
+  // List of all watched media queries. Change listeners are being registered from getStyleSheetRuleCountAndAtRules.
   _mqlList = [];
 
   /**
@@ -325,12 +325,17 @@ class StyleSheetsManager extends EventEmitter {
     InspectorUtils.parseStyleSheet(styleSheet, text);
     modifiedStyleSheets.set(styleSheet, text);
 
+    // Remove event handler from all media query list we set to. We are going to re-set
+    // those handler properly from getStyleSheetRuleCountAndAtRules.
+    for (const mql of this._mqlList) {
+      mql.onchange = null;
+    }
+
+    const { atRules, ruleCount } =
+      this.getStyleSheetRuleCountAndAtRules(styleSheet);
+
     if (kind !== UPDATE_PRESERVING_RULES) {
-      this._notifyPropertyChanged(
-        resourceId,
-        "ruleCount",
-        styleSheet.cssRules.length
-      );
+      this._notifyPropertyChanged(resourceId, "ruleCount", ruleCount);
     }
 
     if (transition) {
@@ -345,13 +350,6 @@ class StyleSheetsManager extends EventEmitter {
       });
     }
 
-    // Remove event handler from all media query list we set to. We are going to re-set
-    // those handler properly from getAtRules.
-    for (const mql of this._mqlList) {
-      mql.onchange = null;
-    }
-
-    const atRules = await this.getAtRules(styleSheet);
     this.emit("stylesheet-updated", {
       resourceId,
       updateKind: "at-rules-changed",
@@ -491,18 +489,22 @@ class StyleSheetsManager extends EventEmitter {
   }
 
   /**
-   * Retrieve the at-rules of a given stylesheet
+   * Retrieve the total number of rules (including nested ones) and
+   * all the at-rules of a given stylesheet.
    *
    * @param {StyleSheet} styleSheet
-   * @returns {Array<Object>} An array of object of the following shape:
-   *           - type {String}
-   *           - mediaText {String}
-   *           - conditionText {String}
-   *           - matches {Boolean}: true if the media rule matches the current state of the document
-   *           - line {Number}
-   *           - column {Number}
+   * @returns {Object} An object of the following shape:
+   *          - {Integer} ruleCount: The total number of rules in the stylesheet
+   *          - {Array<Object>} atRules: An array of object of the following shape:
+   *            - type {String}
+   *            - mediaText {String}
+   *            - conditionText {String}
+   *            - matches {Boolean}: true if the media rule matches the current state of the document
+   *            - layerName {String}
+   *            - line {Number}
+   *            - column {Number}
    */
-  async getAtRules(styleSheet) {
+  getStyleSheetRuleCountAndAtRules(styleSheet) {
     const resourceId = this._findStyleSheetResourceId(styleSheet);
     if (!resourceId) {
       return [];
@@ -510,20 +512,18 @@ class StyleSheetsManager extends EventEmitter {
 
     this._mqlList = [];
 
-    const styleSheetRules = await this._getCSSRules(styleSheet);
     const document = styleSheet.associatedDocument;
     const win = document?.ownerGlobal;
     const CSSGroupingRule = win?.CSSGroupingRule;
 
+    const styleSheetRules =
+      InspectorUtils.getAllStyleSheetCSSStyleRules(styleSheet);
+    const ruleCount = styleSheetRules.length;
     // We need to go through nested rules to extract all the rules we're interested in
-    const rules = [];
-    const traverseRules = ruleList => {
-      for (const rule of ruleList) {
-        // Don't go further if the rule can't hold other rules (e.g. not a @media, @supports, …)
-        if (!CSSGroupingRule || !CSSGroupingRule.isInstance(rule)) {
-          continue;
-        }
-
+    const atRules = [];
+    for (const rule of styleSheetRules) {
+      // We only want to gather rules that can hold other rules (e.g. @media, @supports, …)
+      if (CSSGroupingRule && CSSGroupingRule.isInstance(rule)) {
         const line = InspectorUtils.getRelativeRuleLine(rule);
         const column = InspectorUtils.getRuleColumn(rule);
 
@@ -537,14 +537,14 @@ class StyleSheetsManager extends EventEmitter {
             mql.onchange = this._onMatchesChange.bind(
               this,
               resourceId,
-              rules.length
+              atRules.length
             );
             this._mqlList.push(mql);
           } catch (e) {
             // Ignored
           }
 
-          rules.push({
+          atRules.push({
             type: "media",
             mediaText: rule.media.mediaText,
             conditionText: rule.conditionText,
@@ -553,35 +553,30 @@ class StyleSheetsManager extends EventEmitter {
             column,
           });
         } else if (className === "CSSContainerRule") {
-          rules.push({
+          atRules.push({
             type: "container",
             conditionText: rule.conditionText,
             line,
             column,
           });
         } else if (className === "CSSSupportsRule") {
-          rules.push({
+          atRules.push({
             type: "support",
             conditionText: rule.conditionText,
             line,
             column,
           });
         } else if (className === "CSSLayerBlockRule") {
-          rules.push({
+          atRules.push({
             type: "layer",
             layerName: rule.name,
             line,
             column,
           });
         }
-
-        if (rule.cssRules) {
-          traverseRules(rule.cssRules);
-        }
       }
-    };
-    traverseRules(styleSheetRules);
-    return rules;
+    }
+    return { ruleCount, atRules };
   }
 
   /**

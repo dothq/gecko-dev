@@ -158,7 +158,6 @@ class HTMLInputElement final : public TextControlElement,
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   NS_IMETHOD Reset() override;
   NS_IMETHOD SubmitNamesValues(FormData* aFormData) override;
-  bool AllowDrop() override;
 
   void FieldSetDisabledChanged(bool aNotify) override;
 
@@ -462,9 +461,7 @@ class HTMLInputElement final : public TextControlElement,
     SetHTMLAttr(nsGkAtoms::capture, aValue, aRv);
   }
 
-  bool DefaultChecked() const {
-    return HasAttr(kNameSpaceID_None, nsGkAtoms::checked);
-  }
+  bool DefaultChecked() const { return HasAttr(nsGkAtoms::checked); }
 
   void SetDefaultChecked(bool aValue, ErrorResult& aRv) {
     SetHTMLBoolAttr(nsGkAtoms::checked, aValue, aRv);
@@ -709,7 +706,7 @@ class HTMLInputElement final : public TextControlElement,
   void ShowPicker(ErrorResult& aRv);
 
   bool WebkitDirectoryAttr() const {
-    return HasAttr(kNameSpaceID_None, nsGkAtoms::webkitdirectory);
+    return HasAttr(nsGkAtoms::webkitdirectory);
   }
 
   void SetWebkitDirectoryAttr(bool aValue, ErrorResult& aRv) {
@@ -728,6 +725,13 @@ class HTMLInputElement final : public TextControlElement,
   void GetUseMap(nsAString& aValue) { GetHTMLAttr(nsGkAtoms::usemap, aValue); }
   void SetUseMap(const nsAString& aValue, ErrorResult& aRv) {
     SetHTMLAttr(nsGkAtoms::usemap, aValue, aRv);
+  }
+
+  void GetDirName(nsAString& aValue) {
+    GetHTMLAttr(nsGkAtoms::dirname, aValue);
+  }
+  void SetDirName(const nsAString& aValue, ErrorResult& aRv) {
+    SetHTMLAttr(nsGkAtoms::dirname, aValue, aRv);
   }
 
   nsIControllers* GetControllers(ErrorResult& aRv);
@@ -1558,8 +1562,7 @@ class HTMLInputElement final : public TextControlElement,
   bool mHasPatternAttribute : 1;
 
  private:
-  static void ImageInputMapAttributesIntoRule(
-      const nsMappedAttributes* aAttributes, MappedDeclarations&);
+  static void ImageInputMapAttributesIntoRule(MappedDeclarationsBuilder&);
 
   /**
    * Returns true if this input's type will fire a DOM "change" event when it
@@ -1577,6 +1580,16 @@ class HTMLInputElement final : public TextControlElement,
       case FormControlType::InputUrl:
       case FormControlType::InputTel:
       case FormControlType::InputPassword:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  bool DoesDirnameApply() const {
+    switch (mType) {
+      case FormControlType::InputText:
+      case FormControlType::InputSearch:
         return true;
       default:
         return false;

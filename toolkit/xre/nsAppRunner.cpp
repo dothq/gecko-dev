@@ -1489,15 +1489,6 @@ nsXULAppInfo::GetAccessibilityInstantiator(nsAString& aInstantiator) {
 }
 
 NS_IMETHODIMP
-nsXULAppInfo::GetShouldBlockIncompatJaws(bool* aResult) {
-  *aResult = false;
-#if defined(ACCESSIBILITY) && defined(XP_WIN)
-  *aResult = mozilla::a11y::Compatibility::IsOldJAWS();
-#endif
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsXULAppInfo::GetIs64Bit(bool* aResult) {
 #ifdef HAVE_64BIT_BUILD
   *aResult = true;
@@ -3677,7 +3668,7 @@ class XREMain {
   int XRE_mainStartup(bool* aExitFlag);
   nsresult XRE_mainRun();
 
-  Result<bool, nsresult> CheckLastStartupWasCrash();
+  bool CheckLastStartupWasCrash();
 
   nsCOMPtr<nsINativeAppSupport> mNativeApp;
   RefPtr<nsToolkitProfileService> mProfileSvc;
@@ -4436,6 +4427,7 @@ enum struct ShouldNotProcessUpdatesReason {
   DevToolsLaunching,
   NotAnUpdatingTask,
   OtherInstanceRunning,
+  FirstStartup
 };
 
 const char* ShouldNotProcessUpdatesReasonAsString(
@@ -4454,6 +4446,14 @@ const char* ShouldNotProcessUpdatesReasonAsString(
 
 Maybe<ShouldNotProcessUpdatesReason> ShouldNotProcessUpdates(
     nsXREDirProvider& aDirProvider) {
+  // Don't process updates when launched from the installer.
+  // It's possible for a stale update to be present in the case of a paveover;
+  // ignore it and leave the update service to discard it.
+  if (ARG_FOUND == CheckArgExists("first-startup")) {
+    NS_WARNING("ShouldNotProcessUpdates(): FirstStartup");
+    return Some(ShouldNotProcessUpdatesReason::FirstStartup);
+  }
+
   // Do not process updates if we're launching devtools, as evidenced by
   // "--chrome ..." with the browser toolbox chrome document URL.
 
@@ -4532,34 +4532,24 @@ Result<nsCOMPtr<nsIFile>, nsresult> GetIncompleteStartupFile(nsIFile* aProfLD) {
 }
 }  // namespace mozilla::startup
 
-// Check whether the last startup attempt resulted in a crash within the
-// last 6 hours.
-// Note that this duplicates the logic in nsAppStartup::TrackStartupCrashBegin,
-// which runs too late for our purposes.
-Result<bool, nsresult> XREMain::CheckLastStartupWasCrash() {
-  constexpr int32_t MAX_TIME_SINCE_STARTUP = 6 * 60 * 60 * 1000;
-
-  nsCOMPtr<nsIFile> crashFile;
-  MOZ_TRY_VAR(crashFile, GetIncompleteStartupFile(mProfLD));
+// Check whether the last startup attempt resulted in a crash or hang.
+// This is distinct from the definition of a startup crash from
+// nsAppStartup::TrackStartupCrashBegin.
+bool XREMain::CheckLastStartupWasCrash() {
+  Result<nsCOMPtr<nsIFile>, nsresult> crashFile =
+      GetIncompleteStartupFile(mProfLD);
+  if (crashFile.isErr()) {
+    return true;
+  }
 
   // Attempt to create the incomplete startup canary file. If the file already
-  // exists, this fails, and we know the last startup was a success. If it
+  // exists, this fails, and we know the last startup was a crash. If it
   // doesn't already exist, it is created, and will be removed at the end of
   // the startup crash detection window.
   AutoFDClose fd;
-  Unused << crashFile->OpenNSPRFileDesc(PR_WRONLY | PR_CREATE_FILE | PR_EXCL,
-                                        0666, &fd.rwget());
-  if (fd) {
-    return false;
-  }
-
-  PRTime lastModifiedTime;
-  MOZ_TRY(crashFile->GetLastModifiedTime(&lastModifiedTime));
-
-  // If the file exists, and was created within the appropriate time window,
-  // the last startup was recent and resulted in a crash.
-  PRTime now = PR_Now() / PR_USEC_PER_MSEC;
-  return now - lastModifiedTime <= MAX_TIME_SINCE_STARTUP;
+  Unused << crashFile.inspect()->OpenNSPRFileDesc(
+      PR_WRONLY | PR_CREATE_FILE | PR_EXCL, 0666, &fd.rwget());
+  return !fd;
 }
 
 /*
@@ -4744,6 +4734,18 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 #  ifdef MOZ_WIDGET_GTK
     else {
       gdk_display_manager_open_display(gdk_display_manager_get(), nullptr);
+    }
+#  endif
+    // Check that Wayland only and X11 only builds
+    // use appropriate displays.
+#  if defined(MOZ_WAYLAND) && !defined(MOZ_X11)
+    if (!GdkIsWaylandDisplay()) {
+      Output(true, "Wayland only build is missig Wayland display!\n");
+    }
+#  endif
+#  if !defined(MOZ_WAYLAND) && defined(MOZ_X11)
+    if (!GdkIsX11Display()) {
+      Output(true, "X11 only build is missig X11 display!\n");
     }
 #  endif
   }
@@ -5080,7 +5082,7 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
   SaveFileToEnv("ASAN_REPORTER_PATH", mProfD);
 #endif
 
-  bool lastStartupWasCrash = CheckLastStartupWasCrash().unwrapOr(false);
+  bool lastStartupWasCrash = CheckLastStartupWasCrash();
 
   CrashReporter::AnnotateCrashReport(
       CrashReporter::Annotation::LastStartupWasCrash, lastStartupWasCrash);
@@ -5819,7 +5821,8 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
     return NS_OK;
   });
 
-  mozilla::IOInterposerInit ioInterposerGuard;
+  mozilla::AutoIOInterposer ioInterposerGuard;
+  ioInterposerGuard.Init();
 
 #if defined(XP_WIN)
   // We should have already done this when we created the skeleton UI. However,
@@ -5925,7 +5928,7 @@ int XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
 nsresult XRE_InitCommandLine(int aArgc, char* aArgv[]) {
   nsresult rv = NS_OK;
 
-#if defined(OS_WIN)
+#if defined(XP_WIN)
   CommandLine::Init(aArgc, aArgv);
 #else
 

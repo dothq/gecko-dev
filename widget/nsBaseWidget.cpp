@@ -154,7 +154,8 @@ nsBaseWidget::nsBaseWidget(BorderStyle aBorderStyle)
       mIMEHasQuit(false),
       mIsFullyOccluded(false),
       mNeedFastSnaphot(false),
-      mCurrentPanGestureBelongsToSwipe(false) {
+      mCurrentPanGestureBelongsToSwipe(false),
+      mIsPIPWindow(false) {
 #ifdef NOISY_WIDGET_LEAKS
   gNumWidgets++;
   printf("WIDGETS+ = %d\n", gNumWidgets);
@@ -419,6 +420,7 @@ void nsBaseWidget::BaseCreate(nsIWidget* aParent, widget::InitData* aInitData) {
     mPopupLevel = aInitData->mPopupLevel;
     mPopupType = aInitData->mPopupHint;
     mHasRemoteContent = aInitData->mHasRemoteContent;
+    mIsPIPWindow = aInitData->mPIPWindow;
   }
 
   if (aParent) {
@@ -988,6 +990,18 @@ void nsBaseWidget::CreateCompositor() {
   CreateCompositor(rect.Width(), rect.Height());
 }
 
+void nsIWidget::PauseOrResumeCompositor(bool aPause) {
+  auto* renderer = GetRemoteRenderer();
+  if (!renderer) {
+    return;
+  }
+  if (aPause) {
+    renderer->SendPause();
+  } else {
+    renderer->SendResume();
+  }
+}
+
 already_AddRefed<GeckoContentController>
 nsBaseWidget::CreateRootContentController() {
   RefPtr<GeckoContentController> controller =
@@ -1080,8 +1094,10 @@ nsEventStatus nsBaseWidget::ProcessUntransformedAPZEvent(
   UniquePtr<WidgetEvent> original(aEvent->Duplicate());
   DispatchEvent(aEvent, status);
 
-  if (mAPZC && !InputAPZContext::WasRoutedToChildProcess() && inputBlockId) {
-    // EventStateManager did not route the event into the child process.
+  if (mAPZC && !InputAPZContext::WasRoutedToChildProcess() &&
+      !InputAPZContext::WasDropped() && inputBlockId) {
+    // EventStateManager did not route the event into the child process and
+    // the event was dispatched in the parent process.
     // It's safe to communicate to APZ that the event has been processed.
     // Note that here aGuid.mLayersId might be different from
     // mCompositorSession->RootLayerTreeId() because the event might have gotten
@@ -1383,11 +1399,11 @@ already_AddRefed<WebRenderLayerManager> nsBaseWidget::CreateCompositorSession(
 #elif defined(MOZ_WIDGET_ANDROID)
     MOZ_ASSERT(supportsAcceleration);
     options.SetAllowSoftwareWebRenderOGL(
-        StaticPrefs::gfx_webrender_software_opengl_AtStartup());
+        gfx::gfxVars::AllowSoftwareWebRenderOGL());
 #elif defined(MOZ_WIDGET_GTK)
     if (supportsAcceleration) {
       options.SetAllowSoftwareWebRenderOGL(
-          StaticPrefs::gfx_webrender_software_opengl_AtStartup());
+          gfx::gfxVars::AllowSoftwareWebRenderOGL());
     }
 #endif
 
@@ -2217,7 +2233,10 @@ nsresult nsBaseWidget::AsyncEnableDragDrop(bool aEnable) {
       kAsyncDragDropTimeout, EventQueuePriority::Idle);
 }
 
-void nsBaseWidget::SwipeFinished() { mSwipeTracker = nullptr; }
+void nsBaseWidget::SwipeFinished() {
+  mSwipeTracker->Destroy();
+  mSwipeTracker = nullptr;
+}
 
 void nsBaseWidget::ReportSwipeStarted(uint64_t aInputBlockId,
                                       bool aStartSwipe) {
@@ -2296,6 +2315,12 @@ nsBaseWidget::SwipeInfo nsBaseWidget::SendMayStartSwipe(
 WidgetWheelEvent nsBaseWidget::MayStartSwipeForAPZ(
     const PanGestureInput& aPanInput, const APZEventResult& aApzResult) {
   WidgetWheelEvent event = aPanInput.ToWidgetEvent(this);
+
+  // Ignore swipe-to-navigation in PiP window.
+  if (mIsPIPWindow) {
+    return event;
+  }
+
   if (aPanInput.AllowsSwipe()) {
     SwipeInfo swipeInfo = SendMayStartSwipe(aPanInput);
     event.mCanTriggerSwipe = swipeInfo.wantsSwipe;
@@ -2337,6 +2362,11 @@ WidgetWheelEvent nsBaseWidget::MayStartSwipeForAPZ(
 }
 
 bool nsBaseWidget::MayStartSwipeForNonAPZ(const PanGestureInput& aPanInput) {
+  // Ignore swipe-to-navigation in PiP window.
+  if (mIsPIPWindow) {
+    return false;
+  }
+
   if (aPanInput.mType == PanGestureInput::PANGESTURE_MAYSTART ||
       aPanInput.mType == PanGestureInput::PANGESTURE_START) {
     mCurrentPanGestureBelongsToSwipe = false;

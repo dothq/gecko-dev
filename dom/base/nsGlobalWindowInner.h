@@ -21,7 +21,6 @@
 // Interfaces Needed
 #include "nsIBrowserDOMWindow.h"
 #include "nsIInterfaceRequestor.h"
-#include "nsIDOMChromeWindow.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "mozilla/EventListenerManager.h"
@@ -169,11 +168,7 @@ extern const JSClass OuterWindowProxyClass;
 
 class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                                   public nsPIDOMWindowInner,
-                                  private nsIDOMWindow
-    // NOTE: This interface is private, as it's only
-    // implemented on chrome windows.
-    ,
-                                  private nsIDOMChromeWindow,
+                                  private nsIDOMWindow,
                                   public nsIScriptGlobalObject,
                                   public nsIScriptObjectPrincipal,
                                   public nsSupportsWeakReference,
@@ -244,8 +239,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   }
 
   // nsIGlobalObject
-  bool ShouldResistFingerprinting(
-      RFPTarget aTarget = RFPTarget::Unknown) const final;
+  bool ShouldResistFingerprinting(RFPTarget aTarget) const final;
   mozilla::OriginTrials Trials() const final;
   mozilla::dom::FontFaceSet* GetFonts() final;
 
@@ -264,6 +258,8 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
       override;
 
   mozilla::dom::StorageManager* GetStorageManager() override;
+
+  bool IsEligibleForMessaging() override;
 
   void TraceGlobalJSObject(JSTracer* aTrc);
 
@@ -284,9 +280,6 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
 
   // nsIDOMWindow
   NS_DECL_NSIDOMWINDOW
-
-  // nsIDOMChromeWindow (only implemented on chrome windows)
-  NS_DECL_NSIDOMCHROMEWINDOW
 
   void CaptureEvents();
   void ReleaseEvents();
@@ -778,18 +771,6 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   void ScrollByPages(int32_t numPages,
                      const mozilla::dom::ScrollOptions& aOptions);
   void MozScrollSnap();
-  void GetInnerWidth(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
-                     mozilla::dom::CallerType aCallerType,
-                     mozilla::ErrorResult& aError);
-  void SetInnerWidth(JSContext* aCx, JS::Handle<JS::Value> aValue,
-                     mozilla::dom::CallerType aCallerType,
-                     mozilla::ErrorResult& aError);
-  void GetInnerHeight(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
-                      mozilla::dom::CallerType aCallerType,
-                      mozilla::ErrorResult& aError);
-  void SetInnerHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
-                      mozilla::dom::CallerType aCallerType,
-                      mozilla::ErrorResult& aError);
   double GetScrollX(mozilla::ErrorResult& aError);
   double GetPageXOffset(mozilla::ErrorResult& aError) {
     return GetScrollX(aError);
@@ -815,25 +796,13 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   void GetScreenX(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
                   mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
-  void SetScreenX(JSContext* aCx, JS::Handle<JS::Value> aValue,
-                  mozilla::dom::CallerType aCallerType,
-                  mozilla::ErrorResult& aError);
   void GetScreenY(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
-                  mozilla::dom::CallerType aCallerType,
-                  mozilla::ErrorResult& aError);
-  void SetScreenY(JSContext* aCx, JS::Handle<JS::Value> aValue,
                   mozilla::dom::CallerType aCallerType,
                   mozilla::ErrorResult& aError);
   void GetOuterWidth(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
                      mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
-  void SetOuterWidth(JSContext* aCx, JS::Handle<JS::Value> aValue,
-                     mozilla::dom::CallerType aCallerType,
-                     mozilla::ErrorResult& aError);
   void GetOuterHeight(JSContext* aCx, JS::MutableHandle<JS::Value> aValue,
-                      mozilla::dom::CallerType aCallerType,
-                      mozilla::ErrorResult& aError);
-  void SetOuterHeight(JSContext* aCx, JS::Handle<JS::Value> aValue,
                       mozilla::dom::CallerType aCallerType,
                       mozilla::ErrorResult& aError);
 
@@ -1005,57 +974,22 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
                         JS::Handle<JS::Value> aValue,
                         mozilla::ErrorResult& aError);
 
-  // Implementation guts for our writable IDL attributes that are really
-  // supposed to be readonly replaceable.
-  template <typename T>
-  using WindowCoordGetter = T (nsGlobalWindowInner::*)(
-      mozilla::dom::CallerType aCallerType, mozilla::ErrorResult&);
-  template <typename T>
-  using WindowCoordSetter = void (nsGlobalWindowInner::*)(
-      T, mozilla::dom::CallerType aCallerType, mozilla::ErrorResult&);
-
-  template <typename T>
-  void GetReplaceableWindowCoord(JSContext* aCx, WindowCoordGetter<T> aGetter,
-                                 JS::MutableHandle<JS::Value> aRetval,
-                                 mozilla::dom::CallerType aCallerType,
-                                 mozilla::ErrorResult& aError);
-
-  template <typename T>
-  void SetReplaceableWindowCoord(JSContext* aCx, WindowCoordSetter<T> aSetter,
-                                 JS::Handle<JS::Value> aValue,
-                                 const char* aPropName,
-                                 mozilla::dom::CallerType aCallerType,
-                                 mozilla::ErrorResult& aError);
-  // And the implementations of WindowCoordGetter/WindowCoordSetter.
- protected:
-  double GetInnerWidth(mozilla::dom::CallerType aCallerType,
-                       mozilla::ErrorResult& aError);
   nsresult GetInnerWidth(double* aWidth) override;
-  void SetInnerWidth(double aInnerWidth, mozilla::dom::CallerType aCallerType,
-                     mozilla::ErrorResult& aError);
-  double GetInnerHeight(mozilla::dom::CallerType aCallerType,
-                        mozilla::ErrorResult& aError);
   nsresult GetInnerHeight(double* aHeight) override;
-  void SetInnerHeight(double aInnerHeight, mozilla::dom::CallerType aCallerType,
-                      mozilla::ErrorResult& aError);
+
+ public:
+  double GetInnerWidth(mozilla::ErrorResult& aError);
+  double GetInnerHeight(mozilla::ErrorResult& aError);
   int32_t GetScreenX(mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
-  void SetScreenX(int32_t aScreenX, mozilla::dom::CallerType aCallerType,
-                  mozilla::ErrorResult& aError);
   int32_t GetScreenY(mozilla::dom::CallerType aCallerType,
                      mozilla::ErrorResult& aError);
-  void SetScreenY(int32_t aScreenY, mozilla::dom::CallerType aCallerType,
-                  mozilla::ErrorResult& aError);
   int32_t GetOuterWidth(mozilla::dom::CallerType aCallerType,
                         mozilla::ErrorResult& aError);
-  void SetOuterWidth(int32_t aOuterWidth, mozilla::dom::CallerType aCallerType,
-                     mozilla::ErrorResult& aError);
   int32_t GetOuterHeight(mozilla::dom::CallerType aCallerType,
                          mozilla::ErrorResult& aError);
-  void SetOuterHeight(int32_t aOuterHeight,
-                      mozilla::dom::CallerType aCallerType,
-                      mozilla::ErrorResult& aError);
 
+ protected:
   friend class HashchangeCallback;
   friend class mozilla::dom::BarProp;
 

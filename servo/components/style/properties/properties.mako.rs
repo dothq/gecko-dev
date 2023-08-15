@@ -18,8 +18,7 @@ use std::{ops, ptr};
 use std::fmt::{self, Write};
 use std::mem;
 
-use cssparser::{Parser, TokenSerializationType};
-use cssparser::ParserInput;
+use cssparser::{Parser, ParserInput, TokenSerializationType};
 #[cfg(feature = "servo")] use euclid::SideOffsets2D;
 use crate::context::QuirksMode;
 #[cfg(feature = "gecko")] use crate::gecko_bindings::structs::{self, nsCSSPropertyID};
@@ -105,32 +104,6 @@ pub mod shorthands {
     use crate::parser::{Parse, ParserContext};
     use style_traits::{ParseError, StyleParseErrorKind};
     use crate::values::specified;
-
-    use style_traits::{CssWriter, ToCss};
-    use crate::values::specified::{BorderStyle, Color};
-    use std::fmt::{self, Write};
-
-    fn serialize_directional_border<W, I,>(
-        dest: &mut CssWriter<W>,
-        width: &I,
-        style: &BorderStyle,
-        color: &Color,
-    ) -> fmt::Result
-    where
-        W: Write,
-        I: ToCss,
-    {
-        width.to_css(dest)?;
-        // FIXME(emilio): Should we really serialize the border style if it's
-        // `solid`?
-        dest.write_char(' ')?;
-        style.to_css(dest)?;
-        if *color != Color::CurrentColor {
-            dest.write_char(' ')?;
-            color.to_css(dest)?;
-        }
-        Ok(())
-    }
 
     % for style_struct in data.style_structs:
     include!("${repr(os.path.join(OUT_DIR, 'shorthands/{}.rs'.format(style_struct.name_lower)))[1:-1]}");
@@ -1182,7 +1155,8 @@ impl CSSWideKeyword {
         })
     }
 
-    fn parse(input: &mut Parser) -> Result<Self, ()> {
+    /// Parses a CSS wide keyword completely.
+    pub fn parse(input: &mut Parser) -> Result<Self, ()> {
         let keyword = {
             let ident = input.expect_ident().map_err(|_| ())?;
             Self::from_ident(ident)?
@@ -3647,11 +3621,6 @@ pub struct StyleBuilder<'a> {
     /// `parent_style.unwrap_or(device.default_computed_values())`.
     inherited_style: &'a ComputedValues,
 
-    /// The style we're inheriting from for properties that don't inherit from
-    /// ::first-line.  This is the same as inherited_style, unless
-    /// inherited_style is a ::first-line style.
-    inherited_style_ignoring_first_line: &'a ComputedValues,
-
     /// The style we're getting reset structs from.
     reset_style: &'a ComputedValues,
 
@@ -3694,28 +3663,19 @@ impl<'a> StyleBuilder<'a> {
     pub(super) fn new(
         device: &'a Device,
         parent_style: Option<<&'a ComputedValues>,
-        parent_style_ignoring_first_line: Option<<&'a ComputedValues>,
         pseudo: Option<<&'a PseudoElement>,
         rules: Option<StrongRuleNode>,
         custom_properties: Option<Arc<crate::custom_properties::CustomPropertiesMap>>,
         is_root_element: bool,
     ) -> Self {
-        debug_assert_eq!(parent_style.is_some(), parent_style_ignoring_first_line.is_some());
-        #[cfg(feature = "gecko")]
-        debug_assert!(parent_style.is_none() ||
-                      std::ptr::eq(parent_style.unwrap(),
-                                     parent_style_ignoring_first_line.unwrap()) ||
-                      parent_style.unwrap().is_first_line_style());
         let reset_style = device.default_computed_values();
         let inherited_style = parent_style.unwrap_or(reset_style);
-        let inherited_style_ignoring_first_line = parent_style_ignoring_first_line.unwrap_or(reset_style);
 
         let flags = inherited_style.flags.inherited();
 
         StyleBuilder {
             device,
             inherited_style,
-            inherited_style_ignoring_first_line,
             reset_style,
             pseudo,
             rules,
@@ -3748,14 +3708,9 @@ impl<'a> StyleBuilder<'a> {
     ) -> Self {
         let reset_style = device.default_computed_values();
         let inherited_style = parent_style.unwrap_or(reset_style);
-        #[cfg(feature = "gecko")]
-        debug_assert!(parent_style.is_none() ||
-                      !parent_style.unwrap().is_first_line_style());
         StyleBuilder {
             device,
             inherited_style,
-            // None of our callers pass in ::first-line parent styles.
-            inherited_style_ignoring_first_line: inherited_style,
             reset_style,
             pseudo: None,
             modified_reset: false,
@@ -3789,8 +3744,7 @@ impl<'a> StyleBuilder<'a> {
     #[allow(non_snake_case)]
     pub fn inherit_${property.ident}(&mut self) {
         let inherited_struct =
-            self.inherited_style_ignoring_first_line
-                .get_${property.style_struct.name_lower}();
+            self.inherited_style.get_${property.style_struct.name_lower}();
 
         self.modified_reset = true;
         self.add_flags(ComputedValueFlags::INHERITS_RESET_STYLE);
@@ -3882,7 +3836,6 @@ impl<'a> StyleBuilder<'a> {
         });
         let mut ret = Self::new(
             device,
-            parent,
             parent,
             pseudo,
             /* rules = */ None,
@@ -4050,11 +4003,7 @@ impl<'a> StyleBuilder<'a> {
         /// next-best thing and call them `parent_${style_struct.name_lower}`
         /// instead.
         pub fn get_parent_${style_struct.name_lower}(&self) -> &style_structs::${style_struct.name} {
-            % if style_struct.inherited:
             self.inherited_style.get_${style_struct.name_lower}()
-            % else:
-            self.inherited_style_ignoring_first_line.get_${style_struct.name_lower}()
-            % endif
         }
     % endfor
 }

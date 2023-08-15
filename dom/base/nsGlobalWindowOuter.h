@@ -24,7 +24,6 @@
 // Interfaces Needed
 #include "nsIBrowserDOMWindow.h"
 #include "nsIInterfaceRequestor.h"
-#include "nsIDOMChromeWindow.h"
 #include "nsIScriptGlobalObject.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "mozilla/EventListenerManager.h"
@@ -155,11 +154,7 @@ extern const JSClass OuterWindowProxyClass;
 
 class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                                   public nsPIDOMWindowOuter,
-                                  private nsIDOMWindow
-    // NOTE: This interface is private, as it's only
-    // implemented on chrome windows.
-    ,
-                                  private nsIDOMChromeWindow,
+                                  private nsIDOMWindow,
                                   public nsIScriptGlobalObject,
                                   public nsIScriptObjectPrincipal,
                                   public nsSupportsWeakReference,
@@ -233,8 +228,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   }
 
   // nsIGlobalObject
-  bool ShouldResistFingerprinting(
-      RFPTarget aTarget = RFPTarget::Unknown) const final;
+  bool ShouldResistFingerprinting(RFPTarget aTarget) const final;
   mozilla::OriginTrials Trials() const final;
   mozilla::dom::FontFaceSet* GetFonts() final;
 
@@ -263,9 +257,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   // nsIDOMWindow
   NS_DECL_NSIDOMWINDOW
-
-  // nsIDOMChromeWindow (only implemented on chrome windows)
-  NS_DECL_NSIDOMCHROMEWINDOW
 
   mozilla::dom::ChromeMessageBroadcaster* GetMessageManager();
   mozilla::dom::ChromeMessageBroadcaster* GetGroupMessageManager(
@@ -659,7 +650,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   // ChromeWindow bits.  Do NOT call these unless your window is in
   // fact chrome.
-  nsIBrowserDOMWindow* GetBrowserDOMWindowOuter();
+  nsIBrowserDOMWindow* GetBrowserDOMWindow();
   void SetBrowserDOMWindowOuter(nsIBrowserDOMWindow* aBrowserWindow);
   void SetCursorOuter(const nsACString& aCursor, mozilla::ErrorResult& aError);
 
@@ -688,36 +679,20 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
  protected:
   nsresult GetInnerWidth(double* aInnerWidth) override;
-  void SetInnerWidthOuter(double aInnerWidth,
-                          mozilla::dom::CallerType aCallerType,
-                          mozilla::ErrorResult& aError);
 
  public:
   double GetInnerHeightOuter(mozilla::ErrorResult& aError);
 
  protected:
   nsresult GetInnerHeight(double* aInnerHeight) override;
-  void SetInnerHeightOuter(double aInnerHeight,
-                           mozilla::dom::CallerType aCallerType,
-                           mozilla::ErrorResult& aError);
   int32_t GetScreenXOuter(mozilla::dom::CallerType aCallerType,
                           mozilla::ErrorResult& aError);
-  void SetScreenXOuter(int32_t aScreenX, mozilla::dom::CallerType aCallerType,
-                       mozilla::ErrorResult& aError);
   int32_t GetScreenYOuter(mozilla::dom::CallerType aCallerType,
                           mozilla::ErrorResult& aError);
-  void SetScreenYOuter(int32_t aScreenY, mozilla::dom::CallerType aCallerType,
-                       mozilla::ErrorResult& aError);
   int32_t GetOuterWidthOuter(mozilla::dom::CallerType aCallerType,
                              mozilla::ErrorResult& aError);
-  void SetOuterWidthOuter(int32_t aOuterWidth,
-                          mozilla::dom::CallerType aCallerType,
-                          mozilla::ErrorResult& aError);
   int32_t GetOuterHeightOuter(mozilla::dom::CallerType aCallerType,
                               mozilla::ErrorResult& aError);
-  void SetOuterHeightOuter(int32_t aOuterHeight,
-                           mozilla::dom::CallerType aCallerType,
-                           mozilla::ErrorResult& aError);
 
   friend class HashchangeCallback;
   friend class mozilla::dom::BarProp;
@@ -855,15 +830,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   nsresult GetInnerSize(mozilla::CSSSize& aSize);
   mozilla::CSSIntSize GetOuterSize(mozilla::dom::CallerType aCallerType,
                                    mozilla::ErrorResult& aError);
-  void SetOuterSize(int32_t aLengthCSSPixels, bool aIsWidth,
-                    mozilla::dom::CallerType aCallerType,
-                    mozilla::ErrorResult& aError);
-  void SetInnerSize(int32_t aLengthCSSPixels, bool aIsWidth,
-                    mozilla::dom::CallerType aCallerType,
-                    mozilla::ErrorResult& aError);
-  void SetScreenCoord(int32_t aCoordCSSPixels, bool aIsX,
-                      mozilla::dom::CallerType aCallerType,
-                      mozilla::ErrorResult& aError);
   nsRect GetInnerScreenRect();
   static mozilla::Maybe<mozilla::CSSIntSize> GetRDMDeviceSize(
       const Document& aDocument);

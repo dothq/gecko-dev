@@ -112,7 +112,6 @@ namespace jit {
   _(js::jit::AllocateBigIntNoGC)                                      \
   _(js::jit::AllocateFatInlineString)                                 \
   _(js::jit::AllocateDependentString)                                 \
-  _(js::jit::ArrayPushDensePure)                                      \
   _(js::jit::AssertMapObjectHash)                                     \
   _(js::jit::AssertPropertyLookup)                                    \
   _(js::jit::AssertSetObjectHash)                                     \
@@ -158,8 +157,7 @@ namespace jit {
   _(js::jit::ObjectIsConstructor)                                     \
   _(js::jit::PostGlobalWriteBarrier)                                  \
   _(js::jit::PostWriteBarrier)                                        \
-  _(js::jit::PostWriteElementBarrier<IndexInBounds::Yes>)             \
-  _(js::jit::PostWriteElementBarrier<IndexInBounds::Maybe>)           \
+  _(js::jit::PostWriteElementBarrier)                                 \
   _(js::jit::Printf0)                                                 \
   _(js::jit::Printf1)                                                 \
   _(js::jit::StringFromCharCodeNoGC)                                  \

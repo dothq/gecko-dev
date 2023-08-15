@@ -1213,7 +1213,8 @@ nsresult nsHttpChannel::SetupTransaction() {
     mCaps |= NS_HTTP_LOAD_ANONYMOUS_CONNECT_ALLOW_CLIENT_CERT;
   }
 
-  if (nsContentUtils::ShouldResistFingerprinting(this)) {
+  if (nsContentUtils::ShouldResistFingerprinting(this,
+                                                 RFPTarget::HttpUserAgent)) {
     mCaps |= NS_HTTP_USE_RFP;
   }
 
@@ -4013,12 +4014,12 @@ nsHttpChannel::OnCacheEntryCheck(nsICacheEntry* entry, uint32_t* aResult) {
     // the request method MUST be either GET or HEAD (see bug 175641) and
     // the cached response code must be < 400
     //
-    // the cached content must not be weakly framed or marked immutable
+    // the cached content must not be weakly framed
     //
     // do not override conditional headers when consumer has defined its own
     if (!mCachedResponseHead->NoStore() &&
         (mRequestHead.IsGet() || mRequestHead.IsHead()) &&
-        !LoadCustomConditionalRequest() && !weaklyFramed && !isImmutable &&
+        !LoadCustomConditionalRequest() && !weaklyFramed &&
         (mCachedResponseHead->Status() < 400)) {
       if (LoadConcurrentCacheAccess()) {
         // In case of concurrent read and also validation request we
@@ -9207,7 +9208,7 @@ void nsHttpChannel::SetOriginHeader() {
     } else if (HasNullRequestOrigin(this, uri, isAddonRequest)) {
       serializedOrigin.AssignLiteral("null");
     } else {
-      nsContentUtils::GetASCIIOrigin(uri, serializedOrigin);
+      nsContentUtils::GetWebExposedOriginSerialization(uri, serializedOrigin);
     }
   }
 
@@ -9234,7 +9235,7 @@ void nsHttpChannel::SetOriginHeader() {
     } else if (StaticPrefs::network_http_sendOriginHeader() == 1) {
       // Non-standard: Restrict Origin to same-origin loads if requested by user
       nsAutoCString currentOrigin;
-      nsContentUtils::GetASCIIOrigin(mURI, currentOrigin);
+      nsContentUtils::GetWebExposedOriginSerialization(mURI, currentOrigin);
       if (!serializedOrigin.EqualsIgnoreCase(currentOrigin.get())) {
         // Origin header suppressed by user setting.
         serializedOrigin.AssignLiteral("null");

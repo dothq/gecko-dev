@@ -89,9 +89,10 @@ if (AppConstants.MOZ_BACKGROUNDTASKS) {
   gExceptionPaths.push("resource://app/modules/backgroundtasks/");
 }
 
-// Bug 1710546 https://bugzilla.mozilla.org/show_bug.cgi?id=1710546
+// Temporary allowlist for shopping - we'll reference this soon.
 if (AppConstants.NIGHTLY_BUILD) {
-  gExceptionPaths.push("resource://builtin-addons/translations/");
+  gExceptionPaths.push("chrome://browser/content/shopping/shopping.html");
+  gExceptionPaths.push("chrome://global/content/shopping/ShoppingProduct.mjs");
 }
 
 if (AppConstants.NIGHTLY_BUILD) {
@@ -207,11 +208,6 @@ var whitelist = [
   { file: "resource://pdf.js/web/debugger.js" },
   { file: "resource://pdf.js/web/debugger.css" },
 
-  // resource://app/modules/translation/TranslationContentHandler.jsm
-  { file: "resource://app/modules/translation/BingTranslator.jsm" },
-  { file: "resource://app/modules/translation/GoogleTranslator.jsm" },
-  { file: "resource://app/modules/translation/YandexTranslator.jsm" },
-
   // Starting from here, files in the whitelist are bugs that need fixing.
   // Bug 1339424 (wontfix?)
   {
@@ -286,19 +282,6 @@ var whitelist = [
   { file: "chrome://browser/content/screenshots/copy.svg" },
   { file: "chrome://browser/content/screenshots/download.svg" },
   { file: "chrome://browser/content/screenshots/download-white.svg" },
-
-  // Bug 1824826 - Implement a view of history in Firefox View
-  { file: "resource://gre/modules/PlacesQuery.sys.mjs" },
-
-  // Should be removed in bug 1824826 when fxview-tab-list is used in Firefox View
-  { file: "resource://app/localization/en-US/browser/fxviewTabList.ftl" },
-  { file: "chrome://browser/content/firefoxview/fxview-tab-list.css" },
-  { file: "chrome://browser/content/firefoxview/fxview-tab-list.mjs" },
-  { file: "chrome://browser/content/firefoxview/fxview-tab-row.css" },
-
-  // Bug 1834176 - Imports of NetUtil can't be converted until hostutils is
-  // updated.
-  { file: "resource://gre/modules/NetUtil.sys.mjs" },
 ];
 
 if (AppConstants.NIGHTLY_BUILD && AppConstants.platform != "win") {

@@ -9,12 +9,10 @@
 #include "AccAttributes.h"
 #include "CachedTableAccessible.h"
 #include "DocAccessible-inl.h"
-#include "DocAccessibleChild.h"
 #include "EventTree.h"
 #include "HTMLImageMapAccessible.h"
 #include "mozilla/ProfilerMarkers.h"
 #include "nsAccCache.h"
-#include "nsAccessiblePivot.h"
 #include "nsAccUtils.h"
 #include "nsEventShell.h"
 #include "nsIIOService.h"
@@ -51,6 +49,7 @@
 #include "mozilla/ipc/ProcessChild.h"
 #include "mozilla/PresShell.h"
 #include "nsAccessibilityService.h"
+#include "mozilla/a11y/DocAccessibleChild.h"
 #include "mozilla/a11y/DocAccessibleParent.h"
 #include "mozilla/dom/AncestorIterator.h"
 #include "mozilla/dom/BrowserChild.h"
@@ -99,7 +98,6 @@ DocAccessible::DocAccessible(dom::Document* aDocument,
       mViewportCacheDirty(false),
       mLoadEventType(0),
       mPrevStateBits(0),
-      mVirtualCursor(nullptr),
       mPresShell(aPresShell),
       mIPCDoc(nullptr) {
   mGenericTypes |= eDocument;
@@ -122,7 +120,6 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(DocAccessible)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(DocAccessible,
                                                   LocalAccessible)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNotificationController)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mVirtualCursor)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mChildDocuments)
   for (const auto& hashEntry : tmp->mDependentIDsHashes.Values()) {
     for (const auto& providers : hashEntry->Values()) {
@@ -149,7 +146,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(DocAccessible, LocalAccessible)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mNotificationController)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mVirtualCursor)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mChildDocuments)
   tmp->mDependentIDsHashes.Clear();
   tmp->mNodeToAccessibleMap.Clear();
@@ -165,7 +161,6 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DocAccessible)
   NS_INTERFACE_MAP_ENTRY(nsIDocumentObserver)
   NS_INTERFACE_MAP_ENTRY(nsIMutationObserver)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
-  NS_INTERFACE_MAP_ENTRY(nsIAccessiblePivotObserver)
 NS_INTERFACE_MAP_END_INHERITING(HyperTextAccessible)
 
 NS_IMPL_ADDREF_INHERITED(DocAccessible, HyperTextAccessible)
@@ -501,11 +496,6 @@ void DocAccessible::Shutdown() {
     MOZ_ASSERT(!mIPCDoc);
   }
 
-  if (mVirtualCursor) {
-    mVirtualCursor->RemoveObserver(this);
-    mVirtualCursor = nullptr;
-  }
-
   mDependentIDsHashes.Clear();
   mNodeToAccessibleMap.Clear();
 
@@ -721,28 +711,6 @@ std::pair<nsPoint, nsRect> DocAccessible::ComputeScrollData(
   }
 
   return {scrollPoint, scrollRange};
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// nsIAccessiblePivotObserver
-
-NS_IMETHODIMP
-DocAccessible::OnPivotChanged(nsIAccessiblePivot* aPivot,
-                              nsIAccessible* aOldAccessible, int32_t aOldStart,
-                              int32_t aOldEnd, nsIAccessible* aNewAccessible,
-                              int32_t aNewStart, int32_t aNewEnd,
-                              PivotMoveReason aReason,
-                              TextBoundaryType aBoundaryType,
-                              bool aIsFromUserInput) {
-  RefPtr<AccEvent> event = new AccVCChangeEvent(
-      this, (aOldAccessible ? aOldAccessible->ToInternalAccessible() : nullptr),
-      aOldStart, aOldEnd,
-      (aNewAccessible ? aNewAccessible->ToInternalAccessible() : nullptr),
-      aNewStart, aNewEnd, aReason, aBoundaryType,
-      aIsFromUserInput ? eFromUserInput : eNoUserInput);
-  nsEventShell::FireEvent(event);
-
-  return NS_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1627,9 +1595,6 @@ void DocAccessible::DoInitialUpdate() {
 
           browserChild->SendPDocAccessibleConstructor(
               ipcDoc, nullptr, 0, mDocumentNode->GetBrowsingContext());
-#if !defined(XP_WIN)
-          ipcDoc->SendPDocAccessiblePlatformExtConstructor();
-#endif
         }
       }
     }
@@ -2021,6 +1986,7 @@ void DocAccessible::ProcessContentInserted(
 #endif
 
   TreeMutation mt(aContainer);
+  bool inserted = false;
   do {
     LocalAccessible* parent = iter.Child()->LocalParent();
     if (parent) {
@@ -2043,6 +2009,7 @@ void DocAccessible::ProcessContentInserted(
 #endif
         MoveChild(iter.Child(), aContainer,
                   previousSibling ? previousSibling->IndexInParent() + 1 : 0);
+        inserted = true;
       }
       continue;
     }
@@ -2055,6 +2022,7 @@ void DocAccessible::ProcessContentInserted(
 
       CreateSubtree(iter.Child());
       mt.AfterInsertion(iter.Child());
+      inserted = true;
       continue;
     }
 
@@ -2068,7 +2036,11 @@ void DocAccessible::ProcessContentInserted(
   logging::TreeInfo("children after insertion", logging::eVerbose, aContainer);
 #endif
 
-  FireEventsOnInsertion(aContainer);
+  // We might not have actually inserted anything if layout frame reconstruction
+  // occurred.
+  if (inserted) {
+    FireEventsOnInsertion(aContainer);
+  }
 }
 
 void DocAccessible::ProcessContentInserted(LocalAccessible* aContainer,
@@ -2375,19 +2347,43 @@ void DocAccessible::PutChildrenBack(
     int32_t idxInParent = -1;
     LocalAccessible* origContainer =
         AccessibleOrTrueContainer(content->GetFlattenedTreeParentNode());
-    if (origContainer) {
-      TreeWalker walker(origContainer);
-      if (walker.Seek(content)) {
-        LocalAccessible* prevChild = walker.Prev();
-        if (prevChild) {
-          idxInParent = prevChild->IndexInParent() + 1;
-          MOZ_DIAGNOSTIC_ASSERT(origContainer == prevChild->LocalParent(),
-                                "Broken tree");
-          origContainer = prevChild->LocalParent();
-        } else {
-          idxInParent = 0;
-        }
+    // This node has probably been detached or removed from the DOM, so we have
+    // nowhere to move it.
+    if (!origContainer) {
+      continue;
+    }
+
+    // If the target container or any of its ancestors aren't in the document,
+    // there's no need to determine where the child should go for relocation
+    // since the target tree is going away.
+    bool origContainerHasOutOfDocAncestor = false;
+    LocalAccessible* ancestor = origContainer;
+    while (ancestor) {
+      if (ancestor->IsDoc()) {
+        break;
       }
+      if (!ancestor->IsInDocument()) {
+        origContainerHasOutOfDocAncestor = true;
+        break;
+      }
+      ancestor = ancestor->LocalParent();
+    }
+    if (origContainerHasOutOfDocAncestor) {
+      continue;
+    }
+
+    TreeWalker walker(origContainer);
+    if (!walker.Seek(content)) {
+      continue;
+    }
+    LocalAccessible* prevChild = walker.Prev();
+    if (prevChild) {
+      idxInParent = prevChild->IndexInParent() + 1;
+      MOZ_DIAGNOSTIC_ASSERT(origContainer == prevChild->LocalParent(),
+                            "Broken tree");
+      origContainer = prevChild->LocalParent();
+    } else {
+      idxInParent = 0;
     }
 
     // The child may have already be in its ordinal place for 2 reasons:
@@ -2399,8 +2395,13 @@ void DocAccessible::PutChildrenBack(
     //    after load: $("list").setAttribute("aria-owns", "a b");
     //    later:      $("list").setAttribute("aria-owns", "");
     if (origContainer != owner || child->IndexInParent() != idxInParent) {
-      DebugOnly<bool> moved = MoveChild(child, origContainer, idxInParent);
-      MOZ_ASSERT(moved, "Failed to put child back.");
+      // Only attempt to move the child if the target container would accept it.
+      // Otherwise, just allow it to be removed from the tree, since it would
+      // not be allowed in normal tree creation.
+      if (origContainer->IsAcceptableChild(child->GetContent())) {
+        DebugOnly<bool> moved = MoveChild(child, origContainer, idxInParent);
+        MOZ_ASSERT(moved, "Failed to put child back.");
+      }
     } else {
       MOZ_ASSERT(!child->LocalPrevSibling() ||
                      !child->LocalPrevSibling()->IsRelocated(),
@@ -2566,19 +2567,24 @@ void DocAccessible::UncacheChildrenInSubtree(LocalAccessible* aRoot) {
     CachedTableAccessible::Invalidate(aRoot);
   }
 
+  // Put relocated children back in their original places instead of removing
+  // them from the tree.
   nsTArray<RefPtr<LocalAccessible>>* owned = mARIAOwnsHash.Get(aRoot);
-  uint32_t count = aRoot->ContentChildCount();
-  for (uint32_t idx = 0; idx < count; idx++) {
+  if (owned) {
+    PutChildrenBack(owned, 0);
+    MOZ_ASSERT(owned->IsEmpty(),
+               "Owned Accessibles should be cleared after PutChildrenBack.");
+    mARIAOwnsHash.Remove(aRoot);
+    owned = nullptr;
+  }
+
+  const uint32_t count = aRoot->ContentChildCount();
+  for (uint32_t idx = 0; idx < count; ++idx) {
     LocalAccessible* child = aRoot->ContentChildAt(idx);
 
-    if (child->IsRelocated()) {
-      MOZ_ASSERT(owned, "IsRelocated flag is out of sync with mARIAOwnsHash");
-      owned->RemoveElement(child);
-      if (owned->Length() == 0) {
-        mARIAOwnsHash.Remove(aRoot);
-        owned = nullptr;
-      }
-    }
+    MOZ_ASSERT(!child->IsRelocated(),
+               "No children should be relocated here. They should all have "
+               "been relocated by PutChildrenBack.");
 
     // Removing this accessible from the document doesn't mean anything about
     // accessibles for subdocuments, so skip removing those from the tree.

@@ -61,6 +61,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   Livemark: "resource://tps/modules/bookmarks.sys.mjs",
   Log: "resource://gre/modules/Log.sys.mjs",
   Logger: "resource://tps/logger.sys.mjs",
+  NetUtil: "resource://gre/modules/NetUtil.sys.mjs",
   Password: "resource://tps/modules/passwords.sys.mjs",
   PasswordValidator: "resource://services-sync/engines/passwords.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
@@ -83,12 +84,6 @@ XPCOMUtils.defineLazyGetter(lazy, "fileProtocolHandler", () => {
 XPCOMUtils.defineLazyGetter(lazy, "gTextDecoder", () => {
   return new TextDecoder();
 });
-
-ChromeUtils.defineModuleGetter(
-  lazy,
-  "NetUtil",
-  "resource://gre/modules/NetUtil.jsm"
-);
 
 // Options for wiping data during a sync
 const SYNC_RESET_CLIENT = "resetClient";
@@ -220,7 +215,10 @@ var TPS = {
           this._setupComplete = true;
 
           if (this._syncWipeAction) {
-            lazy.Weave.Svc.Prefs.set("firstSync", this._syncWipeAction);
+            lazy.Weave.Svc.PrefBranch.setCharPref(
+              "firstSync",
+              this._syncWipeAction
+            );
             this._syncWipeAction = null;
           }
 
@@ -297,10 +295,10 @@ var TPS = {
    * directly called via TPS.Sync()!
    */
   delayAutoSync: function TPS_delayAutoSync() {
-    lazy.Weave.Svc.Prefs.set("scheduler.immediateInterval", 7200);
-    lazy.Weave.Svc.Prefs.set("scheduler.idleInterval", 7200);
-    lazy.Weave.Svc.Prefs.set("scheduler.activeInterval", 7200);
-    lazy.Weave.Svc.Prefs.set("syncThreshold", 10000000);
+    lazy.Weave.Svc.PrefBranch.setIntPref("scheduler.immediateInterval", 7200);
+    lazy.Weave.Svc.PrefBranch.setIntPref("scheduler.idleInterval", 7200);
+    lazy.Weave.Svc.PrefBranch.setIntPref("scheduler.activeInterval", 7200);
+    lazy.Weave.Svc.PrefBranch.setIntPref("syncThreshold", 10000000);
   },
 
   quit: function TPS__quit() {
@@ -1175,7 +1173,10 @@ var TPS = {
       lazy.Logger.logInfo(
         "setting client.name to " + this.phases[this._currentPhase]
       );
-      lazy.Weave.Svc.Prefs.set("client.name", this.phases[this._currentPhase]);
+      lazy.Weave.Svc.PrefBranch.setStringPref(
+        "client.name",
+        this.phases[this._currentPhase]
+      );
 
       this._interceptSyncTelemetry();
 
@@ -1400,9 +1401,9 @@ var TPS = {
     // also handle it via the "weave:service:setup-complete" notification.
     if (wipeAction) {
       this._syncWipeAction = wipeAction;
-      lazy.Weave.Svc.Prefs.set("firstSync", wipeAction);
+      lazy.Weave.Svc.PrefBranch.setCharPref("firstSync", wipeAction);
     } else {
-      lazy.Weave.Svc.Prefs.reset("firstSync");
+      lazy.Weave.Svc.PrefBranch.clearUserPref("firstSync");
     }
     if (!(await lazy.Weave.Service.login())) {
       // We need to complete verification.

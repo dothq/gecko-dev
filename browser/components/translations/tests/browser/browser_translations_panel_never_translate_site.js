@@ -38,16 +38,11 @@ add_task(async function test_toggle_never_translate_site_menuitem() {
     "Simulate clicking never-translate-site in the settings menu, " +
       "denying translations permissions for this content window principal"
   );
-  await openSettingsMenu();
+  await openTranslationsSettingsMenuViaTranslationsButton();
 
   await assertIsNeverTranslateSite(SPANISH_PAGE_URL, false);
   await toggleNeverTranslateSite();
   await assertIsNeverTranslateSite(SPANISH_PAGE_URL, true);
-
-  await assertTranslationsButton(
-    { button: false },
-    "The translations button should be invisible"
-  );
 
   info("The page should still be in its original, untranslated form");
   await runInPage(async TranslationsTest => {
@@ -60,11 +55,6 @@ add_task(async function test_toggle_never_translate_site_menuitem() {
   });
 
   await navigate(SPANISH_PAGE_URL, "Reload the page");
-
-  await assertTranslationsButton(
-    { button: false },
-    "The translations button should be invisible"
-  );
 
   info("The page should still be in its original, untranslated form");
   await runInPage(async TranslationsTest => {
@@ -79,11 +69,6 @@ add_task(async function test_toggle_never_translate_site_menuitem() {
   await navigate(
     SPANISH_PAGE_URL_2,
     "Navigate to a Spanish page with the same content principal"
-  );
-
-  await assertTranslationsButton(
-    { button: false },
-    "The translations button should be invisible, because this content principal is denied"
   );
 
   info("The page should still be in its original, untranslated form");
@@ -102,7 +87,7 @@ add_task(async function test_toggle_never_translate_site_menuitem() {
   );
 
   await assertTranslationsButton(
-    { button: false },
+    { button: true },
     "The translations button should be visible, because this content principal " +
       "has not been denied translations permissions"
   );
@@ -191,16 +176,11 @@ add_task(
       "Simulate clicking never-translate-site in the settings menu, " +
         "denying translations permissions for this content window principal"
     );
-    await openSettingsMenu();
+    await openTranslationsSettingsMenuViaTranslationsButton();
 
     await assertIsNeverTranslateSite(SPANISH_PAGE_URL, false);
     await toggleNeverTranslateSite();
     await assertIsNeverTranslateSite(SPANISH_PAGE_URL, true);
-
-    await assertTranslationsButton(
-      { button: false },
-      "The translations button should be invisible"
-    );
 
     info("The page should still be in its original, untranslated form");
     await runInPage(async TranslationsTest => {
@@ -213,11 +193,6 @@ add_task(
     });
 
     await navigate(SPANISH_PAGE_URL, "Reload the page");
-
-    await assertTranslationsButton(
-      { button: false },
-      "The translations button should be invisible"
-    );
 
     info("The page should still be in its original, untranslated form");
     await runInPage(async TranslationsTest => {
@@ -232,11 +207,6 @@ add_task(
     await navigate(
       SPANISH_PAGE_URL_2,
       "Navigate to a Spanish page with the same content principal"
-    );
-
-    await assertTranslationsButton(
-      { button: false },
-      "The translations button should be invisible, because this content principal is denied"
     );
 
     info("The page should still be in its original, untranslated form");
@@ -255,7 +225,7 @@ add_task(
     );
 
     await assertTranslationsButton(
-      { button: false },
+      { button: true },
       "The translations button should be visible, because this content principal " +
         "has not been denied translations permissions"
     );
@@ -300,7 +270,7 @@ add_task(
       "Simulate clicking always-translate-language in the settings menu, " +
         "adding the document language to the alwaysTranslateLanguages pref"
     );
-    await openSettingsMenu();
+    await openTranslationsSettingsMenuViaTranslationsButton();
 
     await assertIsAlwaysTranslateLanguage("es", false);
     await assertIsNeverTranslateSite(SPANISH_PAGE_URL, false);
@@ -337,7 +307,7 @@ add_task(
       "Simulate clicking never-translate-site in the settings menu, " +
         "denying translations permissions for this content window principal"
     );
-    await openSettingsMenu();
+    await openTranslationsSettingsMenuViaTranslationsButton();
 
     await assertIsAlwaysTranslateLanguage("es", true);
     await assertIsNeverTranslateSite(SPANISH_PAGE_URL, false);
@@ -346,11 +316,6 @@ add_task(
 
     await assertIsAlwaysTranslateLanguage("es", true);
     await assertIsNeverTranslateSite(SPANISH_PAGE_URL, true);
-
-    await assertTranslationsButton(
-      { button: false },
-      "The translations button should be invisible"
-    );
 
     info("The page should still be in its original, untranslated form");
     await runInPage(async TranslationsTest => {
@@ -363,11 +328,6 @@ add_task(
     });
 
     await navigate(SPANISH_PAGE_URL, "Reload the page");
-
-    await assertTranslationsButton(
-      { button: false },
-      "The translations button should be invisible"
-    );
 
     info("The page should still be in its original, untranslated form");
     await runInPage(async TranslationsTest => {
@@ -382,11 +342,6 @@ add_task(
     await navigate(
       SPANISH_PAGE_URL_2,
       "Navigate to a Spanish page with the same content principal"
-    );
-
-    await assertTranslationsButton(
-      { button: false },
-      "The translations button should be invisible, because this content principal is denied"
     );
 
     info("The page should still be in its original, untranslated form");

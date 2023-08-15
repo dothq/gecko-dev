@@ -26,6 +26,7 @@
 #include "mozilla/dom/ContentPlaybackController.h"
 #include "mozilla/dom/SessionStorageManager.h"
 #include "mozilla/ipc/ProtocolUtils.h"
+#include "mozilla/layers/CompositorBridgeChild.h"
 #ifdef NS_PRINTING
 #  include "mozilla/layout/RemotePrintJobParent.h"
 #endif
@@ -329,6 +330,8 @@ void CanonicalBrowsingContext::ReplacedBy(
   txn.SetDisplayMode(GetDisplayMode());
   txn.SetForceDesktopViewport(GetForceDesktopViewport());
   txn.SetIsUnderHiddenEmbedderElement(GetIsUnderHiddenEmbedderElement());
+  txn.SetFullZoom(GetFullZoom());
+  txn.SetTextZoom(GetTextZoom());
 
   // Propagate the default load flags so that the TRR mode flags are forwarded
   // to the new browsing context. See bug 1828643.
@@ -443,12 +446,10 @@ CanonicalBrowsingContext::GetParentProcessWidgetContaining() {
 already_AddRefed<nsIBrowserDOMWindow>
 CanonicalBrowsingContext::GetBrowserDOMWindow() {
   RefPtr<CanonicalBrowsingContext> chromeTop = TopCrossChromeBoundary();
-  if (nsCOMPtr<nsIDOMChromeWindow> chromeWin =
-          do_QueryInterface(chromeTop->GetDOMWindow())) {
-    nsCOMPtr<nsIBrowserDOMWindow> bdw;
-    if (NS_SUCCEEDED(chromeWin->GetBrowserDOMWindow(getter_AddRefs(bdw)))) {
-      return bdw.forget();
-    }
+  nsGlobalWindowOuter* topWin;
+  if ((topWin = nsGlobalWindowOuter::Cast(chromeTop->GetDOMWindow())) &&
+      topWin->IsChromeWindow()) {
+    return do_AddRef(topWin->GetBrowserDOMWindow());
   }
   return nullptr;
 }
@@ -1340,26 +1341,27 @@ void CanonicalBrowsingContext::RecomputeAppWindowVisibility() {
   MOZ_RELEASE_ASSERT(IsChrome());
   MOZ_RELEASE_ASSERT(IsTop());
 
-  const bool isActive = [&] {
-    if (ForceAppWindowActive()) {
-      return true;
-    }
-    auto* docShell = GetDocShell();
-    if (NS_WARN_IF(!docShell)) {
-      return false;
-    }
-    nsCOMPtr<nsIWidget> widget;
+  const bool wasAlreadyActive = IsActive();
+
+  nsCOMPtr<nsIWidget> widget;
+  if (auto* docShell = GetDocShell()) {
     nsDocShell::Cast(docShell)->GetMainWidget(getter_AddRefs(widget));
-    if (NS_WARN_IF(!widget)) {
-      return false;
-    }
-    if (widget->IsFullyOccluded() ||
-        widget->SizeMode() == nsSizeMode_Minimized) {
-      return false;
-    }
-    return true;
-  }();
-  SetIsActive(isActive, IgnoreErrors());
+  }
+
+  Unused << NS_WARN_IF(!widget);
+  const bool isNowActive =
+      ForceAppWindowActive() || (widget && !widget->IsFullyOccluded() &&
+                                 widget->SizeMode() != nsSizeMode_Minimized);
+
+  if (isNowActive == wasAlreadyActive) {
+    return;
+  }
+
+  SetIsActive(isNowActive, IgnoreErrors());
+  if (widget) {
+    // Pause if we are not active, resume if we are active.
+    widget->PauseOrResumeCompositor(!isNowActive);
+  }
 }
 
 void CanonicalBrowsingContext::AdjustPrivateBrowsingCount(

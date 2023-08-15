@@ -90,6 +90,7 @@
 #endif
 #ifdef XP_MACOSX
 @BINPATH@/@MOZ_CHILD_PROCESS_NAME@.app/
+@BINPATH@/@MOZ_EME_PROCESS_NAME@.app/
 #else
 @BINPATH@/@MOZ_CHILD_PROCESS_NAME@
 #endif
@@ -111,7 +112,12 @@
 @BINPATH@/@DLL_PREFIX@mozgtk@DLL_SUFFIX@
 #ifdef MOZ_WAYLAND
 @BINPATH@/@DLL_PREFIX@mozwayland@DLL_SUFFIX@
+#ifdef MOZ_ENABLE_V4L2
+@BINPATH@/v4l2test
+#endif
+#ifdef MOZ_ENABLE_VAAPI
 @BINPATH@/vaapitest
+#endif
 #endif
 #endif
 

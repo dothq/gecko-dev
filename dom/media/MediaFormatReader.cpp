@@ -36,6 +36,7 @@
 #include "mozilla/TaskQueue.h"
 #include "mozilla/Unused.h"
 #include "nsContentUtils.h"
+#include "nsLiteralString.h"
 #include "nsPrintfCString.h"
 #include "nsTHashSet.h"
 
@@ -1266,8 +1267,10 @@ void MediaFormatReader::OnDemuxerInitDone(const MediaResult& aResult) {
   auto videoDuration = HasVideo() ? mInfo.mVideo.mDuration : TimeUnit::Zero();
   auto audioDuration = HasAudio() ? mInfo.mAudio.mDuration : TimeUnit::Zero();
 
-  auto duration = std::max(videoDuration, audioDuration);
-  if (duration.IsPositive()) {
+  // If the duration is 0 on both audio and video, it mMetadataDuration is to be
+  // Nothing(). Duration will use buffered ranges.
+  if (videoDuration.IsPositive() || audioDuration.IsPositive()) {
+    auto duration = std::max(videoDuration, audioDuration);
     mInfo.mMetadataDuration = Some(duration);
   }
 
@@ -2100,6 +2103,13 @@ void MediaFormatReader::HandleDemuxedSamples(
   decoder.mMeanRate.Update(sample->mDuration);
 
   if (!decoder.mDecoder) {
+    // In Clear Lead situation, the `mInfo` could change from unencrypted to
+    // encrypted so we need to ensure the CDM proxy is ready before creating a
+    // decoder.
+    if (decoder.IsEncrypted() &&
+        (IsWaitingOnCDMResource() || !ResolveSetCDMPromiseIfDone(aTrack))) {
+      return;
+    }
     mDecoderFactory->CreateDecoder(aTrack);
     return;
   }
@@ -3262,6 +3272,9 @@ Maybe<nsCString> MediaFormatReader::GetAudioProcessPerCodec() {
     }
     if (!StaticPrefs::media_utility_process_enabled()) {
       audioProcessPerCodecName += ",utility-disabled"_ns;
+    }
+    if (StaticPrefs::media_allow_audio_non_utility()) {
+      audioProcessPerCodecName += ",allow-non-utility"_ns;
     }
   }
   return Some(audioProcessPerCodecName);

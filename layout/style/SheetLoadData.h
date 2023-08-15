@@ -18,8 +18,9 @@
 #include "nsProxyRelease.h"
 
 namespace mozilla {
+class LoadBlockingAsyncEventDispatcher;
 class StyleSheet;
-}
+}  // namespace mozilla
 class nsICSSLoaderObserver;
 class nsINode;
 class nsIPrincipal;
@@ -39,9 +40,7 @@ static_assert(eAuthorSheetFeatures == 0 && eUserSheetFeatures == 1 &&
 
 class SheetLoadData final
     : public PreloaderBase,
-      public SharedSubResourceCacheLoadingValueBase<SheetLoadData>,
-      public nsIRunnable,
-      public nsIThreadObserver {
+      public SharedSubResourceCacheLoadingValueBase<SheetLoadData> {
   using MediaMatched = dom::LinkStyle::MediaMatched;
   using IsAlternate = dom::LinkStyle::IsAlternate;
   using UseSystemPrincipal = css::Loader::UseSystemPrincipal;
@@ -81,7 +80,7 @@ class SheetLoadData final
 
   nsIReferrerInfo* ReferrerInfo() const { return mReferrerInfo; }
 
-  void ScheduleLoadEventIfNeeded();
+  already_AddRefed<LoadBlockingAsyncEventDispatcher> PrepareLoadEventIfNeeded();
 
   NotNull<const Encoding*> DetermineNonBOMEncoding(const nsACString& aSegment,
                                                    nsIChannel*) const;
@@ -93,8 +92,6 @@ class SheetLoadData final
                                    nsIChannel* aChannel);
 
   NS_DECL_ISUPPORTS
-  NS_DECL_NSIRUNNABLE
-  NS_DECL_NSITHREADOBSERVER
 
   css::Loader& Loader() { return *mLoader; }
 
@@ -163,7 +160,8 @@ class SheetLoadData final
   // the original function call that started the load has returned.
   // This applies only to observer notifications; load/error events
   // are fired for any SheetLoadData that has a non-null
-  // mOwningNodeBeforeLoadEvent.
+  // mOwningNodeBeforeLoadEvent (though mMustNotify is used to avoid an event
+  // loop round-trip in that case).
   bool mMustNotify : 1;
 
   // mWasAlternate is true if the sheet was an alternate when the load data was
@@ -268,26 +266,16 @@ class SheetLoadData final
 
  private:
   const SheetLoadData& RootLoadData() const {
-    auto* top = this;
+    const auto* top = this;
     while (top->mParentData) {
       top = top->mParentData;
     }
     return *top;
   }
-
-  void FireLoadEvent(nsIThreadInternal* aThread);
 };
 
 using SheetLoadDataHolder = nsMainThreadPtrHolder<SheetLoadData>;
 
 }  // namespace mozilla::css
-
-/**
- * Casting SheetLoadData to nsISupports is ambiguous.
- * This method handles that.
- */
-inline nsISupports* ToSupports(mozilla::css::SheetLoadData* p) {
-  return NS_ISUPPORTS_CAST(nsIRunnable*, p);
-}
 
 #endif  // mozilla_css_SheetLoadData_h

@@ -112,6 +112,8 @@ firefoxview-collapse-button-hide =
 
 firefoxview-overview-nav = Recent browsing
   .title = Recent browsing
+firefoxview-overview-header = Recent browsing
+  .title = Recent browsing
 
 ## History in this context refers to browser history
 
@@ -141,3 +143,34 @@ firefoxview-synced-tabs-header = Tabs from other devices
 
 # Used for a link in collapsible cards, in the 'Recent browsing' page of Firefox View
 firefoxview-view-all-link = View all
+
+# Variables:
+#   $winID (Number) - The index of the owner window for this set of tabs
+firefoxview-opentabs-window-header =
+  .title = Window { $winID }
+
+# Variables:
+#   $winID (Number) - The index of the owner window (which is currently focused) for this set of tabs
+firefoxview-opentabs-current-window-header =
+  .title = Window { $winID } (Current)
+
+firefoxview-opentabs-focus-tab =
+  .title = Switch to this tab
+
+firefoxview-show-more = Show more
+firefoxview-show-less = Show less
+
+firefoxview-sort-history-by-date-label = Sort by date
+firefoxview-sort-history-by-site-label = Sort by site
+
+## Variables:
+##   $date (string) - Date to be formatted based on locale
+
+firefoxview-history-date-today = Today - { DATETIME($date, dateStyle: "full") }
+firefoxview-history-date-yesterday = Yesterday - { DATETIME($date, dateStyle: "full") }
+firefoxview-history-date-this-month = { DATETIME($date, dateStyle: "full") }
+firefoxview-history-date-prev-month = { DATETIME($date, month: "long", year: "numeric") }
+
+##
+
+firefoxview-show-all-history = Show all history

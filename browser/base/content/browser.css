@@ -484,11 +484,6 @@ toolbarpaletteitem {
   }
 }
 
-toolbarbutton.webextension-menuitem > .toolbarbutton-icon {
-  width: 16px;
-  height: 16px;
-}
-
 toolbarpaletteitem[removable="false"] {
   opacity: 0.5;
 }
@@ -548,10 +543,6 @@ toolbarpaletteitem[place="palette"] > #personal-bookmarks > #bookmarks-toolbar-b
 toolbar:not(#TabsToolbar) > #wrapper-personal-bookmarks,
 toolbar:not(#TabsToolbar) > #personal-bookmarks {
   flex: 1 auto;
-}
-
-#zoom-controls[cui-areatype="toolbar"]:not([overflowedItem=true]) > #zoom-reset-button > .toolbarbutton-text {
-  display: flex;
 }
 
 #reload-button:not([displaystop]) + #stop-button,

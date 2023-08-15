@@ -4699,6 +4699,19 @@ static bool SetJitCompilerOption(JSContext* cx, unsigned argc, Value* vp) {
     }
   }
 
+  // Changing code memory protection settings at runtime is not supported. Don't
+  // throw if not changing the setting because some jit-tests depend on that.
+  if (opt == JSJITCOMPILER_WRITE_PROTECT_CODE) {
+    uint32_t writeProtect;
+    MOZ_ALWAYS_TRUE(JS_GetGlobalJitCompilerOption(
+        cx, JSJITCOMPILER_WRITE_PROTECT_CODE, &writeProtect));
+    if (bool(number) != writeProtect) {
+      JS_ReportErrorASCII(cx, "Can't change code write protection at runtime");
+      return false;
+    }
+    return true;
+  }
+
   // Throw if trying to disable all the Wasm compilers.  The logic here is that
   // if we're trying to disable a compiler that is currently enabled and that is
   // the last compiler enabled then we must throw.
@@ -5877,10 +5890,12 @@ static bool OffThreadCompileModuleToStencil(JSContext* cx, unsigned argc,
                                             Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  if (args.length() != 1 || !args[0].isString()) {
-    JS_ReportErrorNumberASCII(cx, my_GetErrorMessage, nullptr,
-                              JSSMSG_INVALID_ARGS,
-                              "offThreadCompileModuleToStencil");
+  if (!args.requireAtLeast(cx, "offThreadCompileModuleToStencil", 1)) {
+    return false;
+  }
+  if (!args[0].isString()) {
+    const char* typeName = InformalValueTypeName(args[0]);
+    JS_ReportErrorASCII(cx, "expected string to parse, got %s", typeName);
     return false;
   }
 
@@ -5888,6 +5903,23 @@ static bool OffThreadCompileModuleToStencil(JSContext* cx, unsigned argc,
   CompileOptions options(cx);
   options.setIntroductionType("js shell offThreadCompileModuleToStencil")
       .setFileAndLine("<string>", 1);
+
+  if (args.length() >= 2) {
+    if (!args[1].isObject()) {
+      JS_ReportErrorASCII(cx,
+                          "offThreadCompileModuleToStencil: The 2nd argument "
+                          "must be an object");
+      return false;
+    }
+
+    // Offthread compilation requires that the debug metadata be set when the
+    // script is collected from offthread, rather than when compiled.
+    RootedObject opts(cx, &args[1].toObject());
+    if (!js::ParseCompileOptions(cx, options, opts, &fileNameBytes)) {
+      return false;
+    }
+  }
+
   options.setIsRunOnce(true).setSourceIsLazy(false);
   options.forceAsync = true;
 
@@ -6641,11 +6673,18 @@ static bool NewGlobal(JSContext* cx, unsigned argc, Value* vp) {
       creationOptions.setDefineSharedArrayBufferConstructor(v.toBoolean());
     }
 
-    if (!JS_GetProperty(cx, opts, "shouldResistFingerprinting", &v)) {
+    if (!JS_GetProperty(cx, opts, "forceUTC", &v)) {
       return false;
     }
     if (v.isBoolean()) {
-      behaviors.setShouldResistFingerprinting(v.toBoolean());
+      creationOptions.setForceUTC(v.toBoolean());
+    }
+
+    if (!JS_GetProperty(cx, opts, "alwaysUseFdlibm", &v)) {
+      return false;
+    }
+    if (v.isBoolean()) {
+      creationOptions.setAlwaysUseFdlibm(v.toBoolean());
     }
   }
 
@@ -8970,7 +9009,7 @@ static const JSFunctionSpecWithHelp shell_functions[] = {
 "  Check the syntax of a string, returning success value"),
 
     JS_FN_HELP("offThreadCompileModuleToStencil", OffThreadCompileModuleToStencil, 1, 0,
-"offThreadCompileModuleToStencil(code)",
+"offThreadCompileModuleToStencil(code[, options])",
 "  Compile |code| on a helper thread, returning a job ID. To wait for the\n"
 "  compilation to finish and and get the module stencil object call\n"
 "  |finishOffThreadStencil| passing the job ID."),
@@ -11411,6 +11450,11 @@ bool InitOptionParser(OptionParser& op) {
       !op.addStringOption('\0', "spectre-mitigations", "on/off",
                           "Whether Spectre mitigations are enabled (default: "
                           "off, on to enable)") ||
+      !op.addStringOption('\0', "write-protect-code", "on/off",
+                          "Whether the W^X policy is enforced to mark JIT code "
+                          "pages as either writable or executable but never "
+                          "both at the same time (default: on, off to "
+                          "disable)") ||
       !op.addStringOption('\0', "cache-ir-stubs", "on/off/call",
                           "Use CacheIR stubs (default: on, off to disable, "
                           "call to enable work-in-progress call ICs)") ||
@@ -12127,6 +12171,16 @@ bool SetContextJITOptions(JSContext* cx, const OptionParser& op) {
       jit::JitOptions.spectreJitToCxxCalls = false;
     } else {
       return OptionFailure("spectre-mitigations", str);
+    }
+  }
+
+  if (const char* str = op.getStringOption("write-protect-code")) {
+    if (strcmp(str, "on") == 0) {
+      jit::JitOptions.maybeSetWriteProtectCode(true);
+    } else if (strcmp(str, "off") == 0) {
+      jit::JitOptions.maybeSetWriteProtectCode(false);
+    } else {
+      return OptionFailure("write-protect-code", str);
     }
   }
 

@@ -228,8 +228,10 @@ XPCOMUtils.defineLazyServiceGetters(lazy, {
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.sys.mjs",
+  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   DevToolsShim: "chrome://devtools-startup/content/DevToolsShim.sys.mjs",
   E10SUtils: "resource://gre/modules/E10SUtils.sys.mjs",
+  HomePage: "resource:///modules/HomePage.sys.mjs",
   PrivacyFilter: "resource://gre/modules/sessionstore/PrivacyFilter.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
   RunState: "resource:///modules/sessionstore/RunState.sys.mjs",
@@ -239,16 +241,11 @@ ChromeUtils.defineESModuleGetters(lazy, {
   SessionSaver: "resource:///modules/sessionstore/SessionSaver.sys.mjs",
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.sys.mjs",
   TabAttributes: "resource:///modules/sessionstore/TabAttributes.sys.mjs",
+  TabCrashHandler: "resource:///modules/ContentCrashHandlers.sys.mjs",
   TabState: "resource:///modules/sessionstore/TabState.sys.mjs",
   TabStateCache: "resource:///modules/sessionstore/TabStateCache.sys.mjs",
   TabStateFlusher: "resource:///modules/sessionstore/TabStateFlusher.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
-});
-
-XPCOMUtils.defineLazyModuleGetters(lazy, {
-  BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
-  HomePage: "resource:///modules/HomePage.jsm",
-  TabCrashHandler: "resource:///modules/ContentCrashHandlers.jsm",
 });
 
 XPCOMUtils.defineLazyGetter(lazy, "blankURI", () => {
@@ -291,6 +288,18 @@ export var SessionStore = {
 
   get lastClosedObjectType() {
     return SessionStoreInternal.lastClosedObjectType;
+  },
+
+  get lastClosedActions() {
+    return [...SessionStoreInternal._lastClosedActions];
+  },
+
+  get LAST_ACTION_CLOSED_TAB() {
+    return SessionStoreInternal._LAST_ACTION_CLOSED_TAB;
+  },
+
+  get LAST_ACTION_CLOSED_WINDOW() {
+    return SessionStoreInternal._LAST_ACTION_CLOSED_WINDOW;
   },
 
   get willAutoRestore() {
@@ -376,6 +385,16 @@ export var SessionStore = {
 
   getClosedWindowCount: function ss_getClosedWindowCount() {
     return SessionStoreInternal.getClosedWindowCount();
+  },
+
+  // this should only be used by one caller (currently restoreLastClosedTabOrWindowOrSession in browser.js)
+  popLastClosedAction: function ss_popLastClosedAction() {
+    return SessionStoreInternal._lastClosedActions.pop();
+  },
+
+  // for testing purposes
+  resetLastClosedActions: function ss_resetLastClosedActions() {
+    SessionStoreInternal._lastClosedActions = [];
   },
 
   getClosedWindowData: function ss_getClosedWindowData() {
@@ -697,6 +716,63 @@ var SessionStoreInternal = {
   // number of tabs currently restoring
   _tabsRestoringCount: 0,
 
+  /**
+   * @typedef {Object} CloseAction
+   * @property {string} type
+   *   What the close action acted upon. One of either _LAST_ACTION_CLOSED_TAB or
+   *   _LAST_ACTION_CLOSED_WINDOW
+   * @property {number} closedId
+   *   The unique ID of the item that closed.
+   */
+
+  /**
+   * An in-order stack of close actions for tabs and windows.
+   * @type {CloseAction[]}
+   */
+  _lastClosedActions: [],
+
+  /**
+   * Removes an object from the _lastClosedActions list
+   *
+   * @param closedAction
+   *        Either _LAST_ACTION_CLOSED_TAB or _LAST_ACTION_CLOSED_WINDOW
+   * @param closedId
+   *        The closedId of a tab or window
+   */
+  _removeClosedAction(closedAction, closedId) {
+    let closedActionIndex = this._lastClosedActions.findIndex(
+      obj => obj.type == closedAction && obj.closedId == closedId
+    );
+
+    if (closedActionIndex > -1) {
+      this._lastClosedActions.splice(closedActionIndex, 1);
+    }
+  },
+
+  /**
+   * Add an object to the _lastClosedActions list and truncates the list if needed
+   *
+   * @param closedAction
+   *        Either _LAST_ACTION_CLOSED_TAB or _LAST_ACTION_CLOSED_WINDOW
+   * @param closedId
+   *        The closedId of a tab or window
+   */
+  _addClosedAction(closedAction, closedId) {
+    this._lastClosedActions.push({
+      type: closedAction,
+      closedId,
+    });
+    let maxLength = this._max_tabs_undo * this._max_windows_undo;
+
+    if (this._lastClosedActions.length > maxLength) {
+      this._lastClosedActions = this._lastClosedActions.slice(-maxLength);
+    }
+  },
+
+  _LAST_ACTION_CLOSED_TAB: "tab",
+
+  _LAST_ACTION_CLOSED_WINDOW: "window",
+
   _log: null,
 
   // When starting Firefox with a single private window, this is the place
@@ -784,10 +860,10 @@ var SessionStoreInternal = {
         !tabTimestamps.length ||
         tabTimestamps.sort((a, b) => b - a)[0] < this._closedWindows[0].closedAt
       ) {
-        return "window";
+        return this._LAST_ACTION_CLOSED_WINDOW;
       }
     }
-    return "tab";
+    return this._LAST_ACTION_CLOSED_TAB;
   },
 
   /**
@@ -2036,6 +2112,13 @@ var SessionStoreInternal = {
           // before our flush, so we need to filter again.
           lazy.PrivacyFilter.filterPrivateTabs(winData);
           this.maybeSaveClosedWindow(winData, isLastWindow);
+
+          if (!isLastWindow && winData.closedId > -1) {
+            this._addClosedAction(
+              this._LAST_ACTION_CLOSED_WINDOW,
+              winData.closedId
+            );
+          }
         }
 
         // Update the tabs data now that we've got the most
@@ -2413,6 +2496,7 @@ var SessionStoreInternal = {
 
     this._clearRestoringWindows();
     this._saveableClosedWindowData = new WeakSet();
+    this._lastClosedActions = [];
   },
 
   /**
@@ -2805,7 +2889,7 @@ var SessionStoreInternal = {
    * @param closedTabs (array)
    *        The list of closed tabs for a window.
    */
-  saveClosedTabData(winData, closedTabs, tabData) {
+  saveClosedTabData(winData, closedTabs, tabData, saveAction = true) {
     // Find the index of the first tab in the list
     // of closed tabs that was closed before our tab.
     let index = closedTabs.findIndex(tab => {
@@ -2835,6 +2919,10 @@ var SessionStoreInternal = {
       }
     } else {
       winData._lastClosedTabGroupCount = -1;
+    }
+
+    if (saveAction) {
+      this._addClosedAction(this._LAST_ACTION_CLOSED_TAB, tabData.closedId);
     }
 
     // Truncate the list of closed tabs, if needed.
@@ -2875,6 +2963,8 @@ var SessionStoreInternal = {
       this._closedWindowTabs.delete(closedTab.permanentKey);
       delete closedTab.permanentKey;
     }
+
+    this._removeClosedAction(this._LAST_ACTION_CLOSED_TAB, closedTab.closedId);
 
     return closedTab;
   },
@@ -3332,8 +3422,16 @@ var SessionStoreInternal = {
   },
 
   getClosedTabDataForWindow: function ssi_getClosedTabDataForWindow(aWindow) {
+    // We need to enable wrapping reflectors in order to allow the cloning of
+    // objects containing FormDatas, which could be stored by
+    // form-associated custom elements.
+    let options = { wrapReflectors: true };
     if ("__SSi" in aWindow) {
-      return Cu.cloneInto(this._windows[aWindow.__SSi]._closedTabs, {});
+      return Cu.cloneInto(
+        this._windows[aWindow.__SSi]._closedTabs,
+        {},
+        options
+      );
     }
 
     if (!DyingWindowCache.has(aWindow)) {
@@ -3344,7 +3442,7 @@ var SessionStoreInternal = {
     }
 
     let data = DyingWindowCache.get(aWindow);
-    return Cu.cloneInto(data._closedTabs, {});
+    return Cu.cloneInto(data._closedTabs, {}, options);
   },
 
   undoCloseTab: function ssi_undoCloseTab(aWindow, aIndex) {
@@ -5304,6 +5402,18 @@ var SessionStoreInternal = {
    * @returns Array of closed windows.
    */
   _removeClosedWindow(index) {
+    // remove all of the closed tabs from the _lastClosedActions list
+    // before removing the window from it
+    for (let closedTab of this._closedWindows[index]._closedTabs) {
+      this._removeClosedAction(
+        this._LAST_ACTION_CLOSED_TAB,
+        closedTab.closedId
+      );
+    }
+    this._removeClosedAction(
+      this._LAST_ACTION_CLOSED_WINDOW,
+      this._closedWindows[index].closedId
+    );
     let windows = this._closedWindows.splice(index, 1);
     this._closedObjectsChanged = true;
     return windows;
@@ -6184,6 +6294,13 @@ var SessionStoreInternal = {
                 value.selectedIndex,
                 value.value
               );
+              break;
+            }
+            if (
+              value.hasOwnProperty("value") &&
+              value.hasOwnProperty("state")
+            ) {
+              root.addCustomElement(isXpath, key, value.value, value.state);
               break;
             }
             if (

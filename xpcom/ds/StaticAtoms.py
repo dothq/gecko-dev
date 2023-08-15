@@ -342,6 +342,7 @@ STATIC_ATOMS = [
     Atom("dir", "dir"),
     Atom("dirAutoSetBy", "dirAutoSetBy"),
     Atom("directory", "directory"),
+    Atom("dirname", "dirname"),
     Atom("disableOutputEscaping", "disable-output-escaping"),
     Atom("disabled", "disabled"),
     Atom("disableglobalhistory", "disableglobalhistory"),
@@ -2428,6 +2429,8 @@ STATIC_ATOMS = [
     Atom("onupdateend", "onupdateend"),
     Atom("onaddsourcebuffer", "onaddsourcebuffer"),
     Atom("onremovesourcebuffer", "onremovesourcebuffer"),
+    # WebCodecs
+    Atom("ondequeue", "ondequeue"),
     # RDF (not used by mozilla-central, but still used by comm-central)
     Atom("about", "about"),
     Atom("ID", "ID"),

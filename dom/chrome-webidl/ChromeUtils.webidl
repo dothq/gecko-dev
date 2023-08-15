@@ -555,12 +555,6 @@ partial namespace ChromeUtils {
   object createError(DOMString message, optional object? stack = null);
 
   /**
-   * Request performance metrics to the current process & all content processes.
-   */
-  [NewObject]
-  Promise<sequence<PerformanceInfoDictionary>> requestPerformanceMetrics();
-
-  /**
    * Set the collection of specific detailed performance timing information.
    * Selecting 0 for the mask will end existing collection. All metrics that
    * are chosen will be cleared after updating the mask.
@@ -714,6 +708,8 @@ partial namespace ChromeUtils {
    */
   [ChromeOnly]
   sequence<UTF8String> getAllPossibleUtilityActorNames();
+
+  boolean shouldResistFingerprinting(JSRFPTarget target);
 };
 
 /*
@@ -884,42 +880,6 @@ dictionary ParentProcInfoDictionary {
 };
 
 /**
- * Dictionaries duplicating IPDL types in dom/ipc/DOMTypes.ipdlh
- * Used by requestPerformanceMetrics
- */
-dictionary MediaMemoryInfoDictionary {
-  unsigned long long audioSize = 0;
-  unsigned long long videoSize = 0;
-  unsigned long long resourcesSize = 0;
-};
-
-dictionary MemoryInfoDictionary {
-  unsigned long long domDom = 0;
-  unsigned long long domStyle = 0;
-  unsigned long long domOther = 0;
-  unsigned long long jsMemUsage = 0;
-  required MediaMemoryInfoDictionary media;
-};
-
-dictionary CategoryDispatchDictionary
-{
-  unsigned short category = 0;
-  unsigned short count = 0;
-};
-
-dictionary PerformanceInfoDictionary {
-  ByteString host = "";
-  unsigned long pid = 0;
-  unsigned long long windowId = 0;
-  unsigned long long duration = 0;
-  unsigned long long counterId = 0;
-  boolean isWorker = false;
-  boolean isTopLevel = false;
-  required MemoryInfoDictionary memoryInfo;
-  sequence<CategoryDispatchDictionary> items = [];
-};
-
-/**
  * Used by requestIOActivity() to return the number of bytes
  * that were read (rx) and/or written (tx) for a given location.
  *
@@ -1068,4 +1028,11 @@ enum PopupBlockerState {
   "openBlocked",
   "openAbused",
   "openOverridden",
+};
+
+// Subset of RFPTargets.inc with JS callers.
+// New values need to be handled in ChromeUtils::ShouldResistFingerprinting.
+enum JSRFPTarget {
+  "RoundWindowSize",
+  "SiteSpecificZoom",
 };

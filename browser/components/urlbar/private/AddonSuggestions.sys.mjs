@@ -133,6 +133,10 @@ export class AddonSuggestions extends BaseFeature {
     return ["suggest.addons", "suggest.quicksuggest.nonsponsored"];
   }
 
+  get merinoProvider() {
+    return "amo";
+  }
+
   enable(enabled) {
     if (enabled) {
       lazy.QuickSuggestRemoteSettings.register(this);
@@ -175,19 +179,9 @@ export class AddonSuggestions extends BaseFeature {
       }
 
       const results = JSON.parse(new TextDecoder("utf-8").decode(buffer));
-
-      // The keywords in remote settings are full keywords. Map each one to an
-      // array containing the full keyword's first word plus every subsequent
-      // prefix of the full keyword.
-      await suggestionsMap.add(results, fullKeyword => {
-        let keywords = [fullKeyword];
-        let spaceIndex = fullKeyword.search(/\s/);
-        if (spaceIndex >= 0) {
-          for (let i = spaceIndex; i < fullKeyword.length; i++) {
-            keywords.push(fullKeyword.substring(0, i));
-          }
-        }
-        return keywords;
+      await suggestionsMap.add(results, {
+        mapKeyword:
+          lazy.SuggestionsMap.MAP_KEYWORD_PREFIXES_STARTING_AT_FIRST_WORD,
       });
       if (rs != lazy.QuickSuggestRemoteSettings.rs) {
         return;
@@ -233,7 +227,6 @@ export class AddonSuggestions extends BaseFeature {
     }
 
     const payload = {
-      source: suggestion.source,
       icon: suggestion.icon,
       url: suggestion.url,
       title: suggestion.title,
@@ -243,7 +236,6 @@ export class AddonSuggestions extends BaseFeature {
       helpUrl: lazy.QuickSuggest.HELP_URL,
       shouldNavigate: true,
       dynamicType: "addons",
-      telemetryType: "amo",
     };
 
     return Object.assign(
@@ -364,7 +356,7 @@ export class AddonSuggestions extends BaseFeature {
     return commands;
   }
 
-  handlePossibleCommand(queryContext, result, selType) {
+  handleCommand(queryContext, result, selType) {
     switch (selType) {
       case RESULT_MENU_COMMAND.HELP:
         // "help" is handled by UrlbarInput, no need to do anything here.

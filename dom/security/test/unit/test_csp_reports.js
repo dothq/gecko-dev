@@ -2,7 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+const { NetUtil } = ChromeUtils.importESModule(
+  "resource://gre/modules/NetUtil.sys.mjs"
+);
 const { HttpServer } = ChromeUtils.import("resource://testing-common/httpd.js");
 
 var httpServer = new HttpServer();
@@ -192,11 +194,10 @@ function run_test() {
       csp.shouldLoad(
         Ci.nsIContentPolicy.TYPE_SCRIPT,
         null, // nsICSPEventListener
+        null, // aLoadInfo
         NetUtil.newURI("http://blocked.test/foo.js"),
         null,
-        true,
-        null,
-        false
+        true
       );
     }
   );
@@ -259,11 +260,10 @@ function run_test() {
     csp.shouldLoad(
       Ci.nsIContentPolicy.TYPE_IMAGE,
       null, // nsICSPEventListener
+      null, // nsILoadInfo
       NetUtil.newURI("data:image/png;base64," + base64data),
       null,
-      true,
-      null,
-      false
+      true
     );
   });
 
@@ -273,11 +273,10 @@ function run_test() {
     csp.shouldLoad(
       Ci.nsIContentPolicy.TYPE_SUBDOCUMENT,
       null, // nsICSPEventListener
+      null, // nsILoadInfo
       NetUtil.newURI("intent://mymaps.com/maps?um=1&ie=UTF-8&fb=1&sll"),
       null,
-      true,
-      null,
-      false
+      true
     );
   });
 
@@ -289,11 +288,10 @@ function run_test() {
     csp.shouldLoad(
       Ci.nsIContentPolicy.TYPE_SCRIPT,
       null, // nsICSPEventListener
+      null, // nsILoadInfo
       NetUtil.newURI(selfSpec + "#bar"),
       null,
-      true,
-      null,
-      false
+      true
     );
   });
 }

@@ -3,14 +3,21 @@
 
 "use strict";
 
+/* import-globals-from ../head-common.js */
+
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/browser/components/migration/tests/browser/head-common.js",
+  this
+);
+
 const { sinon } = ChromeUtils.importESModule(
   "resource://testing-common/Sinon.sys.mjs"
 );
-const { MigrationWizardConstants } = ChromeUtils.importESModule(
-  "chrome://browser/content/migration/migration-wizard-constants.mjs"
-);
 const { InternalTestingProfileMigrator } = ChromeUtils.importESModule(
   "resource:///modules/InternalTestingProfileMigrator.sys.mjs"
+);
+const { TelemetryTestUtils } = ChromeUtils.importESModule(
+  "resource://testing-common/TelemetryTestUtils.sys.mjs"
 );
 
 const DIALOG_URL =
@@ -33,6 +40,7 @@ const RESOURCE_TYPES_WITH_QUANTITIES = [
   MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PASSWORDS,
   MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.FORMDATA,
   MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PAYMENT_METHODS,
+  MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS,
 ];
 
 /**
@@ -121,14 +129,34 @@ async function waitForMigrationWizardDialogTab() {
  * @param {object|string} expectedProfile
  *   The profile object or string that is expected to be passed
  *   to the InternalTestingProfileMigrator.migrate function.
+ * @param {number[]} [errorResourceTypes=[]]
+ *   Resource types that we should pretend have failed to complete
+ *   their migration properly.
+ * @param {number} [totalExtensions=1]
+ *   If migrating extensions, the total that should be reported to
+ *   have been found from the source browser.
+ * @param {number} [matchedExtensions=1]
+ *   If migrating extensions, the number of extensions that should
+ *   be reported as having equivalent matches for this browser.
  * @returns {Promise<undefined>}
  */
 async function waitForTestMigration(
   availableResourceTypes,
   expectedResourceTypes,
-  expectedProfile
+  expectedProfile,
+  errorResourceTypes = [],
+  totalExtensions = 1,
+  matchedExtensions = 1
 ) {
   let sandbox = sinon.createSandbox();
+  let sourceHistogram = TelemetryTestUtils.getAndClearHistogram(
+    "FX_MIGRATION_SOURCE_BROWSER"
+  );
+  let usageHistogram =
+    TelemetryTestUtils.getAndClearKeyedHistogram("FX_MIGRATION_USAGE");
+  let errorHistogram = TelemetryTestUtils.getAndClearKeyedHistogram(
+    "FX_MIGRATION_ERRORS"
+  );
 
   // Fake out the getResources method of the migrator so that we return
   // a single fake MigratorResource per availableResourceType.
@@ -156,6 +184,11 @@ async function waitForTestMigration(
     logins: EXPECTED_QUANTITY,
     cards: EXPECTED_QUANTITY,
   });
+
+  sandbox
+    .stub(MigrationUtils, "getSourceIdForTelemetry")
+    .withArgs(InternalTestingProfileMigrator.key)
+    .returns(InternalTestingProfileMigrator.sourceID);
 
   // Fake out the migrate method of the migrator and assert that the
   // next time it's called, its arguments match our expectations.
@@ -185,9 +218,79 @@ async function waitForTestMigration(
         );
 
         for (let resourceType of expectedResourceTypes) {
-          aProgressCallback(resourceType);
+          let shouldError = errorResourceTypes.includes(resourceType);
+          if (
+            resourceType == MigrationUtils.resourceTypes.EXTENSIONS &&
+            !shouldError
+          ) {
+            let progressValue;
+            if (totalExtensions == matchedExtensions) {
+              progressValue = MigrationWizardConstants.PROGRESS_VALUE.SUCCESS;
+            } else if (
+              totalExtensions > matchedExtensions &&
+              matchedExtensions
+            ) {
+              progressValue = MigrationWizardConstants.PROGRESS_VALUE.INFO;
+            } else {
+              Assert.ok(
+                false,
+                "Total and matched extensions should be greater than 0 on success." +
+                  `Total: ${totalExtensions}, Matched: ${matchedExtensions}`
+              );
+            }
+            aProgressCallback(resourceType, !shouldError, {
+              totalExtensions: Array(totalExtensions),
+              importedExtensions: Array(matchedExtensions),
+              progressValue,
+            });
+          } else {
+            aProgressCallback(resourceType, !shouldError);
+          }
         }
+
+        let usageHistogramSnapshot =
+          usageHistogram.snapshot()[InternalTestingProfileMigrator.key];
+
+        let errorHistogramSnapshot =
+          errorHistogram.snapshot()[InternalTestingProfileMigrator.key];
+
+        for (let resourceTypeName in MigrationUtils.resourceTypes) {
+          let resourceType = MigrationUtils.resourceTypes[resourceTypeName];
+          if (resourceType == MigrationUtils.resourceTypes.ALL) {
+            continue;
+          }
+
+          if (expectedResourceTypes.includes(resourceType)) {
+            Assert.equal(
+              usageHistogramSnapshot.values[Math.log2(resourceType)],
+              1,
+              `Should have set resource type ${resourceTypeName} on the FX_MIGRATION_USAGE keyed histogram.`
+            );
+
+            if (errorResourceTypes.includes(resourceType)) {
+              Assert.equal(
+                errorHistogramSnapshot.values[Math.log2(resourceType)],
+                1,
+                `Should have set resource type ${resourceTypeName} on the FX_MIGRATION_ERRORS keyed histogram.`
+              );
+            }
+          } else {
+            let value = usageHistogramSnapshot.values[Math.log2(resourceType)];
+            Assert.ok(
+              value === 0 || value === undefined,
+              `Should not have set resource type ${resourceTypeName} on the FX_MIGRATION_USAGE keyed histogram.`
+            );
+          }
+        }
+
         Services.obs.notifyObservers(null, "Migration:Ended");
+
+        TelemetryTestUtils.assertHistogram(
+          sourceHistogram,
+          InternalTestingProfileMigrator.sourceID,
+          1
+        );
+
         resolve();
       });
   }).finally(async () => {
@@ -242,7 +345,7 @@ async function selectResourceTypesAndStartMigration(
 
   // And then check the right checkboxes for the resource types.
   let resourceTypeList = shadow.querySelector("#resource-type-list");
-  for (let resourceType in MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES) {
+  for (let resourceType of getChoosableResourceTypes()) {
     let node = resourceTypeList.querySelector(
       `label[data-resource-type="${resourceType}"]`
     );
@@ -287,9 +390,10 @@ function assertQuantitiesShown(wizard, expectedResourceTypes) {
       let successText =
         progressGroup.querySelector(".success-text").textContent;
 
-      Assert.ok(
-        progressIcon.classList.contains("completed"),
-        "Should be showing completed state."
+      Assert.notEqual(
+        progressIcon.getAttribute("state"),
+        "loading",
+        "Should no longer be in the loading state."
       );
 
       if (
@@ -320,6 +424,13 @@ function assertQuantitiesShown(wizard, expectedResourceTypes) {
             "Form history",
             `Found expected form data string: ${successText}`
           );
+        } else if (
+          progressGroup.dataset.resourceType ==
+          MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS
+        ) {
+          // waitForTestMigration by default sets up a "successful" migration of 1
+          // extension.
+          Assert.stringMatches(successText, "1 extension");
         } else {
           Assert.notEqual(
             successText.indexOf(EXPECTED_QUANTITY),

@@ -87,13 +87,13 @@ AudioSink::AudioSink(AbstractThread* aThread,
 }
 
 AudioSink::~AudioSink() {
-  // Generally instances of AudioSink should be properly Shutdown manually.
-  // The only way deleting an AudioSink without shutdown an happen is if the
+  // Generally instances of AudioSink should be properly shut down manually.
+  // The only way deleting an AudioSink without shutdown can happen is if the
   // dispatch back to the MDSM thread after initializing it asynchronously
   // fails. When that's the case, the stream has been initialized but not
   // started. Manually shutdown the AudioStream in this case.
   if (mAudioStream) {
-    mAudioStream->Shutdown();
+    mAudioStream->ShutDown();
   }
 }
 
@@ -128,7 +128,7 @@ nsresult AudioSink::InitializeAudioStream(
       new AudioStream(*this, mOutputRate, mOutputChannels, channelMap);
   nsresult rv = mAudioStream->Init(aAudioDevice);
   if (NS_FAILED(rv)) {
-    mAudioStream->Shutdown();
+    mAudioStream->ShutDown();
     mAudioStream = nullptr;
     return rv;
   }
@@ -142,9 +142,8 @@ nsresult AudioSink::InitializeAudioStream(
   return NS_OK;
 }
 
-nsresult AudioSink::Start(
-    const media::TimeUnit& aStartTime,
-    MozPromiseHolder<MediaSink::EndedPromise>& aEndedPromise) {
+RefPtr<MediaSink::EndedPromise> AudioSink::Start(
+    const media::TimeUnit& aStartTime) {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
 
   mAudioQueueListener = mAudioQueue.PushEvent().Connect(
@@ -160,7 +159,7 @@ nsresult AudioSink::Start(
   // ready to be played.
   NotifyAudioNeeded();
 
-  return mAudioStream->Start(aEndedPromise);
+  return mAudioStream->Start();
 }
 
 TimeUnit AudioSink::GetPosition() {
@@ -195,7 +194,7 @@ TimeUnit AudioSink::UnplayedDuration() const {
 }
 
 void AudioSink::ReenqueueUnplayedAudioDataIfNeeded() {
-  // This is OK: the AudioStream has been shut down. Shutdown guarantees that
+  // This is OK: the AudioStream has been shut down. ShutDown guarantees that
   // the audio callback thread won't call back again.
   mProcessedSPSCQueue->ResetThreadIds();
 
@@ -275,12 +274,14 @@ void AudioSink::ReenqueueUnplayedAudioDataIfNeeded() {
         "the audio queue at pts %lf",
         packetFrameCount, 1000 * static_cast<float>(packetFrameCount) / rate,
         time.ToSeconds());
-    mAudioQueue.PushFront(packet);
+    // The audio data's timestamp would be adjusted already if we're in looping,
+    // so we don't want to adjust them again.
+    mAudioQueue.PushFront(packet,
+                          MediaQueue<AudioData>::TimestampAdjustment::Disable);
   }
 }
 
-Maybe<MozPromiseHolder<MediaSink::EndedPromise>> AudioSink::Shutdown(
-    ShutdownCause aShutdownCause) {
+void AudioSink::ShutDown() {
   MOZ_ASSERT(mOwnerThread->IsCurrentThreadIn());
 
   mAudioQueueListener.DisconnectIfExists();
@@ -290,15 +291,11 @@ Maybe<MozPromiseHolder<MediaSink::EndedPromise>> AudioSink::Shutdown(
   Maybe<MozPromiseHolder<MediaSink::EndedPromise>> rv;
 
   if (mAudioStream) {
-    rv = mAudioStream->Shutdown(aShutdownCause);
+    mAudioStream->ShutDown();
     mAudioStream = nullptr;
-    if (aShutdownCause == ShutdownCause::Muting) {
-      ReenqueueUnplayedAudioDataIfNeeded();
-    }
+    ReenqueueUnplayedAudioDataIfNeeded();
   }
   mProcessedQueueFinished = true;
-
-  return rv;
 }
 
 void AudioSink::SetVolume(double aVolume) {
@@ -528,6 +525,9 @@ void AudioSink::NotifyAudioNeeded() {
       // we pushed to the audio hardware. We must push silence into the audio
       // hardware so that the next audio packet begins playback at the correct
       // time. But don't push more than the ring buffer can receive.
+      SINK_LOG("Sample time %" PRId64 " > frames parsed %" PRId64,
+               sampleTime.value(), mFramesParsed);
+
       missingFrames = std::min<int64_t>(
           std::min<int64_t>(INT32_MAX, missingFrames.value()),
           SampleToFrame(mProcessedSPSCQueue->AvailableWrite()));

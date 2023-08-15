@@ -21,6 +21,10 @@ urlbar-group-best-match =
 urlbar-group-addon =
   .label = { -brand-product-name } extension
 
+# Label shown above a Pocket suggestion in the urlbar results.
+urlbar-group-pocket =
+  .label = Recommended reads
+
 # Tooltip text for the block button shown in top pick rows.
 firefox-suggest-urlbar-block =
   .title = Dismiss this suggestion
@@ -43,8 +47,12 @@ urlbar-result-menu-learn-more-about-firefox-suggest =
 # A message shown in a result when the user gives feedback on it.
 firefox-suggest-feedback-acknowledgment = Thanks for your feedback
 
-# A message that replaces a result when the user dismisses it.
-firefox-suggest-dismissal-acknowledgment = Thanks for your feedback. You won’t see this again.
+# A message that replaces a result when the user dismisses a single suggestion.
+firefox-suggest-dismissal-acknowledgment-one = Thanks for your feedback. You won’t see this suggestion again.
+
+# A message that replaces a result when the user dismisses all suggestions of a
+# particular type.
+firefox-suggest-dismissal-acknowledgment-all = Thanks for your feedback. You won’t see these suggestions anymore.
 
 ## These strings are used for weather suggestions in the urlbar.
 
@@ -80,6 +88,8 @@ firefox-suggest-weather-high-low = High: { $high }°{ $unit } · Low: { $low }°
 #   $provider (String) - The name of the weather provider
 firefox-suggest-weather-sponsored = { $provider } · Sponsored
 
+## These strings are used as labels of menu items in the result menu.
+
 firefox-suggest-command-show-less-frequently =
   .label = Show less frequently
 firefox-suggest-command-dont-show-this =
@@ -90,6 +100,8 @@ firefox-suggest-command-not-interested =
   .label = Not interested
 firefox-suggest-weather-command-inaccurate-location =
   .label = Report inaccurate location
+
+## These strings are used for add-on suggestions in the urlbar.
 
 # This string displays the number of reviews in the add-ons suggestion
 # Variables:
@@ -102,6 +114,16 @@ firefox-suggest-addons-reviews =
 
 # This string explaining that the add-on suggestion is a recommendation.
 firefox-suggest-addons-recommended = Recommended
+
+## These strings are used for Pocket suggestions in the urlbar.
+
+# This string is shown in Pocket suggestions and indicates the suggestion is
+# from Pocket and is related to a particular keyword that matches the user's
+# search string.
+# Variables:
+#   $keywordSubstringTyped (string) - The part of the suggestion keyword that the user typed
+#   $keywordSubstringNotTyped (string) - The part of the suggestion keyword that the user did not yet type
+firefox-suggest-pocket-bottom-text = { -pocket-brand-name } · Related to <strong>{ $keywordSubstringTyped }</strong>{ $keywordSubstringNotTyped }
 
 ## These strings are used in the preferences UI (about:preferences). Their names
 ## follow the naming conventions of other strings used in the preferences UI.
@@ -124,18 +146,24 @@ addressbar-best-match-learn-more = Learn more
 
 # First Firefox Suggest toggle button main label and description. This toggle
 # controls non-sponsored suggestions related to the user's search string.
+# .description is transferred into a separate paragraph by the moz-toggle
+# custom element code.
 addressbar-firefox-suggest-nonsponsored =
   .label = Suggestions from the web
   .description = Get suggestions from { -brand-product-name } related to your search.
 
 # Second Firefox Suggest toggle button main label and description. This toggle
 # controls sponsored suggestions related to the user's search string.
+# .description is transferred into a separate paragraph by the moz-toggle
+# custom element code.
 addressbar-firefox-suggest-sponsored =
   .label = Suggestions from sponsors
   .description = Support the development of { -brand-short-name } with occasional sponsored suggestions.
 
 # Third Firefox Suggest toggle button main label and description. This toggle
 # controls data collection related to the user's search string.
+# .description is transferred into a separate paragraph by the moz-toggle
+# custom element code.
 addressbar-firefox-suggest-data-collection =
   .label = Improve the { -firefox-suggest-brand-name } experience
   .description = Help create a richer search experience by allowing { -vendor-short-name } to process your search queries.

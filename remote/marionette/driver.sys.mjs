@@ -4,12 +4,6 @@
 
 import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
-import {
-  element,
-  ShadowRoot,
-  WebElement,
-} from "chrome://remote/content/marionette/element.sys.mjs";
-
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -24,6 +18,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   DebounceCallback: "chrome://remote/content/marionette/sync.sys.mjs",
   disableEventsActor:
     "chrome://remote/content/marionette/actors/MarionetteEventsParent.sys.mjs",
+  dom: "chrome://remote/content/shared/DOM.sys.mjs",
   enableEventsActor:
     "chrome://remote/content/marionette/actors/MarionetteEventsParent.sys.mjs",
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
@@ -44,6 +39,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   registerCommandsActor:
     "chrome://remote/content/marionette/actors/MarionetteCommandsParent.sys.mjs",
   RemoteAgent: "chrome://remote/content/components/RemoteAgent.sys.mjs",
+  ShadowRoot: "chrome://remote/content/marionette/web-reference.sys.mjs",
   TabManager: "chrome://remote/content/shared/TabManager.sys.mjs",
   TimedPromise: "chrome://remote/content/marionette/sync.sys.mjs",
   Timeouts: "chrome://remote/content/shared/webdriver/Capabilities.sys.mjs",
@@ -55,6 +51,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "chrome://remote/content/shared/Navigate.sys.mjs",
   waitForObserverTopic: "chrome://remote/content/marionette/sync.sys.mjs",
   WebDriverSession: "chrome://remote/content/shared/webdriver/Session.sys.mjs",
+  WebElement: "chrome://remote/content/marionette/web-reference.sys.mjs",
   windowManager: "chrome://remote/content/shared/WindowManager.sys.mjs",
   WindowState: "chrome://remote/content/marionette/browser.sys.mjs",
 });
@@ -65,16 +62,21 @@ XPCOMUtils.defineLazyGetter(lazy, "logger", () =>
 
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
-const SUPPORTED_STRATEGIES = new Set([
-  element.Strategy.ClassName,
-  element.Strategy.Selector,
-  element.Strategy.ID,
-  element.Strategy.Name,
-  element.Strategy.LinkText,
-  element.Strategy.PartialLinkText,
-  element.Strategy.TagName,
-  element.Strategy.XPath,
-]);
+XPCOMUtils.defineLazyGetter(
+  lazy,
+  "supportedStrategies",
+  () =>
+    new Set([
+      lazy.dom.Strategy.ClassName,
+      lazy.dom.Strategy.Selector,
+      lazy.dom.Strategy.ID,
+      lazy.dom.Strategy.Name,
+      lazy.dom.Strategy.LinkText,
+      lazy.dom.Strategy.PartialLinkText,
+      lazy.dom.Strategy.TagName,
+      lazy.dom.Strategy.XPath,
+    ])
+);
 
 // Timeout used to abort fullscreen, maximize, and minimize
 // commands if no window manager is present.
@@ -464,8 +466,17 @@ GeckoDriver.prototype.newSession = async function (cmd) {
         const browsingContext = this.curBrowser.contentBrowser.browsingContext;
         this.currentSession.contentBrowsingContext = browsingContext;
 
+        // Bug 1838381 - Only use a longer unload timeout for desktop, because
+        // on Android only the initial document is loaded, and loading a
+        // specific page during startup doesn't succeed.
+        const options = {};
+        if (!lazy.AppInfo.isAndroid) {
+          options.unloadTimeout = 5000;
+        }
+
         await lazy.waitForInitialNavigationCompleted(
-          browsingContext.webProgress
+          browsingContext.webProgress,
+          options
         );
 
         this.curBrowser.contentBrowser.focus();
@@ -475,7 +486,7 @@ GeckoDriver.prototype.newSession = async function (cmd) {
       this.dialog = lazy.modal.findModalDialogs(this.curBrowser);
     }
 
-    lazy.registerCommandsActor();
+    lazy.registerCommandsActor(this.currentSession.id);
     lazy.enableEventsActor();
 
     Services.obs.addObserver(this, TOPIC_BROWSER_READY);
@@ -1361,7 +1372,7 @@ GeckoDriver.prototype.switchToFrame = async function (cmd) {
   // Bug 1495063: Elements should be passed as WebReference reference
   let byFrame;
   if (typeof el == "string") {
-    byFrame = WebElement.fromUUID(el).toJSON();
+    byFrame = lazy.WebElement.fromUUID(el).toJSON();
   } else if (el) {
     byFrame = el;
   }
@@ -1399,21 +1410,6 @@ GeckoDriver.prototype.setTimeouts = function (cmd) {
   this.currentSession.timeouts = lazy.Timeouts.fromJSON(merged);
 };
 
-/** Single tap. */
-GeckoDriver.prototype.singleTap = async function (cmd) {
-  lazy.assert.open(this.getBrowsingContext());
-
-  let { id, x, y } = cmd.parameters;
-  let webEl = WebElement.fromUUID(id).toJSON();
-
-  await this.getActor().singleTap(
-    webEl,
-    x,
-    y,
-    this.currentSession.capabilities
-  );
-};
-
 /**
  * Perform a series of grouped actions at the specified points in time.
  *
@@ -1437,11 +1433,7 @@ GeckoDriver.prototype.performActions = async function (cmd) {
   await this._handleUserPrompts();
 
   const actions = cmd.parameters.actions;
-
-  await this.getActor().performActions(
-    actions,
-    this.currentSession.capabilities
-  );
+  await this.getActor().performActions(actions);
 };
 
 /**
@@ -1487,7 +1479,7 @@ GeckoDriver.prototype.releaseActions = async function () {
 GeckoDriver.prototype.findElement = async function (cmd) {
   const { element: el, using, value } = cmd.parameters;
 
-  if (!SUPPORTED_STRATEGIES.has(using)) {
+  if (!lazy.supportedStrategies.has(using)) {
     throw new lazy.error.InvalidSelectorError(
       `Strategy not supported: ${using}`
     );
@@ -1499,7 +1491,7 @@ GeckoDriver.prototype.findElement = async function (cmd) {
 
   let startNode;
   if (typeof el != "undefined") {
-    startNode = WebElement.fromUUID(el).toJSON();
+    startNode = lazy.WebElement.fromUUID(el).toJSON();
   }
 
   let opts = {
@@ -1541,7 +1533,7 @@ GeckoDriver.prototype.findElement = async function (cmd) {
 GeckoDriver.prototype.findElementFromShadowRoot = async function (cmd) {
   const { shadowRoot, using, value } = cmd.parameters;
 
-  if (!SUPPORTED_STRATEGIES.has(using)) {
+  if (!lazy.supportedStrategies.has(using)) {
     throw new lazy.error.InvalidSelectorError(
       `Strategy not supported: ${using}`
     );
@@ -1553,7 +1545,7 @@ GeckoDriver.prototype.findElementFromShadowRoot = async function (cmd) {
 
   const opts = {
     all: false,
-    startNode: ShadowRoot.fromUUID(shadowRoot).toJSON(),
+    startNode: lazy.ShadowRoot.fromUUID(shadowRoot).toJSON(),
     timeout: this.currentSession.timeouts.implicit,
   };
 
@@ -1586,7 +1578,7 @@ GeckoDriver.prototype.findElementFromShadowRoot = async function (cmd) {
 GeckoDriver.prototype.findElements = async function (cmd) {
   const { element: el, using, value } = cmd.parameters;
 
-  if (!SUPPORTED_STRATEGIES.has(using)) {
+  if (!lazy.supportedStrategies.has(using)) {
     throw new lazy.error.InvalidSelectorError(
       `Strategy not supported: ${using}`
     );
@@ -1598,7 +1590,7 @@ GeckoDriver.prototype.findElements = async function (cmd) {
 
   let startNode;
   if (typeof el != "undefined") {
-    startNode = WebElement.fromUUID(el).toJSON();
+    startNode = lazy.WebElement.fromUUID(el).toJSON();
   }
 
   let opts = {
@@ -1637,7 +1629,7 @@ GeckoDriver.prototype.findElements = async function (cmd) {
 GeckoDriver.prototype.findElementsFromShadowRoot = async function (cmd) {
   const { shadowRoot, using, value } = cmd.parameters;
 
-  if (!SUPPORTED_STRATEGIES.has(using)) {
+  if (!lazy.supportedStrategies.has(using)) {
     throw new lazy.error.InvalidSelectorError(
       `Strategy not supported: ${using}`
     );
@@ -1649,7 +1641,7 @@ GeckoDriver.prototype.findElementsFromShadowRoot = async function (cmd) {
 
   const opts = {
     all: true,
-    startNode: ShadowRoot.fromUUID(shadowRoot).toJSON(),
+    startNode: lazy.ShadowRoot.fromUUID(shadowRoot).toJSON(),
     timeout: this.currentSession.timeouts.implicit,
   };
 
@@ -1690,7 +1682,7 @@ GeckoDriver.prototype.getShadowRoot = async function (cmd) {
     cmd.parameters.id,
     lazy.pprint`Expected "id" to be a string, got ${cmd.parameters.id}`
   );
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getShadowRoot(webEl);
 };
@@ -1743,7 +1735,7 @@ GeckoDriver.prototype.clickElement = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   const actor = this.getActor();
 
@@ -1795,7 +1787,7 @@ GeckoDriver.prototype.getElementAttribute = async function (cmd) {
 
   const id = lazy.assert.string(cmd.parameters.id);
   const name = lazy.assert.string(cmd.parameters.name);
-  const webEl = WebElement.fromUUID(id).toJSON();
+  const webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getElementAttribute(webEl, name);
 };
@@ -1829,7 +1821,7 @@ GeckoDriver.prototype.getElementProperty = async function (cmd) {
 
   const id = lazy.assert.string(cmd.parameters.id);
   const name = lazy.assert.string(cmd.parameters.name);
-  const webEl = WebElement.fromUUID(id).toJSON();
+  const webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getElementProperty(webEl, name);
 };
@@ -1861,7 +1853,7 @@ GeckoDriver.prototype.getElementText = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getElementText(webEl);
 };
@@ -1892,7 +1884,7 @@ GeckoDriver.prototype.getElementTagName = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getElementTagName(webEl);
 };
@@ -1921,7 +1913,7 @@ GeckoDriver.prototype.isElementDisplayed = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().isElementDisplayed(
     webEl,
@@ -1958,7 +1950,7 @@ GeckoDriver.prototype.getElementValueOfCssProperty = async function (cmd) {
 
   let id = lazy.assert.string(cmd.parameters.id);
   let prop = lazy.assert.string(cmd.parameters.propertyName);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getElementValueOfCssProperty(webEl, prop);
 };
@@ -1989,7 +1981,7 @@ GeckoDriver.prototype.isElementEnabled = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().isElementEnabled(
     webEl,
@@ -2021,7 +2013,7 @@ GeckoDriver.prototype.isElementSelected = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().isElementSelected(
     webEl,
@@ -2046,7 +2038,7 @@ GeckoDriver.prototype.getElementRect = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getElementRect(webEl);
 };
@@ -2077,7 +2069,7 @@ GeckoDriver.prototype.sendKeysToElement = async function (cmd) {
 
   let id = lazy.assert.string(cmd.parameters.id);
   let text = lazy.assert.string(cmd.parameters.text);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().sendKeysToElement(
     webEl,
@@ -2109,7 +2101,7 @@ GeckoDriver.prototype.clearElement = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   await this.getActor().clearElement(webEl);
 };
@@ -2468,7 +2460,7 @@ GeckoDriver.prototype.takeScreenshot = async function (cmd) {
   full = typeof full == "undefined" ? true : full;
   scroll = typeof scroll == "undefined" ? true : scroll;
 
-  let webEl = id ? WebElement.fromUUID(id).toJSON() : null;
+  let webEl = id ? lazy.WebElement.fromUUID(id).toJSON() : null;
 
   // Only consider full screenshot if no element has been specified
   full = webEl ? false : full;
@@ -3258,7 +3250,7 @@ GeckoDriver.prototype.getComputedLabel = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
 
   return this.getActor().getComputedLabel(webEl);
 };
@@ -3279,7 +3271,7 @@ GeckoDriver.prototype.getComputedRole = async function (cmd) {
   await this._handleUserPrompts();
 
   let id = lazy.assert.string(cmd.parameters.id);
-  let webEl = WebElement.fromUUID(id).toJSON();
+  let webEl = lazy.WebElement.fromUUID(id).toJSON();
   return this.getActor().getComputedRole(webEl);
 };
 
@@ -3292,7 +3284,6 @@ GeckoDriver.prototype.commands = {
   "Marionette:Quit": GeckoDriver.prototype.quit,
   "Marionette:SetContext": GeckoDriver.prototype.setContext,
   "Marionette:SetScreenOrientation": GeckoDriver.prototype.setScreenOrientation,
-  "Marionette:SingleTap": GeckoDriver.prototype.singleTap,
 
   // Addon service
   "Addon:Install": GeckoDriver.prototype.installAddon,

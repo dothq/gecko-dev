@@ -25,7 +25,6 @@
 #include "nsAtom.h"
 #include "nsIMemoryReporter.h"
 #include "nsTArray.h"
-#include "nsIMemoryReporter.h"
 #include "nsSize.h"
 
 namespace mozilla {
@@ -33,8 +32,11 @@ enum class MediaFeatureChangeReason : uint8_t;
 enum class StylePageSizeOrientation : uint8_t;
 enum class StyleRuleChangeKind : uint32_t;
 
+class ErrorResult;
+
 template <typename Integer, typename Number, typename LinearStops>
 struct StyleTimingFunction;
+struct StylePagePseudoClassFlags;
 struct StylePiecewiseLinearFunction;
 using StyleComputedTimingFunction =
     StyleTimingFunction<int32_t, float, StylePiecewiseLinearFunction>;
@@ -46,6 +48,7 @@ namespace dom {
 class CSSImportRule;
 class Element;
 class ShadowRoot;
+struct PropertyDefinition;
 }  // namespace dom
 namespace gfx {
 class FontPaletteValueSet;
@@ -254,9 +257,10 @@ class ServoStyleSet {
       PseudoStyleType aType);
 
   // Get a ComputedStyle for a pageContent box with the specified page-name.
-  // A page name that is null or the empty atom gets the global page style.
+  // A page name that is null or the empty atom and has no pseudo classes gets
+  // the global page style.
   already_AddRefed<ComputedStyle> ResolvePageContentStyle(
-      const nsAtom* aPageName);
+      const nsAtom* aPageName, const StylePagePseudoClassFlags& aPseudo);
 
   already_AddRefed<ComputedStyle> ResolveXULTreePseudoStyle(
       dom::Element* aParentElement, nsCSSAnonBoxPseudoStaticAtom* aPseudoTag,
@@ -514,7 +518,6 @@ class ServoStyleSet {
    */
   already_AddRefed<ComputedStyle> ReparentComputedStyle(
       ComputedStyle* aComputedStyle, ComputedStyle* aNewParent,
-      ComputedStyle* aNewParentIgnoringFirstLine,
       ComputedStyle* aNewLayoutParent, dom::Element* aElement);
 
   /**
@@ -549,14 +552,6 @@ class ServoStyleSet {
    * Gets the pending snapshots to handle from the restyle manager.
    */
   const SnapshotTable& Snapshots();
-
-  /**
-   * Resolve all DeclarationBlocks attached to mapped
-   * presentation attributes cached on the document.
-   *
-   * Call this before jumping into Servo's style system.
-   */
-  void ResolveMappedAttrDeclarationBlocks();
 
   /**
    * Clear our cached mNonInheritingComputedStyles.
@@ -665,6 +660,8 @@ class ServoStyleSet {
     aStyles.AppendElements(mCachedAnonymousContentStyles.Elements() + loc.first,
                            loc.second);
   }
+
+  void RegisterProperty(const dom::PropertyDefinition&, ErrorResult&);
 
  private:
   // Map of AnonymousContentKey values to an (index, length) pair pointing into

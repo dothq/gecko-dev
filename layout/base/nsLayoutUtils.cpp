@@ -83,6 +83,7 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/ServoStyleSetInlines.h"
 #include "mozilla/StaticPrefs_apz.h"
+#include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_font.h"
 #include "mozilla/StaticPrefs_general.h"
@@ -7003,8 +7004,10 @@ nsIFrame* nsLayoutUtils::GetReferenceFrame(nsIFrame* aFrame) {
       result |= gfx::ShapedTextFlags::TEXT_OPTIMIZE_SPEED;
       break;
     case StyleTextRendering::Auto:
-      if (aPresContext && aStyleFont->mFont.size.ToCSSPixels() <
-                              aPresContext->GetAutoQualityMinFontSize()) {
+      if (aPresContext &&
+          aStyleFont->mFont.size.ToCSSPixels() <
+              aPresContext->DevPixelsToFloatCSSPixels(
+                  StaticPrefs::browser_display_auto_quality_min_font_size())) {
         result |= gfx::ShapedTextFlags::TEXT_OPTIMIZE_SPEED;
       }
       break;
@@ -8815,11 +8818,11 @@ ScrollMetadata nsLayoutUtils::ComputeScrollMetadata(
         // compositor.
         if (presContext->GetDynamicToolbarState() ==
             DynamicToolbarState::Collapsed) {
-          metrics.SetFixedLayerMargins(
-              ScreenMargin(0, 0,
-                           presContext->GetDynamicToolbarHeight() -
-                               presContext->GetDynamicToolbarMaxHeight(),
-                           0));
+          metrics.SetFixedLayerMargins(ScreenMargin(
+              0, 0,
+              ScreenCoord(presContext->GetDynamicToolbarHeight() -
+                          presContext->GetDynamicToolbarMaxHeight()),
+              0));
         }
       }
     }
@@ -9457,6 +9460,33 @@ bool nsLayoutUtils::IsInvisibleBreak(nsINode* aNode,
   return lineNonEmpty;
 }
 
+/* static */
+nsRect nsLayoutUtils::ComputeSVGViewBox(SVGViewportElement* aElement) {
+  if (!aElement) {
+    return {};
+  }
+
+  if (aElement->HasViewBox()) {
+    // If a `viewBox` attribute is specified for the SVG viewport creating
+    // element:
+    // 1. The reference box is positioned at the origin of the coordinate
+    //    system established by the `viewBox` attribute.
+    // 2. The dimension of the reference box is set to the width and height
+    //    values of the `viewBox` attribute.
+    const SVGViewBox& value = aElement->GetAnimatedViewBox()->GetAnimValue();
+    return nsRect(nsPresContext::CSSPixelsToAppUnits(value.x),
+                  nsPresContext::CSSPixelsToAppUnits(value.y),
+                  nsPresContext::CSSPixelsToAppUnits(value.width),
+                  nsPresContext::CSSPixelsToAppUnits(value.height));
+  }
+
+  // No viewBox is specified, uses the nearest SVG viewport as reference
+  // box.
+  svgFloatSize viewportSize = aElement->GetViewportSize();
+  return nsRect(0, 0, nsPresContext::CSSPixelsToAppUnits(viewportSize.width),
+                nsPresContext::CSSPixelsToAppUnits(viewportSize.height));
+}
+
 static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
                                       StyleGeometryBox aGeometryBox) {
   MOZ_ASSERT(aFrame->GetContent()->IsSVGElement());
@@ -9482,28 +9512,7 @@ static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
         // We should not render without a viewport so return an empty rect.
         break;
       }
-
-      if (viewportElement->HasViewBox()) {
-        // If a `viewBox` attribute is specified for the SVG viewport creating
-        // element:
-        // 1. The reference box is positioned at the origin of the coordinate
-        //    system established by the `viewBox` attribute.
-        // 2. The dimension of the reference box is set to the width and height
-        //    values of the `viewBox` attribute.
-        const SVGViewBox& value =
-            viewportElement->GetAnimatedViewBox()->GetAnimValue();
-        r = nsRect(nsPresContext::CSSPixelsToAppUnits(value.x),
-                   nsPresContext::CSSPixelsToAppUnits(value.y),
-                   nsPresContext::CSSPixelsToAppUnits(value.width),
-                   nsPresContext::CSSPixelsToAppUnits(value.height));
-      } else {
-        // No viewBox is specified, uses the nearest SVG viewport as reference
-        // box.
-        svgFloatSize viewportSize = viewportElement->GetViewportSize();
-        r = nsRect(0, 0, nsPresContext::CSSPixelsToAppUnits(viewportSize.width),
-                   nsPresContext::CSSPixelsToAppUnits(viewportSize.height));
-      }
-
+      r = nsLayoutUtils::ComputeSVGViewBox(viewportElement);
       break;
     }
     case StyleGeometryBox::NoBox:
@@ -9529,8 +9538,9 @@ static nsRect ComputeSVGReferenceRect(nsIFrame* aFrame,
   return r;
 }
 
-static nsRect ComputeHTMLReferenceRect(nsIFrame* aFrame,
-                                       StyleGeometryBox aGeometryBox) {
+/* static */
+nsRect nsLayoutUtils::ComputeHTMLReferenceRect(const nsIFrame* aFrame,
+                                               StyleGeometryBox aGeometryBox) {
   nsRect r;
 
   // For elements with associated CSS layout box, the used value for fill-box,
@@ -9559,6 +9569,26 @@ static nsRect ComputeHTMLReferenceRect(nsIFrame* aFrame,
   }
 
   return r;
+}
+
+/* static */
+StyleGeometryBox nsLayoutUtils::CoordBoxToGeometryBox(StyleCoordBox aCoordBox) {
+  switch (aCoordBox) {
+    case StyleCoordBox::ContentBox:
+      return StyleGeometryBox::ContentBox;
+    case StyleCoordBox::PaddingBox:
+      return StyleGeometryBox::PaddingBox;
+    case StyleCoordBox::BorderBox:
+      return StyleGeometryBox::BorderBox;
+    case StyleCoordBox::FillBox:
+      return StyleGeometryBox::FillBox;
+    case StyleCoordBox::StrokeBox:
+      return StyleGeometryBox::StrokeBox;
+    case StyleCoordBox::ViewBox:
+      return StyleGeometryBox::ViewBox;
+  }
+  MOZ_ASSERT_UNREACHABLE("Unknown coord-box type");
+  return StyleGeometryBox::BorderBox;
 }
 
 static StyleGeometryBox ShapeBoxToGeometryBox(const StyleShapeBox& aBox) {

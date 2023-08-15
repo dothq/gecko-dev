@@ -9,12 +9,8 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   SitePermissions: "resource:///modules/SitePermissions.sys.mjs",
+  webrtcUI: "resource:///modules/webrtcUI.sys.mjs",
 });
-ChromeUtils.defineModuleGetter(
-  lazy,
-  "webrtcUI",
-  "resource:///modules/webrtcUI.jsm"
-);
 
 XPCOMUtils.defineLazyServiceGetter(
   lazy,
@@ -976,7 +972,13 @@ function prompt(aActor, aBrowser, aRequest) {
 
           // We don't have access to any screen content besides our browser tabs
           // on Wayland, therefore there are no previews we can show.
-          if (!isPipeWireDetected || mediaSource == "browser") {
+          if (
+            (!isPipeWireDetected || mediaSource == "browser") &&
+            Services.prefs.getBoolPref(
+              "media.getdisplaymedia.previews.enabled",
+              true
+            )
+          ) {
             video.deviceId = deviceId;
             let constraints = {
               video: { mediaSource, deviceId: { exact: deviceId } },

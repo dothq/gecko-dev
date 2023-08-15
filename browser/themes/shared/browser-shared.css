@@ -32,7 +32,6 @@
 
   --tabs-navbar-shadow-size: 1px;
 
-  --panel-separator-color: color-mix(in srgb, currentColor 25%, transparent);
   --panel-shortcut-color: inherit;
   --panelui-subview-transition-duration: 150ms;
 
@@ -80,6 +79,8 @@
   --urlbar-icon-border-radius: calc(var(--toolbarbutton-border-radius) - 1px);
   --urlbar-popup-url-color: -moz-nativehyperlinktext;
 
+  --pocket-icon-fill: #ef4056;
+
   --lwt-additional-images: none;
   --lwt-background-alignment: right top;
   --lwt-background-tiling: no-repeat;
@@ -97,7 +98,6 @@
 @media (prefers-contrast) {
   :root {
     --autocomplete-popup-separator-color: color-mix(in srgb, currentColor 86%, transparent);
-    --panel-separator-color: currentColor;
     --urlbar-icon-fill-opacity: 1;
     --checkbox-checked-border-color: var(--checkbox-checked-bgcolor);
   }
@@ -697,13 +697,6 @@ menupopup::part(drop-indicator) {
 .ac-has-end-icon {
   text-overflow: ellipsis;
   overflow: hidden;
-}
-
-/* ENABLE DEVTOOLS POPUP */
-@media (-moz-platform: macos), (-moz-platform: windows) {
-  #enable-devtools-popup {
-    font-size: 1.18em;
-  }
 }
 
 #sharing-tabs-warning-panel > hbox[type="window"] > vbox > label > #sharing-warning-screen-panel-header,

@@ -164,12 +164,9 @@ def test_link_from_nested_context_with_target(session, inline, iframe, target):
     wait.until(lambda s: s.find.css("#foo"))
 
 
-# Capability needed as long as no valid certificate is available:
-#   https://github.com/web-platform-tests/wpt/issues/28847
-@pytest.mark.capabilities({"acceptInsecureCerts": True})
 def test_link_cross_origin(session, inline, url):
     base_path = ("/webdriver/tests/support/html/subframe.html" +
-                 "?pipe=header(Cross-Origin-Opener-Policy,same-origin")
+                 "?pipe=header(Cross-Origin-Opener-Policy,same-origin)")
     target_page = url(base_path, protocol="https", domain="alt")
 
     session.url = inline("<a href='{}'>click me</a>".format(target_page), protocol="https")

@@ -790,6 +790,7 @@ void nsDisplayListBuilder::AddEffectUpdate(dom::RemoteBrowser* aBrowser,
 void nsDisplayListBuilder::EndFrame() {
   NS_ASSERTION(!mInInvalidSubtree,
                "Someone forgot to cleanup mInInvalidSubtree!");
+  mCurrentContainerASR = nullptr;
   mActiveScrolledRoots.Clear();
   mEffectsUpdates.Clear();
   FreeClipChains();
@@ -2280,6 +2281,10 @@ void nsDisplayList::PaintRoot(nsDisplayListBuilder* aBuilder, gfxContext* aCtx,
   Document* document = presShell->GetDocument();
 
   ScopeExit g([&]() {
+#ifdef DEBUG
+    MOZ_ASSERT(!layerManager || !layerManager->GetTarget());
+#endif
+
     // For layers-free mode, we check the invalidation state bits in the
     // EndTransaction. So we clear the invalidation state bits after
     // EndTransaction.
@@ -2324,6 +2329,7 @@ void nsDisplayList::PaintRoot(nsDisplayListBuilder* aBuilder, gfxContext* aCtx,
 
     bool sent = false;
     if (aFlags & PAINT_IDENTICAL_DISPLAY_LIST) {
+      MOZ_ASSERT(!aCtx);
       sent = layerManager->EndEmptyTransaction();
     }
 
@@ -6264,7 +6270,7 @@ Matrix4x4 nsDisplayTransform::GetResultingTransformMatrixInternal(
   if (aProperties.HasTransform()) {
     result = nsStyleTransformMatrix::ReadTransforms(
         aProperties.mTranslate, aProperties.mRotate, aProperties.mScale,
-        aProperties.mMotion, aProperties.mTransform, aRefBox,
+        aProperties.mMotion.ptrOr(nullptr), aProperties.mTransform, aRefBox,
         aAppUnitsPerPixel);
   } else if (hasSVGTransforms) {
     // Correct the translation components for zoom:

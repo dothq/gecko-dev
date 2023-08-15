@@ -2795,11 +2795,6 @@ nsPrefBranch::UnlockPref(const char* aPrefName) {
 }
 
 NS_IMETHODIMP
-nsPrefBranch::ResetBranch(const char* aStartingAt) {
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
 nsPrefBranch::DeleteBranch(const char* aStartingAt) {
   ENSURE_PARENT_PROCESS("DeleteBranch", aStartingAt);
   NS_ENSURE_ARG(aStartingAt);
@@ -6039,7 +6034,8 @@ struct PrefListEntry {
 //      StaticPrefList.yml), a string pref, and it is NOT exempted in
 //      sDynamicPrefOverrideList
 //
-// This behavior is codified in ShouldSanitizePreference() below
+// This behavior is codified in ShouldSanitizePreference() below where
+// exclusions of preferences can be defined.
 static const PrefListEntry sRestrictFromWebContentProcesses[] = {
     // Remove prefs with user data
     PREF_LIST_ENTRY("datareporting.policy."),
@@ -6092,6 +6088,7 @@ static const PrefListEntry sRestrictFromWebContentProcesses[] = {
 // StaticPrefList) and would normally by blocklisted but we allow them through
 // anyway, so this override list acts as an allowlist
 static const PrefListEntry sDynamicPrefOverrideList[]{
+    PREF_LIST_ENTRY("accessibility.tabfocus"),
     PREF_LIST_ENTRY("app.update.channel"),
     PREF_LIST_ENTRY("apz.subtest"),
     PREF_LIST_ENTRY("autoadmin.global_config_url"),  // Bug 1780575
@@ -6128,6 +6125,7 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
     PREF_LIST_ENTRY("logging.config.LOG_FILE"),
     PREF_LIST_ENTRY("media.audio_loopback_dev"),
     PREF_LIST_ENTRY("media.decoder-doctor."),
+    PREF_LIST_ENTRY("media.cubeb.backend"),
     PREF_LIST_ENTRY("media.cubeb.output_device"),
     PREF_LIST_ENTRY("media.getusermedia.fake-camera-name"),
     PREF_LIST_ENTRY("media.hls.server.url"),
@@ -6142,14 +6140,13 @@ static const PrefListEntry sDynamicPrefOverrideList[]{
     PREF_LIST_ENTRY("network.security.ports.banned"),
     PREF_LIST_ENTRY("nimbus.syncdatastore."),
     PREF_LIST_ENTRY("pdfjs."),
+    PREF_LIST_ENTRY("plugins.force.wmode"),
     PREF_LIST_ENTRY("print.printer_"),
     PREF_LIST_ENTRY("print_printer"),
     PREF_LIST_ENTRY("places.interactions.customBlocklist"),
     PREF_LIST_ENTRY("remote.log.level"),
-    PREF_LIST_ENTRY(
-        "services.settings.preview_enabled"),  // This is really a boolean
-                                               // dynamic pref, but one Nightly
-                                               // user has it set as a string...
+    // services.* preferences should be added in ShouldSanitizePreference - the
+    // whole preference branch gets sanitized by default.
     PREF_LIST_ENTRY("spellchecker.dictionary"),
     PREF_LIST_ENTRY("test.char"),
     PREF_LIST_ENTRY("Test.IPC."),
@@ -6186,6 +6183,10 @@ static bool ShouldSanitizePreference(const Pref* const aPref) {
       const auto* p = prefName;  // This avoids clang-format doing ugly things.
       return !(strncmp("services.settings.clock_skew_seconds", p, 36) == 0 ||
                strncmp("services.settings.last_update_seconds", p, 37) == 0 ||
+               strncmp("services.settings.loglevel", p, 26) == 0 ||
+               // This is really a boolean dynamic pref, but one Nightly user
+               // has it set as a string...
+               strncmp("services.settings.preview_enabled", p, 33) == 0 ||
                strncmp("services.settings.server", p, 24) == 0);
     }
   }
