@@ -193,10 +193,18 @@ int64_t CacheIRCloner::readStubInt64(uint32_t offset) {
 Shape* CacheIRCloner::getShapeField(uint32_t stubOffset) {
   return reinterpret_cast<Shape*>(readStubWord(stubOffset));
 }
+Shape* CacheIRCloner::getWeakShapeField(uint32_t stubOffset) {
+  // No barrier is required to clone a weak pointer.
+  return reinterpret_cast<Shape*>(readStubWord(stubOffset));
+}
 GetterSetter* CacheIRCloner::getGetterSetterField(uint32_t stubOffset) {
   return reinterpret_cast<GetterSetter*>(readStubWord(stubOffset));
 }
 JSObject* CacheIRCloner::getObjectField(uint32_t stubOffset) {
+  return reinterpret_cast<JSObject*>(readStubWord(stubOffset));
+}
+JSObject* CacheIRCloner::getWeakObjectField(uint32_t stubOffset) {
+  // No barrier is required to clone a weak pointer.
   return reinterpret_cast<JSObject*>(readStubWord(stubOffset));
 }
 JSString* CacheIRCloner::getStringField(uint32_t stubOffset) {
@@ -13190,5 +13198,17 @@ bool js::jit::CallAnyNative(JSContext* cx, unsigned argc, Value* vp) {
 
   JSNative native = calleeFunc->native();
   return native(cx, args.length(), args.base());
+}
+
+const void* js::jit::RedirectedCallAnyNative() {
+  // The simulator requires native calls to be redirected to a
+  // special swi instruction. If we are calling an arbitrary native
+  // function, we can't wrap the real target ahead of time, so we
+  // call a wrapper function (CallAnyNative) that calls the target
+  // itself, and redirect that wrapper.
+  JSNative target = CallAnyNative;
+  void* rawPtr = JS_FUNC_TO_DATA_PTR(void*, target);
+  void* redirected = Simulator::RedirectNativeFunction(rawPtr, Args_General3);
+  return redirected;
 }
 #endif

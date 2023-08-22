@@ -163,6 +163,7 @@ treeherder:
         'Deb12': 'Packages for Debian 12'
         'Ub18': 'Packages for Ubuntu 18.04'
         'Ub20': 'Packages for Ubuntu 20.04'
+        'Ub22': 'Packages for Ubuntu 22.04'
         'I': 'Docker Image Builds'
         'TA': 'Toolchain builds for Android'
         'TL': 'Toolchain builds for Linux 64-bits'
@@ -256,6 +257,11 @@ release-promotion:
         - 'devedition'
         - 'fennec'
         - 'firefox'
+    rebuild-kinds:
+        - docker-image
+        - fetch
+        - packages
+        - toolchain
     flavors:
         promote_devedition:
             product: devedition
@@ -500,6 +506,11 @@ workers:
             implementation: generic-worker
             os: windows
             worker-type: '{alias}-azure'
+        b-win2022:
+            provisioner: '{trust-domain}-{level}'
+            implementation: generic-worker
+            os: windows
+            worker-type: '{alias}'
         image:
             provisioner: '{trust-domain}-{level}'
             implementation: docker-worker
@@ -549,6 +560,14 @@ workers:
                 by-release-level:
                     production: '{trust-domain}-3-beetmover'
                     staging: '{trust-domain}-1-beetmover'
+        shipit:
+            provisioner: scriptworker-k8s
+            implementation: shipit
+            os: scriptworker
+            worker-type:
+                by-release-level:
+                    production: '{trust-domain}-3-shipit'
+                    staging: '{trust-domain}-1-shipit'
         linux-depsigning:
             provisioner: scriptworker-k8s
             implementation: scriptworker-signing

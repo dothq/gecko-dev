@@ -22,7 +22,7 @@ namespace mozilla::dom {
  * The followings are helpers for VideoDecoder methods
  */
 
-nsTArray<nsCString> GuessContainers(const nsString& aCodec) {
+nsTArray<nsCString> GuessContainers(const nsAString& aCodec) {
   if (IsAV1CodecString(aCodec)) {
     return {"mp4"_ns, "webm"_ns};
   }
@@ -45,6 +45,7 @@ nsTArray<nsCString> GuessContainers(const nsString& aCodec) {
 /*
  * The below are helpers to operate ArrayBuffer or ArrayBufferView.
  */
+
 template <class T>
 Result<Span<uint8_t>, nsresult> GetArrayBufferData(const T& aBuffer) {
   // Get buffer's data and length before using it.
@@ -137,6 +138,7 @@ Result<Ok, nsresult> CloneBuffer(
  * The following are utilities to convert between VideoColorSpace values to
  * gfx's values.
  */
+
 gfx::ColorRange ToColorRange(bool aIsFullRange) {
   return aIsFullRange ? gfx::ColorRange::FULL : gfx::ColorRange::LIMITED;
 }

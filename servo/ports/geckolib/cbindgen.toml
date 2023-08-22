@@ -94,6 +94,7 @@ include = [
   "ComputedTimingFunction",
   "ComputedValueFlags",
   "CursorKind",
+  "Display",
   "DisplayOutside",
   "DisplayInside",
   "DisplayMode",
@@ -111,6 +112,7 @@ include = [
   "GenericFontFamily",
   "FontFamily",
   "FontFamilyNameSyntax",
+  "MozTheme",
   "OverflowWrap",
   "OffsetPath",
   "OffsetPathFunction",
@@ -197,6 +199,7 @@ include = [
   "GradientItem",
   "VerticalAlign",
   "BasicShape",
+  "InsetRect",
   "ShapeRadius",
   "ArcSlice",
   "ForgottenArcSlicePtr",
@@ -300,7 +303,6 @@ renaming_overrides_prefixing = true
 "AnimationPropertySegment" = "AnimationPropertySegment"
 "RawServoAnimationValueTable" = "RawServoAnimationValueTable"
 "nsCSSUnit" = "nsCSSUnit"
-"ParsingMode" = "ParsingMode"
 "InheritTarget" = "InheritTarget"
 "PseudoStyleType" = "PseudoStyleType"
 "DeclarationBlockMutationClosure" = "DeclarationBlockMutationClosure"
@@ -342,19 +344,14 @@ renaming_overrides_prefixing = true
   inline StyleCSSPixelLength ScaledBy(float) const;
 """
 
+"CalcLengthPercentage" = """
+  inline CSSCoord ResolveToCSSPixels(CSSCoord aBasis) const;
+
+  using CoordRounder = nscoord(*)(float);
+  nscoord Resolve(nscoord aBasis, CoordRounder) const;
+"""
+
 "GenericCalcNode" = """
- private:
-
-  template <typename ResultT, typename PercentageConverter>
-  ResultT ResolveInternal(ResultT aPercentageBasis,
-                          PercentageConverter aPercentageConverter) const;
-
- public:
-  CSSCoord ResolveToCSSPixels(CSSCoord aPercentageBasis) const;
-
-  using CoordPercentageRounder = nscoord(*)(float);
-  nscoord Resolve(nscoord aBasis, CoordPercentageRounder) const;
-
   void ScaleLengthsBy(float);
 """
 
@@ -413,9 +410,9 @@ renaming_overrides_prefixing = true
   inline CSSCoord ResolveToCSSPixels(CSSCoord aPercentageBasisInCSSPixels) const;
   template<typename T> inline CSSCoord ResolveToCSSPixelsWith(T aPercentageGetter) const;
   template<typename T, typename U>
-  inline nscoord Resolve(T aPercentageGetter, U aPercentRoundingFunction) const;
+  inline nscoord Resolve(T aPercentageGetter, U aRoundingFunction) const;
   template<typename T>
-  inline nscoord Resolve(nscoord aPercentageBasis, T aPercentRoundingFunction) const;
+  inline nscoord Resolve(nscoord aPercentageBasis, T aRoundingFunction) const;
   template<typename T> inline nscoord Resolve(T aPercentageGetter) const;
   inline nscoord Resolve(nscoord aPercentageBasis) const;
 """
@@ -1009,4 +1006,22 @@ renaming_overrides_prefixing = true
   bool IsBasicShapeOrCoordBox() const {
     return IsCoordBox() || (IsOffsetPath() && AsOffsetPath().path->IsShape());
   }
+"""
+
+"GenericContainIntrinsicSize" = """
+  bool HasAuto() const { return IsAutoLength() || IsAutoNone(); }
+"""
+
+"Display" = """
+  inline StyleDisplayOutside Outside() const;
+  inline StyleDisplayInside Inside() const;
+  inline bool IsListItem() const;
+  inline bool IsInlineFlow() const;
+  inline bool IsInlineInside() const;
+  inline bool IsInlineOutside() const;
+  inline bool IsBlockOutside() const;
+  inline bool IsRuby() const;
+  inline bool IsInternalRuby() const;
+  inline bool IsInternalTable() const;
+  inline bool IsInternalTableExceptCell() const;
 """

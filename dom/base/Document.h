@@ -1345,9 +1345,9 @@ class Document : public nsINode,
    */
   nsresult GetSrcdocData(nsAString& aSrcdocData);
 
-  already_AddRefed<AnonymousContent> InsertAnonymousContent(
-      Element& aElement, bool aForce, ErrorResult& aError);
-  void RemoveAnonymousContent(AnonymousContent& aContent);
+  already_AddRefed<AnonymousContent> InsertAnonymousContent(bool aForce,
+                                                            ErrorResult&);
+  void RemoveAnonymousContent(AnonymousContent&);
   /**
    * If aNode is a descendant of anonymous content inserted by
    * InsertAnonymousContent, this method returns the root element of the
@@ -3291,8 +3291,8 @@ class Document : public nsINode,
   already_AddRefed<nsINode> ImportNode(nsINode& aNode, bool aDeep,
                                        ErrorResult& rv) const;
   // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsINode* AdoptNode(nsINode& aNode,
-                                                 ErrorResult& rv);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsINode* AdoptNode(
+      nsINode& aAdoptedNode, ErrorResult& rv, bool aAcceptShadowRoot = false);
   already_AddRefed<Event> CreateEvent(const nsAString& aEventType,
                                       CallerType aCallerType,
                                       ErrorResult& rv) const;
@@ -4029,9 +4029,7 @@ class Document : public nsINode,
 
   mozilla::dom::FeaturePolicy* FeaturePolicy() const;
 
-  bool ModuleScriptsEnabled();
-
-  bool ImportMapsEnabled();
+  bool ImportMapsEnabled() const;
 
   /**
    * Find the (non-anonymous) content in this document for aFrame. It will

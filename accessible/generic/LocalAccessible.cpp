@@ -6,18 +6,14 @@
 #include "AccEvent.h"
 #include "LocalAccessible-inl.h"
 
-#include <stdint.h>
 #include "EmbeddedObjCollector.h"
-#include "AccAttributes.h"
 #include "AccGroupInfo.h"
 #include "AccIterator.h"
-#include "CacheConstants.h"
 #include "CachedTableAccessible.h"
 #include "DocAccessible-inl.h"
 #include "mozilla/a11y/AccAttributes.h"
 #include "mozilla/a11y/DocAccessibleChild.h"
-#include "mozilla/a11y/TableAccessible.h"
-#include "mozilla/a11y/TableCellAccessible.h"
+#include "mozilla/a11y/Platform.h"
 #include "nsAccUtils.h"
 #include "nsAccessibilityService.h"
 #include "ApplicationAccessible.h"
@@ -29,13 +25,11 @@
 #include "OuterDocAccessible.h"
 #include "Pivot.h"
 #include "Relation.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #include "RootAccessible.h"
 #include "States.h"
-#include "StyleInfo.h"
 #include "TextLeafRange.h"
 #include "TextRange.h"
-#include "TreeWalker.h"
 #include "HTMLElementAccessibles.h"
 #include "HTMLSelectAccessible.h"
 #include "HTMLTableAccessible.h"
@@ -47,7 +41,6 @@
 #include "nsIDOMXULSelectCntrlEl.h"
 #include "nsIDOMXULSelectCntrlItemEl.h"
 #include "nsINodeList.h"
-#include "nsPIDOMWindow.h"
 
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/HTMLFormElement.h"
@@ -68,30 +61,17 @@
 #include "nsFocusManager.h"
 
 #include "nsString.h"
-#include "nsUnicharUtils.h"
-#include "nsReadableUtils.h"
-#include "prdtoa.h"
 #include "nsAtom.h"
-#include "nsArrayUtils.h"
-#include "nsWhitespaceTokenizer.h"
-#include "nsAttrName.h"
 #include "nsContainerFrame.h"
 
 #include "mozilla/Assertions.h"
 #include "mozilla/BasicEvents.h"
-#include "mozilla/Components.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/FloatingPoint.h"
-#include "mozilla/MouseEvents.h"
 #include "mozilla/PresShell.h"
-#include "mozilla/Unused.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/ProfilerMarkers.h"
 #include "mozilla/StaticPrefs_ui.h"
-#include "mozilla/dom/CanvasRenderingContext2D.h"
 #include "mozilla/dom/Element.h"
-#include "mozilla/dom/HTMLCanvasElement.h"
-#include "mozilla/dom/HTMLBodyElement.h"
 #include "mozilla/dom/HTMLLabelElement.h"
 #include "mozilla/dom/KeyboardEventBinding.h"
 #include "mozilla/dom/TreeWalker.h"
@@ -957,12 +937,9 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
               vcEvent->IsFromUserInput());
           break;
         }
-#if defined(XP_WIN)
-        case nsIAccessibleEvent::EVENT_FOCUS: {
+        case nsIAccessibleEvent::EVENT_FOCUS:
           ipcDoc->SendFocusEvent(id);
           break;
-        }
-#endif
         case nsIAccessibleEvent::EVENT_SCROLLING_END:
         case nsIAccessibleEvent::EVENT_SCROLLING: {
           AccScrollingEvent* scrollingEvent = downcast_accEvent(aEvent);
@@ -1018,6 +995,115 @@ nsresult LocalAccessible::HandleAccEvent(AccEvent* aEvent) {
     nsCoreUtils::DispatchAccEvent(MakeXPCEvent(aEvent));
   }
 
+  if (IPCAccessibilityActive()) {
+    return NS_OK;
+  }
+
+  if (IsDefunct()) {
+    // This could happen if there is an XPCOM observer, since script might run
+    // which mutates the tree.
+    return NS_OK;
+  }
+
+  LocalAccessible* target = aEvent->GetAccessible();
+  switch (aEvent->GetEventType()) {
+    case nsIAccessibleEvent::EVENT_SHOW:
+      PlatformShowHideEvent(target, target->LocalParent(), true,
+                            aEvent->IsFromUserInput());
+      break;
+    case nsIAccessibleEvent::EVENT_HIDE:
+      PlatformShowHideEvent(target, target->LocalParent(), false,
+                            aEvent->IsFromUserInput());
+      break;
+    case nsIAccessibleEvent::EVENT_STATE_CHANGE: {
+      AccStateChangeEvent* event = downcast_accEvent(aEvent);
+      PlatformStateChangeEvent(target, event->GetState(),
+                               event->IsStateEnabled());
+      break;
+    }
+    case nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED: {
+      AccCaretMoveEvent* event = downcast_accEvent(aEvent);
+      LayoutDeviceIntRect rect;
+      // The caret rect is only used on Windows, so just pass an empty rect on
+      // other platforms.
+      // XXX We pass an empty rect on Windows as well because
+      // AccessibleWrap::UpdateSystemCaretFor currently needs to call
+      // HyperTextAccessible::GetCaretRect again to get the widget and there's
+      // no point calling it twice.
+      PlatformCaretMoveEvent(target, event->GetCaretOffset(),
+                             event->IsSelectionCollapsed(),
+                             event->GetGranularity(), rect);
+      break;
+    }
+    case nsIAccessibleEvent::EVENT_TEXT_INSERTED:
+    case nsIAccessibleEvent::EVENT_TEXT_REMOVED: {
+      AccTextChangeEvent* event = downcast_accEvent(aEvent);
+      const nsString& text = event->ModifiedText();
+      PlatformTextChangeEvent(target, text, event->GetStartOffset(),
+                              event->GetLength(), event->IsTextInserted(),
+                              event->IsFromUserInput());
+      break;
+    }
+    case nsIAccessibleEvent::EVENT_SELECTION:
+    case nsIAccessibleEvent::EVENT_SELECTION_ADD:
+    case nsIAccessibleEvent::EVENT_SELECTION_REMOVE: {
+      AccSelChangeEvent* selEvent = downcast_accEvent(aEvent);
+      PlatformSelectionEvent(target, selEvent->Widget(),
+                             aEvent->GetEventType());
+      break;
+    }
+    case nsIAccessibleEvent::EVENT_VIRTUALCURSOR_CHANGED: {
+#ifdef ANDROID
+      AccVCChangeEvent* vcEvent = downcast_accEvent(aEvent);
+      PlatformVirtualCursorChangeEvent(
+          target, vcEvent->OldAccessible(), vcEvent->NewAccessible(),
+          vcEvent->Reason(), vcEvent->IsFromUserInput());
+#endif
+      break;
+    }
+    case nsIAccessibleEvent::EVENT_FOCUS: {
+      LayoutDeviceIntRect rect;
+      // The caret rect is only used on Windows, so just pass an empty rect on
+      // other platforms.
+#ifdef XP_WIN
+      if (HyperTextAccessible* text = target->AsHyperText()) {
+        nsIWidget* widget = nullptr;
+        rect = text->GetCaretRect(&widget);
+      }
+#endif
+      PlatformFocusEvent(target, rect);
+      break;
+    }
+#if defined(ANDROID)
+    case nsIAccessibleEvent::EVENT_SCROLLING_END:
+    case nsIAccessibleEvent::EVENT_SCROLLING: {
+      AccScrollingEvent* scrollingEvent = downcast_accEvent(aEvent);
+      PlatformScrollingEvent(
+          target, aEvent->GetEventType(), scrollingEvent->ScrollX(),
+          scrollingEvent->ScrollY(), scrollingEvent->MaxScrollX(),
+          scrollingEvent->MaxScrollY());
+      break;
+    }
+    case nsIAccessibleEvent::EVENT_ANNOUNCEMENT: {
+      AccAnnouncementEvent* announcementEvent = downcast_accEvent(aEvent);
+      PlatformAnnouncementEvent(target, announcementEvent->Announcement(),
+                                announcementEvent->Priority());
+      break;
+    }
+#endif  // defined(ANDROID)
+#if defined(MOZ_WIDGET_COCOA)
+    case nsIAccessibleEvent::EVENT_TEXT_SELECTION_CHANGED: {
+      AccTextSelChangeEvent* textSelChangeEvent = downcast_accEvent(aEvent);
+      AutoTArray<TextRange, 1> ranges;
+      textSelChangeEvent->SelectionRanges(&ranges);
+      PlatformTextSelectionChangeEvent(target, ranges);
+      break;
+    }
+#endif  // defined(MOZ_WIDGET_COCOA)
+    default:
+      PlatformEvent(target, aEvent->GetEventType());
+  }
+
   return NS_OK;
 }
 
@@ -1039,6 +1125,13 @@ already_AddRefed<AccAttributes> LocalAccessible::Attributes() {
   // Expose object attributes from ARIA attributes.
   aria::AttrIterator attribIter(mContent);
   while (attribIter.Next()) {
+    if (attribIter.AttrName() == nsGkAtoms::aria_placeholder &&
+        attributes->HasAttribute(nsGkAtoms::placeholder)) {
+      // If there is an HTML placeholder attribute exposed by
+      // HTMLTextFieldAccessible::NativeAttributes, don't expose
+      // aria-placeholder.
+      continue;
+    }
     attribIter.ExposeAttr(attributes);
   }
 
@@ -1145,15 +1238,17 @@ already_AddRefed<AccAttributes> LocalAccessible::NativeAttributes() {
     return attributes.forget();
   }
 
+  // Expose 'display' attribute.
+  if (RefPtr<nsAtom> display = DisplayStyle()) {
+    attributes->SetAttribute(nsGkAtoms::display, display);
+  }
+
   const ComputedStyle& style = *f->Style();
   auto Atomize = [&](nsCSSPropertyID aId) -> RefPtr<nsAtom> {
     nsAutoCString value;
     style.GetComputedPropertyValue(aId, value);
     return NS_Atomize(value);
   };
-
-  // Expose 'display' attribute.
-  attributes->SetAttribute(nsGkAtoms::display, Atomize(eCSSProperty_display));
 
   // Expose 'text-align' attribute.
   attributes->SetAttribute(nsGkAtoms::textAlign,
@@ -1301,7 +1396,7 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
       (aAttribute == nsGkAtoms::aria_valuemax ||
        aAttribute == nsGkAtoms::aria_valuemin || aAttribute == nsGkAtoms::min ||
        aAttribute == nsGkAtoms::max || aAttribute == nsGkAtoms::step)) {
-    SendCache(CacheDomain::Value, CacheUpdateType::Update);
+    mDoc->QueueCacheUpdate(this, CacheDomain::Value);
     return;
   }
 
@@ -1321,7 +1416,7 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
     } else {
       // We need to update the cache here since we won't get an event if
       // aria-valuenow is shadowed by aria-valuetext.
-      SendCache(CacheDomain::Value, CacheUpdateType::Update);
+      mDoc->QueueCacheUpdate(this, CacheDomain::Value);
     }
     return;
   }
@@ -1392,7 +1487,7 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
       (aModType == dom::MutationEvent_Binding::ADDITION ||
        aModType == dom::MutationEvent_Binding::REMOVAL)) {
     // The presence of aria-expanded adds an expand/collapse action.
-    SendCache(CacheDomain::Actions, CacheUpdateType::Update);
+    mDoc->QueueCacheUpdate(this, CacheDomain::Actions);
   }
 
   if (aAttribute == nsGkAtoms::href || aAttribute == nsGkAtoms::src) {
@@ -1462,7 +1557,7 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
   if (aAttribute == nsGkAtoms::aria_level ||
       aAttribute == nsGkAtoms::aria_setsize ||
       aAttribute == nsGkAtoms::aria_posinset) {
-    SendCache(CacheDomain::GroupInfo, CacheUpdateType::Update);
+    mDoc->QueueCacheUpdate(this, CacheDomain::GroupInfo);
     return;
   }
 
@@ -3121,6 +3216,18 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
       fields->SetAttribute(nsGkAtoms::explicit_name, DeleteEntry());
     }
 
+    if (IsTextField()) {
+      MOZ_ASSERT(mContent);
+      nsString placeholder;
+      // Only cache the placeholder separately if it isn't used as the name.
+      if (Elm()->GetAttr(nsGkAtoms::placeholder, placeholder) &&
+          name != placeholder) {
+        fields->SetAttribute(nsGkAtoms::placeholder, std::move(placeholder));
+      } else if (aUpdateType == CacheUpdateType::Update) {
+        fields->SetAttribute(nsGkAtoms::placeholder, DeleteEntry());
+      }
+    }
+
     if (!name.IsEmpty()) {
       fields->SetAttribute(nsGkAtoms::name, std::move(name));
     } else if (aUpdateType == CacheUpdateType::Update) {
@@ -3194,8 +3301,9 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
 
       nsLayoutUtils::GetFramesForArea(
           RelativeTo{rootFrame}, scrollPort, frames,
-          {{// We only care about visible content for hittesting.
-            nsLayoutUtils::FrameForPointOption::OnlyVisible,
+          {{// We don't add the ::OnlyVisible option here, because
+            // it means we always consider frames with pointer-events: none.
+            // See usage of HitTestIsForVisibility in nsDisplayList::HitTest.
             // This flag ensures the display lists are built, even if
             // the page hasn't finished loading.
             nsLayoutUtils::FrameForPointOption::IgnorePaintSuppression,
@@ -3940,6 +4048,17 @@ already_AddRefed<nsAtom> LocalAccessible::DisplayStyle() const {
   }
   if (elm->IsHTMLElement(nsGkAtoms::area)) {
     // This is an image map area. CSS is irrelevant here.
+    return nullptr;
+  }
+  static const dom::Element::AttrValuesArray presentationRoles[] = {
+      nsGkAtoms::none, nsGkAtoms::presentation, nullptr};
+  if (nsAccUtils::FindARIAAttrValueIn(elm, nsGkAtoms::role, presentationRoles,
+                                      eIgnoreCase) != AttrArray::ATTR_MISSING &&
+      IsGeneric()) {
+    // This Accessible has been marked presentational, but we forced a generic
+    // Accessible for some reason; e.g. CSS transform. Don't expose display in
+    // this case, as the author might be explicitly trying to avoid said
+    // exposure.
     return nullptr;
   }
   RefPtr<const ComputedStyle> style =

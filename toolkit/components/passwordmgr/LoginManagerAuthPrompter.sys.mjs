@@ -259,7 +259,7 @@ LoginManagerAuthPromptFactory.prototype = {
   },
 }; // end of LoginManagerAuthPromptFactory implementation
 
-XPCOMUtils.defineLazyGetter(
+ChromeUtils.defineLazyGetter(
   LoginManagerAuthPromptFactory.prototype,
   "log",
   () => {
@@ -274,6 +274,11 @@ XPCOMUtils.defineLazyGetter(
  * Implements interfaces for prompting the user to enter/save/change auth info.
  *
  * nsIAuthPrompt: Used by SeaMonkey, Thunderbird, but not Firefox.
+ *
+ * Note this implementation no longer provides `nsIAuthPrompt.promptPassword()`
+ * and `nsIAuthPrompt.promptUsernameAndPassword()`. Use their async
+ * counterparts `asyncPromptPassword` and `asyncPromptUsernameAndPassword`
+ * instead.
  *
  * nsIAuthPrompt2: Is invoked by a channel for protocol-based authentication
  * (eg HTTP Authenticate, FTP login).
@@ -1096,7 +1101,7 @@ LoginManagerAuthPrompter.prototype = {
   },
 }; // end of LoginManagerAuthPrompter implementation
 
-XPCOMUtils.defineLazyGetter(LoginManagerAuthPrompter.prototype, "log", () => {
+ChromeUtils.defineLazyGetter(LoginManagerAuthPrompter.prototype, "log", () => {
   let logger = lazy.LoginHelper.createLogger("LoginManagerAuthPrompter");
   return logger.log.bind(logger);
 });

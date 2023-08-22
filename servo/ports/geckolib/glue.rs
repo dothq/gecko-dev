@@ -10,10 +10,10 @@ use cssparser::{Parser, ParserInput, SourceLocation, UnicodeRange};
 use dom::{DocumentState, ElementState};
 use malloc_size_of::MallocSizeOfOps;
 use nsstring::{nsCString, nsString};
-use selectors::matching::IgnoreNthChildForInvalidation;
-use selectors::NthIndexCache;
+use selectors::matching::{IgnoreNthChildForInvalidation, SelectorCaches};
 use servo_arc::{Arc, ArcBorrow};
 use smallvec::SmallVec;
+use style::values::generics::color::ColorMixFlags;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::iter;
@@ -96,7 +96,7 @@ use style::global_style_data::{
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::invalidation::stylesheets::RuleChangeKind;
 use style::media_queries::MediaList;
-use style::parser::{self, Parse, ParserContext};
+use style::parser::{Parse, ParserContext};
 use style::properties::animated_properties::{AnimationValue, AnimationValueMap};
 use style::properties::{parse_one_declaration_into, parse_style_attribute};
 use style::properties::{ComputedValues, CountedUnknownProperty, Importance, NonCustomPropertyId};
@@ -188,7 +188,6 @@ pub unsafe extern "C" fn Servo_Initialize(
 
     // Perform some debug-only runtime assertions.
     origin_flags::assert_flags_match();
-    parser::assert_parsing_mode_match();
     traversal_flags::assert_traversal_flags_match();
     specified::font::assert_variant_east_asian_matches();
     specified::font::assert_variant_ligatures_matches();
@@ -2427,7 +2426,7 @@ fn desugared_selector_list(rules: &ThinVec<&LockedStyleRule>) -> SelectorList {
     let mut selectors: Option<SelectorList> = None;
     for rule in rules.iter().rev() {
         selectors = Some(read_locked_arc(rule, |rule| match selectors {
-            Some(s) => rule.selectors.replace_parent_selector(&s.0),
+            Some(s) => rule.selectors.replace_parent_selector(&s.to_shared()),
             None => rule.selectors.clone(),
         }));
     }
@@ -2494,7 +2493,7 @@ pub extern "C" fn Servo_StyleRule_SelectorMatchesElement(
     let element = GeckoElement(element);
     let host = host.map(GeckoElement);
     let quirks_mode = element.as_node().owner_doc().quirks_mode();
-    let mut nth_index_cache = Default::default();
+    let mut selector_caches = SelectorCaches::default();
     let visited_mode = if relevant_link_visited {
         VisitedHandlingMode::RelevantLinkVisited
     } else {
@@ -2503,7 +2502,7 @@ pub extern "C" fn Servo_StyleRule_SelectorMatchesElement(
     let mut ctx = MatchingContext::new_for_visited(
         matching_mode,
         /* bloom_filter = */ None,
-        &mut nth_index_cache,
+        &mut selector_caches,
         visited_mode,
         quirks_mode,
         NeedsSelectorFlags::No,
@@ -4400,13 +4399,12 @@ fn parse_property_into(
     value: &nsACString,
     origin: Origin,
     url_data: &UrlExtraData,
-    parsing_mode: structs::ParsingMode,
+    parsing_mode: ParsingMode,
     quirks_mode: QuirksMode,
     rule_type: CssRuleType,
     reporter: Option<&dyn ParseErrorReporter>,
 ) -> Result<(), ()> {
     let value = unsafe { value.as_str_unchecked() };
-    let parsing_mode = ParsingMode::from_bits_retain(parsing_mode);
 
     if let Some(non_custom) = property_id.non_custom_id() {
         if !non_custom.allowed_in_rule(rule_type.into()) {
@@ -4432,7 +4430,7 @@ pub unsafe extern "C" fn Servo_ParseProperty(
     property: nsCSSPropertyID,
     value: &nsACString,
     data: *mut URLExtraData,
-    parsing_mode: structs::ParsingMode,
+    parsing_mode: ParsingMode,
     quirks_mode: nsCompatibility,
     loader: *mut Loader,
     rule_type: CssRuleType,
@@ -4801,7 +4799,7 @@ fn set_property(
     value: &nsACString,
     is_important: bool,
     data: &UrlExtraData,
-    parsing_mode: structs::ParsingMode,
+    parsing_mode: ParsingMode,
     quirks_mode: QuirksMode,
     loader: *mut Loader,
     rule_type: CssRuleType,
@@ -4848,7 +4846,7 @@ pub unsafe extern "C" fn Servo_DeclarationBlock_SetProperty(
     value: &nsACString,
     is_important: bool,
     data: *mut URLExtraData,
-    parsing_mode: structs::ParsingMode,
+    parsing_mode: ParsingMode,
     quirks_mode: nsCompatibility,
     loader: *mut Loader,
     rule_type: CssRuleType,
@@ -4893,7 +4891,7 @@ pub unsafe extern "C" fn Servo_DeclarationBlock_SetPropertyById(
     value: &nsACString,
     is_important: bool,
     data: *mut URLExtraData,
-    parsing_mode: structs::ParsingMode,
+    parsing_mode: ParsingMode,
     quirks_mode: nsCompatibility,
     loader: *mut Loader,
     rule_type: CssRuleType,
@@ -5204,7 +5202,7 @@ pub extern "C" fn Servo_DeclarationBlock_SetKeywordValue(
     use style::values::generics::box_::{VerticalAlign, VerticalAlignKeyword};
     use style::values::generics::font::FontStyle;
     use style::values::specified::{
-        table::CaptionSide, BorderStyle, Clear, Display, Float, TextAlign, TextEmphasisPosition,
+        table::CaptionSide, BorderStyle, Clear, Display, Float, TextAlign, TextEmphasisPosition, TextTransform
     };
 
     fn get_from_computed<T>(value: u32) -> T
@@ -5249,6 +5247,10 @@ pub extern "C" fn Servo_DeclarationBlock_SetKeywordValue(
         BorderRightStyle => get_from_computed::<BorderStyle>(value),
         BorderBottomStyle => get_from_computed::<BorderStyle>(value),
         BorderLeftStyle => get_from_computed::<BorderStyle>(value),
+        TextTransform => {
+            debug_assert_eq!(value, structs::StyleTextTransformCase_None as u32);
+            TextTransform::none()
+        },
     };
     write_locked_arc(declarations, |decls: &mut PropertyDeclarationBlock| {
         decls.push(prop, Importance::Normal);
@@ -5397,7 +5399,6 @@ pub extern "C" fn Servo_DeclarationBlock_SetLengthValue(
     value: f32,
     unit: structs::nsCSSUnit,
 ) {
-    use style::properties::longhands::_moz_script_min_size::SpecifiedValue as MozScriptMinSize;
     use style::properties::PropertyDeclaration;
     use style::values::generics::length::{LengthPercentageOrAuto, Size};
     use style::values::generics::NonNegative;
@@ -5437,7 +5438,6 @@ pub extern "C" fn Servo_DeclarationBlock_SetLengthValue(
         Rx => LengthPercentageOrAuto::LengthPercentage(NonNegative(LengthPercentage::Length(nocalc))),
         Ry => LengthPercentageOrAuto::LengthPercentage(NonNegative(LengthPercentage::Length(nocalc))),
         FontSize => FontSize::Length(LengthPercentage::Length(nocalc)),
-        MozScriptMinSize => MozScriptMinSize(nocalc),
     };
     write_locked_arc(declarations, |decls: &mut PropertyDeclarationBlock| {
         decls.push(prop, Importance::Normal);
@@ -5463,25 +5463,6 @@ pub extern "C" fn Servo_DeclarationBlock_SetPathValue(
     let long = get_longhand_from_id!(property);
     let prop = match_wrap_declared! { long,
         D => if path.0.is_empty() { DProperty::None } else { DProperty::Path(path) },
-    };
-    write_locked_arc(declarations, |decls: &mut PropertyDeclarationBlock| {
-        decls.push(prop, Importance::Normal);
-    })
-}
-
-#[no_mangle]
-pub extern "C" fn Servo_DeclarationBlock_SetNumberValue(
-    declarations: &LockedDeclarationBlock,
-    property: nsCSSPropertyID,
-    value: f32,
-) {
-    use style::properties::longhands::_moz_script_size_multiplier::SpecifiedValue as MozScriptSizeMultiplier;
-    use style::properties::PropertyDeclaration;
-
-    let long = get_longhand_from_id!(property);
-
-    let prop = match_wrap_declared! { long,
-        MozScriptSizeMultiplier => MozScriptSizeMultiplier(value),
     };
     write_locked_arc(declarations, |decls: &mut PropertyDeclarationBlock| {
         decls.push(prop, Importance::Normal);
@@ -5705,7 +5686,7 @@ pub extern "C" fn Servo_CSSSupports2(property: &nsACString, value: &nsACString) 
         value,
         Origin::Author,
         unsafe { dummy_url_data() },
-        structs::ParsingMode_Default,
+        ParsingMode::DEFAULT,
         QuirksMode::NoQuirks,
         CssRuleType::Style,
         None,
@@ -5796,8 +5777,7 @@ pub unsafe extern "C" fn Servo_NoteExplicitHints(
 }
 
 #[no_mangle]
-pub extern "C" fn Servo_TakeChangeHint(element: &RawGeckoElement, was_restyled: *mut bool) -> u32 {
-    let was_restyled = unsafe { was_restyled.as_mut().unwrap() };
+pub extern "C" fn Servo_TakeChangeHint(element: &RawGeckoElement, was_restyled: &mut bool) -> u32 {
     let element = GeckoElement(element);
 
     let damage = match element.mutate_data() {
@@ -5855,7 +5835,7 @@ pub extern "C" fn Servo_ResolveStyleLazily(
     let guard = global_style_data.shared_lock.read();
     let element = GeckoElement(element);
     let mut data = raw_data.borrow_mut();
-    let mut data = &mut *data;
+    let data = &mut *data;
     let rule_inclusion = RuleInclusion::from(rule_inclusion);
     let pseudo = PseudoElement::from_pseudo_type(pseudo_type);
 
@@ -6958,6 +6938,7 @@ pub extern "C" fn Servo_ProcessInvalidations(
     );
     let mut data = data.as_mut().map(|d| &mut **d);
 
+    let mut selector_caches = SelectorCaches::default();
     if let Some(ref mut data) = data {
         // FIXME(emilio): Ideally we could share the nth-index-cache across all
         // the elements?
@@ -6965,7 +6946,7 @@ pub extern "C" fn Servo_ProcessInvalidations(
             element,
             &shared_style_context,
             None,
-            &mut NthIndexCache::default(),
+            &mut selector_caches,
         );
 
         if result.has_invalidated_siblings() {
@@ -7136,6 +7117,14 @@ pub extern "C" fn Servo_ResolveColor(
     foreground: &style::color::AbsoluteColor,
 ) -> style::color::AbsoluteColor {
     color.resolve_to_absolute(foreground)
+}
+
+#[no_mangle]
+pub extern "C" fn Servo_ResolveCalcLengthPercentage(
+    calc: &computed::length_percentage::CalcLengthPercentage,
+    basis: f32,
+) -> f32 {
+    calc.resolve(computed::Length::new(basis)).px()
 }
 
 #[no_mangle]
@@ -7359,11 +7348,16 @@ pub unsafe extern "C" fn Servo_ParseFontShorthandForMatching(
                     Err(..) => return false,
                 }
             },
-            // Map absolute-size keywords to sizes.
             specified::FontSize::Keyword(info) => {
+                let keyword = if info.kw != specified::FontSizeKeyword::Math {
+                  info.kw
+                } else {
+                  specified::FontSizeKeyword::Medium
+                };
+                // Map absolute-size keywords to sizes.
                 // TODO: Maybe get a meaningful quirks / base size from the caller?
                 let quirks_mode = QuirksMode::NoQuirks;
-                info.kw
+                keyword
                     .to_length_without_context(
                         quirks_mode,
                         computed::Length::new(specified::FONT_MEDIUM_PX),
@@ -7454,12 +7448,12 @@ pub unsafe extern "C" fn Servo_InvalidateStyleForDocStateChanges(
                 .map(|author_styles| &*author_styles.data),
         );
 
-    let mut nth_index_cache = Default::default();
+    let mut selector_caches = SelectorCaches::default();
     let root = GeckoElement(root);
     let mut processor = DocumentStateInvalidationProcessor::new(
         iter,
         DocumentState::from_bits_retain(states_changed),
-        &mut nth_index_cache,
+        &mut selector_caches,
         root.as_node().owner_doc().quirks_mode(),
     );
 
@@ -7777,7 +7771,7 @@ pub extern "C" fn Servo_InterpolateColor(
         progress,
         right,
         1.0 - progress,
-        /* normalize_weights = */ false,
+        ColorMixFlags::empty(),
     )
 }
 
@@ -7838,6 +7832,7 @@ pub enum RegisterCustomPropertyResult {
 #[no_mangle]
 pub extern "C" fn Servo_RegisterCustomProperty(
     per_doc_data: &PerDocumentStyleData,
+    extra_data: *mut URLExtraData,
     name: &nsACString,
     syntax: &nsACString,
     inherits: bool,
@@ -7850,6 +7845,7 @@ pub extern "C" fn Servo_RegisterCustomProperty(
     use style::properties_and_values::syntax::Descriptor;
 
     let mut per_doc_data = per_doc_data.borrow_mut();
+    let url_data = unsafe { UrlExtraData::from_ptr_ref(&extra_data) };
     let name = unsafe { name.as_str_unchecked() };
     let syntax = unsafe { syntax.as_str_unchecked() };
     let initial_value = initial_value.map(|v| unsafe { v.as_str_unchecked() });
@@ -7884,7 +7880,9 @@ pub extern "C" fn Servo_RegisterCustomProperty(
         None => None,
     };
 
-    if let Err(error) = PropertyRuleData::validate_initial_value(&syntax, initial_value.as_ref()) {
+    if let Err(error) =
+        PropertyRuleData::validate_initial_value(&syntax, initial_value.as_ref(), url_data)
+    {
         return match error {
             ToRegistrationError::MissingInherits |
             ToRegistrationError::MissingSyntax => unreachable!(),

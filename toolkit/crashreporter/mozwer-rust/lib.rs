@@ -136,7 +136,7 @@ fn out_of_process_exception_event_callback(
     context: PVOID,
     exception_information: PWER_RUNTIME_EXCEPTION_INFORMATION,
 ) -> Result<()> {
-    let mut exception_information = unsafe { &mut *exception_information };
+    let exception_information = unsafe { &mut *exception_information };
     let is_fatal = exception_information.bIsFatal.to_bool();
     let mut is_ui_hang = false;
     if !is_fatal {
@@ -144,7 +144,7 @@ fn out_of_process_exception_event_callback(
             // Check whether this error is a hang. A hang always results in an EXCEPTION_BREAKPOINT.
             // Hangs may have an hThread/context that is unrelated to the hanging thread, so we get
             // it by searching for process windows that are hung.
-            if exception_information.exceptionRecord.ExceptionCode != EXCEPTION_BREAKPOINT {
+            if exception_information.exceptionRecord.ExceptionCode == EXCEPTION_BREAKPOINT {
                 if let Ok(thread_id) = find_hung_window_thread(exception_information.hProcess) {
                     // In the case of a hang, change the crashing thread to be the one that created
                     // the hung window.

@@ -48,9 +48,9 @@ enum class LayersBackend : int8_t;
 
 namespace dom {
 class
-    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmap;
+    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmapOrVideoFrame;
 using CanvasImageSource =
-    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmap;
+    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmapOrVideoFrame;
 class ImageBitmap;
 class ImageData;
 class UTF8StringOrCanvasGradientOrCanvasPattern;
@@ -95,6 +95,8 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     // corresponds to changes to the old bindings made in bug 745025
     return mCanvasElement->GetOriginalCanvas();
   }
+
+  void GetContextAttributes(CanvasRenderingContext2DSettings& aSettings) const;
 
   void OnMemoryPressure() override;
   void OnBeforePaintTransaction() override;
@@ -315,6 +317,24 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     }
   }
 
+  CanvasFontStretch FontStretch() { return CurrentState().fontStretch; }
+  void SetFontStretch(const CanvasFontStretch& aFontStretch) {
+    if (CurrentState().fontStretch != aFontStretch) {
+      CurrentState().fontStretch = aFontStretch;
+      CurrentState().fontGroup = nullptr;
+    }
+  }
+
+  CanvasFontVariantCaps FontVariantCaps() {
+    return CurrentState().fontVariantCaps;
+  }
+  void SetFontVariantCaps(const CanvasFontVariantCaps& aFontVariantCaps) {
+    if (CurrentState().fontVariantCaps != aFontVariantCaps) {
+      CurrentState().fontVariantCaps = aFontVariantCaps;
+      CurrentState().fontGroup = nullptr;
+    }
+  }
+
   CanvasTextRendering TextRendering() { return CurrentState().textRendering; }
   void SetTextRendering(const CanvasTextRendering& aTextRendering) {
     CurrentState().textRendering = aTextRendering;
@@ -328,6 +348,13 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
   void EnsureCapped() {
     if (mPathPruned) {
       mPathBuilder->LineTo(mPathBuilder->CurrentPoint());
+      mPathPruned = false;
+    }
+  }
+
+  void EnsureActivePath() {
+    if (mPathPruned && !mPathBuilder->IsActive()) {
+      mPathBuilder->MoveTo(mPathBuilder->CurrentPoint());
       mPathPruned = false;
     }
   }
@@ -370,6 +397,7 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
       mPathPruned = true;
       return;
     }
+    EnsureActivePath();
     mPathBuilder->QuadraticBezierTo(cp1, cp2);
     mPathPruned = false;
   }
@@ -510,6 +538,7 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
       mPathPruned = true;
       return;
     }
+    EnsureActivePath();
     mPathBuilder->LineTo(aPoint);
     mPathPruned = false;
   }
@@ -525,6 +554,7 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
       mPathPruned = true;
       return;
     }
+    EnsureActivePath();
     mPathBuilder->BezierTo(aCP1, aCP2, aCP3);
     mPathPruned = false;
   }
@@ -623,6 +653,12 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
   // Clears the target and updates mOpaque based on mOpaqueAttrValue and
   // mContextAttributesHasAlpha.
   void UpdateIsOpaque();
+
+  // Shared implementation for Stroke() and Stroke(CanvasPath) methods.
+  void StrokeImpl(const mozilla::gfx::Path& aPath);
+
+  // Shared implementation for Fill() methods.
+  void FillImpl(const mozilla::gfx::Path& aPath);
 
   /**
    * Creates the error target, if it doesn't exist
@@ -961,6 +997,8 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     CanvasTextBaseline textBaseline = CanvasTextBaseline::Alphabetic;
     CanvasDirection textDirection = CanvasDirection::Inherit;
     CanvasFontKerning fontKerning = CanvasFontKerning::Auto;
+    CanvasFontStretch fontStretch = CanvasFontStretch::Normal;
+    CanvasFontVariantCaps fontVariantCaps = CanvasFontVariantCaps::Normal;
     CanvasTextRendering textRendering = CanvasTextRendering::Auto;
 
     gfx::Float letterSpacing = 0.0f;

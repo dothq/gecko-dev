@@ -6,8 +6,7 @@
 
 #include "js/experimental/CompileScript.h"
 
-#include "frontend/BytecodeCompilation.h"  // frontend::CompileGlobalScriptToStencil
-#include "frontend/BytecodeCompiler.h"  // frontend::ParseModuleToStencil
+#include "frontend/BytecodeCompiler.h"  // frontend::{CompileGlobalScriptToStencil, ParseModuleToStencil}
 #include "frontend/CompilationStencil.h"  // frontend::{CompilationStencil,CompilationInput}
 #include "frontend/FrontendContext.h"    // frontend::FrontendContext
 #include "frontend/ScopeBindingCache.h"  // frontend::NoScopeBindingCache
@@ -214,7 +213,8 @@ bool JS::PrepareForInstantiate(JS::FrontendContext* fc,
   MOZ_ASSERT(isGCSafe(compileStorage.getInput()));
   if (!storage.gcOutput_) {
     storage.gcOutput_ =
-        fc->getAllocator()->new_<js::frontend::CompilationGCOutput>();
+        fc->getAllocator()
+            ->new_<js::frontend::PreallocatedCompilationGCOutput>();
     if (!storage.gcOutput_) {
       return false;
     }

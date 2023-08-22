@@ -1526,12 +1526,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-geckoview-nofis**
         - ❌
         - ❌
         - ❌
@@ -1547,17 +1547,17 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer-mobile-chrome-m-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-chrome-m-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-geckoview-nofis**
         - ✅
         - ✅
         - ❌
@@ -1826,12 +1826,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-geckoview-nofis**
         - ❌
         - ❌
         - ❌
@@ -1847,17 +1847,17 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer-mobile-chrome-m-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-chrome-m-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer-mobile-geckoview-nofis**
         - ✅
         - ✅
         - ❌
@@ -2119,7 +2119,7 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
    * **page cycles**: 5
    * **page timeout**: 180000
    * **repository**: https://github.com/WebKit/Speedometer
-   * **repository revision**: e295eb85965113f233d113d47bac670f21271906
+   * **repository revision**: 36712deb57d45879f56dd2136f8a6ed8a22d964b
    * **submetric summary method**: median
    * **subtest lower is better**: true
    * **subtest name filters**: tests/,s3/
@@ -2140,12 +2140,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer3-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer3-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-geckoview-nofis**
         - ❌
         - ❌
         - ❌
@@ -2161,17 +2161,17 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer3-mobile-chrome-m-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-chrome-m-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer3-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer3-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-geckoview-nofis**
         - ✅
         - ✅
         - ❌
@@ -2428,7 +2428,7 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
    * **page cycles**: 5
    * **page timeout**: 420000
    * **repository**: https://github.com/WebKit/Speedometer
-   * **repository revision**: e295eb85965113f233d113d47bac670f21271906
+   * **repository revision**: 36712deb57d45879f56dd2136f8a6ed8a22d964b
    * **submetric summary method**: median
    * **subtest lower is better**: true
    * **subtest name filters**: tests/,s3/
@@ -2449,12 +2449,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer3-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer3-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-geckoview-nofis**
         - ❌
         - ❌
         - ❌
@@ -2470,17 +2470,17 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-speedometer3-mobile-chrome-m-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-chrome-m-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer3-mobile-fenix-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-speedometer3-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-speedometer3-mobile-geckoview-nofis**
         - ✅
         - ✅
         - ❌
@@ -3440,12 +3440,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-unity-webgl-mobile-fenix-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-unity-webgl-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-geckoview-nofis**
         - ❌
         - ❌
         - ❌
@@ -3461,17 +3461,17 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-unity-webgl-mobile-chrome-m-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-chrome-m-nofis**
         - ✅
         - ❌
         - ❌
         - ❌
-      * - **browsertime-unity-webgl-mobile-fenix-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-fenix-nofis**
         - ✅
         - ❌
         - ❌
         - ❌
-      * - **browsertime-unity-webgl-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-geckoview-nofis**
         - ✅
         - ✅
         - ❌
@@ -3727,12 +3727,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-unity-webgl-mobile-fenix-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-fenix-nofis**
         - ❌
         - ❌
         - ❌
         - ❌
-      * - **browsertime-unity-webgl-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-geckoview-nofis**
         - ❌
         - ❌
         - ❌
@@ -3748,17 +3748,17 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - autoland
         - mozilla-release
         - mozilla-beta
-      * - **browsertime-unity-webgl-mobile-chrome-m-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-chrome-m-nofis**
         - ✅
         - ❌
         - ❌
         - ❌
-      * - **browsertime-unity-webgl-mobile-fenix-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-fenix-nofis**
         - ✅
         - ❌
         - ❌
         - ❌
-      * - **browsertime-unity-webgl-mobile-geckoview-nofis**
+      * - **browsertime-benchmark-unity-webgl-mobile-geckoview-nofis**
         - ✅
         - ✅
         - ❌
@@ -8369,6 +8369,191 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    * **type**: pageload
    * **unit**: ms
    * **use live sites**: true
+
+.. dropdown:: connect
+   :class-container: anchor-id-connect-c
+
+   **Owner**: Network Team
+
+   * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange
+   * **alert threshold**: 2.0
+   * **apps**: firefox
+   * **browser cycles**: 3
+   * **cold**: true
+   * **custom data**: true
+   * **expected**: pass
+   * **gecko profile entries**: 14000000
+   * **gecko profile interval**: 1
+   * **lower is better**: true
+   * **page cycles**: 1
+   * **page timeout**: 60000
+   * **test script**: speculative-connect.js
+   * **test url**: `<None>`__
+   * **type**: pageload
+   * **unit**: ms
+   * **use live sites**: true
+   * **Test Task**:
+
+   .. list-table:: **test-linux1804-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ✅
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ✅
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-speculative-firefox-connect**
+        - ❌
+        - ✅
+        - ❌
+        - ❌
+
+
 
 .. dropdown:: constant-regression
    :class-container: anchor-id-constant-regression-c

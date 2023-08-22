@@ -13,6 +13,7 @@ var { UrlbarMuxer, UrlbarProvider, UrlbarQueryContext, UrlbarUtils } =
 
 ChromeUtils.defineESModuleGetters(this, {
   AddonTestUtils: "resource://testing-common/AddonTestUtils.sys.mjs",
+  HttpServer: "resource://testing-common/httpd.sys.mjs",
   PlacesTestUtils: "resource://testing-common/PlacesTestUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
@@ -26,10 +27,6 @@ ChromeUtils.defineESModuleGetters(this, {
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.sys.mjs",
   sinon: "resource://testing-common/Sinon.sys.mjs",
-});
-
-XPCOMUtils.defineLazyModuleGetters(this, {
-  HttpServer: "resource://testing-common/httpd.js",
 });
 
 XPCOMUtils.defineLazyGetter(this, "QuickSuggestTestUtils", () => {
@@ -127,15 +124,6 @@ function createContext(searchString = "foo", properties = {}) {
       properties
     )
   );
-  context.view = {
-    get visibleResults() {
-      return context.results;
-    },
-    controller: {
-      removeResult() {},
-    },
-    acknowledgeDismissal() {},
-  };
   UrlbarTokenizer.tokenize(context);
   return context;
 }
@@ -901,6 +889,15 @@ async function check_results({
         },
       },
     },
+  });
+  controller.setView({
+    get visibleResults() {
+      return context.results;
+    },
+    controller: {
+      removeResult() {},
+    },
+    acknowledgeDismissal() {},
   });
 
   if (incompleteSearch) {

@@ -166,14 +166,14 @@ class nsGenericHTMLElement : public nsGenericHTMLElementBase {
       mozilla::dom::PopoverToggleEventTask* aTask,
       mozilla::dom::PopoverVisibilityState aOldState);
   MOZ_CAN_RUN_SCRIPT void ShowPopover(ErrorResult& aRv);
-  MOZ_CAN_RUN_SCRIPT void ShowPopoverInternal(
-      nsGenericHTMLFormControlElementWithState* aInvoker, ErrorResult& aRv);
+  MOZ_CAN_RUN_SCRIPT void ShowPopoverInternal(Element* aInvoker,
+                                              ErrorResult& aRv);
   MOZ_CAN_RUN_SCRIPT_BOUNDARY void HidePopoverWithoutRunningScript();
   MOZ_CAN_RUN_SCRIPT void HidePopoverInternal(bool aFocusPreviousElement,
                                               bool aFireEvents,
                                               ErrorResult& aRv);
   MOZ_CAN_RUN_SCRIPT void HidePopover(ErrorResult& aRv);
-  MOZ_CAN_RUN_SCRIPT void TogglePopover(
+  MOZ_CAN_RUN_SCRIPT bool TogglePopover(
       const mozilla::dom::Optional<bool>& aForce, ErrorResult& aRv);
   MOZ_CAN_RUN_SCRIPT void FocusPopover();
   void ForgetPreviouslyFocusedElementAfterHidingPopover();

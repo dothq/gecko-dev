@@ -66,13 +66,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
   QuarantinedDomains: "resource://gre/modules/ExtensionPermissions.sys.mjs",
 });
 
-XPCOMUtils.defineLazyGetter(lazy, "resourceProtocol", () =>
+ChromeUtils.defineLazyGetter(lazy, "resourceProtocol", () =>
   Services.io
     .getProtocolHandler("resource")
     .QueryInterface(Ci.nsIResProtocolHandler)
 );
 
-XPCOMUtils.defineLazyGetter(
+ChromeUtils.defineLazyGetter(
   lazy,
   "l10n",
   () =>
@@ -173,13 +173,13 @@ const { getUniqueId, promiseTimeout } = ExtensionUtils;
 
 const { EventEmitter, updateAllowedOrigins } = ExtensionCommon;
 
-XPCOMUtils.defineLazyGetter(
+ChromeUtils.defineLazyGetter(
   lazy,
   "LocaleData",
   () => ExtensionCommon.LocaleData
 );
 
-XPCOMUtils.defineLazyGetter(lazy, "NO_PROMPT_PERMISSIONS", async () => {
+ChromeUtils.defineLazyGetter(lazy, "NO_PROMPT_PERMISSIONS", async () => {
   // Wait until all extension API schemas have been loaded and parsed.
   await Management.lazyInit();
   return new Set(
@@ -192,7 +192,7 @@ XPCOMUtils.defineLazyGetter(lazy, "NO_PROMPT_PERMISSIONS", async () => {
 });
 
 // TODO(Bug 1789718): Remove after the deprecated XPIProvider-based implementation is also removed.
-XPCOMUtils.defineLazyGetter(lazy, "SCHEMA_SITE_PERMISSIONS", async () => {
+ChromeUtils.defineLazyGetter(lazy, "SCHEMA_SITE_PERMISSIONS", async () => {
   // Wait until all extension API schemas have been loaded and parsed.
   await Management.lazyInit();
   return lazy.Schemas.getPermissionNames(["SitePermission"]);
@@ -644,6 +644,7 @@ var ExtensionAddonObserver = {
       extension.setSharedData("", extension.serialize());
       Services.ppmm.sharedData.flush();
 
+      extension.emit("update-ignore-quarantine");
       extension.broadcast("Extension:UpdateIgnoreQuarantine", {
         id: extension.id,
         ignoreQuarantine: addon.quarantineIgnoredByUser,
@@ -701,6 +702,7 @@ export var ExtensionProcessCrashObserver = {
         let pp = subject.QueryInterface(Ci.nsIDOMProcessParent);
         if (pp.remoteType === "extension") {
           this.currentProcessChildID = childID;
+          Glean.extensions.processEvent.created.add(1);
         }
         break;
       }
@@ -728,6 +730,7 @@ export var ExtensionProcessCrashObserver = {
         }
 
         this.lastCrashedProcessChildID = childID;
+        Glean.extensions.processEvent.crashed.add(1);
         Management.emit("extension-process-crash", { childID });
         break;
       }
@@ -2606,7 +2609,7 @@ class BootstrapScope {
   }
 }
 
-XPCOMUtils.defineLazyGetter(
+ChromeUtils.defineLazyGetter(
   BootstrapScope.prototype,
   "BOOTSTRAP_REASON_TO_STRING_MAP",
   () => {

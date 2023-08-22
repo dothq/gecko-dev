@@ -518,19 +518,18 @@ static bool IsFontSizeInflationContainer(nsIFrame* aFrame,
 
   LayoutFrameType frameType = aFrame->Type();
   bool isInline =
-      (nsStyleDisplay::IsInlineFlow(aFrame->GetDisplay()) ||
-       RubyUtils::IsRubyBox(frameType) ||
-       (aStyleDisplay->IsFloatingStyle() &&
-        frameType == LayoutFrameType::Letter) ||
-       // Given multiple frames for the same node, only the
-       // outer one should be considered a container.
-       // (Important, e.g., for nsSelectsAreaFrame.)
-       (aFrame->GetParent()->GetContent() == content) ||
-       (content &&
-        // Form controls shouldn't become inflation containers.
-        (content->IsAnyOfHTMLElements(
-            nsGkAtoms::option, nsGkAtoms::optgroup, nsGkAtoms::select,
-            nsGkAtoms::input, nsGkAtoms::button, nsGkAtoms::textarea))));
+      aFrame->GetDisplay().IsInlineFlow() || RubyUtils::IsRubyBox(frameType) ||
+      (aStyleDisplay->IsFloatingStyle() &&
+       frameType == LayoutFrameType::Letter) ||
+      // Given multiple frames for the same node, only the
+      // outer one should be considered a container.
+      // (Important, e.g., for nsSelectsAreaFrame.)
+      (aFrame->GetParent()->GetContent() == content) ||
+      (content &&
+       // Form controls shouldn't become inflation containers.
+       (content->IsAnyOfHTMLElements(nsGkAtoms::option, nsGkAtoms::optgroup,
+                                     nsGkAtoms::select, nsGkAtoms::input,
+                                     nsGkAtoms::button, nsGkAtoms::textarea)));
   NS_ASSERTION(!aFrame->IsFrameOfType(nsIFrame::eLineParticipant) || isInline ||
                    // br frames and mathml frames report being line
                    // participants even when their position or display is
@@ -1091,6 +1090,12 @@ void nsIFrame::MarkNeedsDisplayItemRebuild() {
     return;
   }
 
+#ifdef ACCESSIBILITY
+  if (nsAccessibilityService* accService = GetAccService()) {
+    accService->NotifyOfPossibleBoundsChange(PresShell(), mContent);
+  }
+#endif
+
   nsIFrame* rootFrame = PresShell()->GetRootFrame();
 
   if (rootFrame->IsFrameModified()) {
@@ -1428,8 +1433,8 @@ void nsIFrame::HandleLastRememberedSize() {
   }
   const WritingMode wm = GetWritingMode();
   const nsStylePosition* stylePos = StylePosition();
-  bool canRememberBSize = stylePos->ContainIntrinsicBSize(wm).IsAutoLength();
-  bool canRememberISize = stylePos->ContainIntrinsicISize(wm).IsAutoLength();
+  bool canRememberBSize = stylePos->ContainIntrinsicBSize(wm).HasAuto();
+  bool canRememberISize = stylePos->ContainIntrinsicISize(wm).HasAuto();
   if (!canRememberBSize) {
     element->RemoveLastRememberedBSize();
   }
@@ -2433,10 +2438,9 @@ bool nsIFrame::CanBeDynamicReflowRoot() const {
     return false;
   }
 
-  auto& display = *StyleDisplay();
-  if (IsFrameOfType(nsIFrame::eLineParticipant) ||
-      nsStyleDisplay::IsRubyDisplayType(display.mDisplay) ||
-      display.DisplayOutside() == StyleDisplayOutside::InternalTable ||
+  const auto& display = *StyleDisplay();
+  if (IsFrameOfType(nsIFrame::eLineParticipant) || display.mDisplay.IsRuby() ||
+      display.IsInnerTableStyle() ||
       display.DisplayInside() == StyleDisplayInside::Table) {
     // We have a display type where 'width' and 'height' don't actually set the
     // width or height (i.e., the size depends on content).
@@ -2450,7 +2454,7 @@ bool nsIFrame::CanBeDynamicReflowRoot() const {
   //
   // FIXME: For display:block, we should probably optimize inline-size: auto.
   // FIXME: Other flex and grid cases?
-  auto& pos = *StylePosition();
+  const auto& pos = *StylePosition();
   const auto& width = pos.mWidth;
   const auto& height = pos.mHeight;
   if (!width.IsLengthPercentage() || width.HasPercent() ||
@@ -6745,7 +6749,7 @@ void nsIFrame::DidReflow(nsPresContext* aPresContext,
   NS_FRAME_TRACE(NS_FRAME_TRACE_CALLS, ("nsIFrame::DidReflow"));
 
   if (IsHiddenByContentVisibilityOfInFlowParentForLayout()) {
-    RemoveStateBits(NS_FRAME_IN_REFLOW | NS_FRAME_FIRST_REFLOW);
+    RemoveStateBits(NS_FRAME_IN_REFLOW);
     return;
   }
 
@@ -6773,12 +6777,6 @@ void nsIFrame::DidReflow(nsPresContext* aPresContext,
   }
 
   aPresContext->ReflowedFrame();
-
-#ifdef ACCESSIBILITY
-  if (nsAccessibilityService* accService = GetAccService()) {
-    accService->NotifyOfPossibleBoundsChange(PresShell(), mContent);
-  }
-#endif
 }
 
 void nsIFrame::FinishReflowWithAbsoluteFrames(nsPresContext* aPresContext,
@@ -6893,8 +6891,11 @@ bool nsIFrame::HidesContentForLayout() const {
 
 bool nsIFrame::IsHiddenByContentVisibilityOfInFlowParentForLayout() const {
   const auto* parent = GetInFlowParent();
+  // The anonymous children owned by parent are important for properly sizing
+  // their parents.
   return parent && parent->HidesContentForLayout() &&
-         !(Style()->IsAnonBox() && !IsFrameOfType(nsIFrame::eLineParticipant));
+         !(parent->HasAnyStateBits(NS_FRAME_OWNS_ANON_BOXES) &&
+           Style()->IsAnonBox());
 }
 
 bool nsIFrame::IsHiddenByContentVisibilityOnAnyAncestor(
@@ -6903,9 +6904,10 @@ bool nsIFrame::IsHiddenByContentVisibilityOnAnyAncestor(
     return false;
   }
 
-  bool isAnonymousBlock =
-      Style()->IsAnonBox() && !IsFrameOfType(nsIFrame::eLineParticipant);
-  for (nsIFrame* cur = GetInFlowParent(); cur; cur = cur->GetInFlowParent()) {
+  auto* parent = GetInFlowParent();
+  bool isAnonymousBlock = Style()->IsAnonBox() && parent &&
+                          parent->HasAnyStateBits(NS_FRAME_OWNS_ANON_BOXES);
+  for (nsIFrame* cur = parent; cur; cur = cur->GetInFlowParent()) {
     if (!isAnonymousBlock && cur->HidesContent(aInclude)) {
       return true;
     }
@@ -7715,11 +7717,6 @@ void nsIFrame::SetPosition(const nsPoint& aPt) {
   }
   mRect.MoveTo(aPt);
   MarkNeedsDisplayItemRebuild();
-#ifdef ACCESSIBILITY
-  if (nsAccessibilityService* accService = GetAccService()) {
-    accService->NotifyOfPossibleBoundsChange(PresShell(), mContent);
-  }
-#endif
 }
 
 void nsIFrame::MovePositionBy(const nsPoint& aTranslation) {

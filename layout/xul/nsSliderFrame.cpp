@@ -38,6 +38,8 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_general.h"
+#include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/SVGIntegrationUtils.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/dom/Document.h"
@@ -1403,21 +1405,17 @@ nsSliderFrame::HandlePress(nsPresContext* aPresContext, WidgetGUIEvent* aEvent,
 
   mRepeatDirection = change;
   DragThumb(true);
-  // On Linux we want to keep scrolling in the direction indicated by |change|
-  // until the mouse is released. On the other platforms we want to stop
-  // scrolling as soon as the scrollbar thumb has reached the current mouse
-  // position.
-#ifdef MOZ_WIDGET_GTK
-  // Set the destination point to the very end of the scrollbar so that
-  // scrolling doesn't stop halfway through.
-  if (change > 0) {
-    mDestinationPoint = nsPoint(GetRect().width, GetRect().height);
+  if (StaticPrefs::layout_scrollbars_click_and_hold_track_continue_to_end()) {
+    // Set the destination point to the very end of the scrollbar so that
+    // scrolling doesn't stop halfway through.
+    if (change > 0) {
+      mDestinationPoint = nsPoint(GetRect().width, GetRect().height);
+    } else {
+      mDestinationPoint = nsPoint(0, 0);
+    }
   } else {
-    mDestinationPoint = nsPoint(0, 0);
+    mDestinationPoint = eventPoint;
   }
-#else
-  mDestinationPoint = eventPoint;
-#endif
   StartRepeat();
   PageScroll(false);
 
@@ -1542,7 +1540,10 @@ void nsSliderFrame::PageScroll(bool aClickAndHold) {
       pos.y += distance;
     }
 
-    sf->ScrollTo(pos, ScrollMode::SmoothMsd, nullptr, scrollSnapFlags);
+    sf->ScrollTo(pos,
+                 StaticPrefs::general_smoothScroll() ? ScrollMode::SmoothMsd
+                                                     : ScrollMode::Instant,
+                 nullptr, scrollSnapFlags);
 
     return;
   }

@@ -47,8 +47,6 @@
  *   issues.
  */
 
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -58,7 +56,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
 });
 
-XPCOMUtils.defineLazyGetter(lazy, "MirrorLog", () =>
+ChromeUtils.defineLazyGetter(lazy, "MirrorLog", () =>
   lazy.Log.repository.getLogger("Sync.Engine.Bookmarks.Mirror")
 );
 
@@ -74,10 +72,10 @@ const DB_TITLE_LENGTH_MAX = 4096;
 
 // The current mirror database schema version. Bump for migrations, then add
 // migration code to `migrateMirrorSchema`.
-const MIRROR_SCHEMA_VERSION = 8;
+const MIRROR_SCHEMA_VERSION = 9;
 
 // Use a shared jankYielder in these functions
-XPCOMUtils.defineLazyGetter(lazy, "yieldState", () => lazy.Async.yieldState());
+ChromeUtils.defineLazyGetter(lazy, "yieldState", () => lazy.Async.yieldState());
 
 /** Adapts a `Log.sys.mjs` logger to a `mozIServicesLogSink`. */
 class LogAdapter {
@@ -806,13 +804,21 @@ export class SyncedBookmarksMirror {
       ? Ci.mozISyncedBookmarksMerger.VALIDITY_VALID
       : Ci.mozISyncedBookmarksMerger.VALIDITY_REPLACE;
 
+    let unknownFields = extractUnknownFields(record.cleartext, [
+      "bmkUri",
+      "description",
+      "keyword",
+      "tags",
+      "title",
+      ...COMMON_UNKNOWN_FIELDS,
+    ]);
     await this.db.executeCached(
       `
       REPLACE INTO items(guid, parentGuid, serverModified, needsMerge, kind,
-                         dateAdded, title, keyword, validity,
+                         dateAdded, title, keyword, validity, unknownFields,
                          urlId)
       VALUES(:guid, :parentGuid, :serverModified, :needsMerge, :kind,
-             :dateAdded, NULLIF(:title, ''), :keyword, :validity,
+             :dateAdded, NULLIF(:title, ''), :keyword, :validity, :unknownFields,
              (SELECT id FROM urls
               WHERE hash = hash(:url) AND
                     url = :url))`,
@@ -827,6 +833,7 @@ export class SyncedBookmarksMirror {
         keyword,
         url: url ? url.href : null,
         validity,
+        unknownFields,
       }
     );
 
@@ -923,18 +930,29 @@ export class SyncedBookmarksMirror {
     let dateAdded = determineDateAdded(record);
     let title = validateTitle(record.title);
 
+    let unknownFields = extractUnknownFields(record.cleartext, [
+      "bmkUri",
+      "description",
+      "folderName",
+      "keyword",
+      "queryId",
+      "tags",
+      "title",
+      ...COMMON_UNKNOWN_FIELDS,
+    ]);
+
     await this.db.executeCached(
       `
       REPLACE INTO items(guid, parentGuid, serverModified, needsMerge, kind,
                          dateAdded, title,
                          urlId,
-                         validity)
+                         validity, unknownFields)
       VALUES(:guid, :parentGuid, :serverModified, :needsMerge, :kind,
              :dateAdded, NULLIF(:title, ''),
              (SELECT id FROM urls
               WHERE hash = hash(:url) AND
                     url = :url),
-             :validity)`,
+             :validity, :unknownFields)`,
       {
         guid,
         parentGuid,
@@ -945,6 +963,7 @@ export class SyncedBookmarksMirror {
         title,
         url: url ? url.href : null,
         validity,
+        unknownFields,
       }
     );
   }
@@ -957,13 +976,18 @@ export class SyncedBookmarksMirror {
     let serverModified = determineServerModified(record);
     let dateAdded = determineDateAdded(record);
     let title = validateTitle(record.title);
-
+    let unknownFields = extractUnknownFields(record.cleartext, [
+      "children",
+      "description",
+      "title",
+      ...COMMON_UNKNOWN_FIELDS,
+    ]);
     await this.db.executeCached(
       `
       REPLACE INTO items(guid, parentGuid, serverModified, needsMerge, kind,
-                         dateAdded, title)
+                         dateAdded, title, unknownFields)
       VALUES(:guid, :parentGuid, :serverModified, :needsMerge, :kind,
-             :dateAdded, NULLIF(:title, ''))`,
+             :dateAdded, NULLIF(:title, ''), :unknownFields)`,
       {
         guid,
         parentGuid,
@@ -972,6 +996,7 @@ export class SyncedBookmarksMirror {
         kind: Ci.mozISyncedBookmarksMerger.KIND_FOLDER,
         dateAdded,
         title,
+        unknownFields,
       }
     );
 
@@ -1022,12 +1047,21 @@ export class SyncedBookmarksMirror {
       ? Ci.mozISyncedBookmarksMerger.VALIDITY_VALID
       : Ci.mozISyncedBookmarksMerger.VALIDITY_REPLACE;
 
+    let unknownFields = extractUnknownFields(record.cleartext, [
+      "children",
+      "description",
+      "feedUri",
+      "siteUri",
+      "title",
+      ...COMMON_UNKNOWN_FIELDS,
+    ]);
+
     await this.db.executeCached(
       `
       REPLACE INTO items(guid, parentGuid, serverModified, needsMerge, kind,
-                         dateAdded, title, feedURL, siteURL, validity)
+                         dateAdded, title, feedURL, siteURL, validity, unknownFields)
       VALUES(:guid, :parentGuid, :serverModified, :needsMerge, :kind,
-             :dateAdded, NULLIF(:title, ''), :feedURL, :siteURL, :validity)`,
+             :dateAdded, NULLIF(:title, ''), :feedURL, :siteURL, :validity, :unknownFields)`,
       {
         guid,
         parentGuid,
@@ -1039,6 +1073,7 @@ export class SyncedBookmarksMirror {
         feedURL: feedURL ? feedURL.href : null,
         siteURL: siteURL ? siteURL.href : null,
         validity,
+        unknownFields,
       }
     );
   }
@@ -1050,13 +1085,17 @@ export class SyncedBookmarksMirror {
     );
     let serverModified = determineServerModified(record);
     let dateAdded = determineDateAdded(record);
+    let unknownFields = extractUnknownFields(record.cleartext, [
+      "pos",
+      ...COMMON_UNKNOWN_FIELDS,
+    ]);
 
     await this.db.executeCached(
       `
       REPLACE INTO items(guid, parentGuid, serverModified, needsMerge, kind,
-                         dateAdded)
+                         dateAdded, unknownFields)
       VALUES(:guid, :parentGuid, :serverModified, :needsMerge, :kind,
-             :dateAdded)`,
+             :dateAdded, :unknownFields)`,
       {
         guid,
         parentGuid,
@@ -1064,6 +1103,7 @@ export class SyncedBookmarksMirror {
         needsMerge,
         kind: Ci.mozISyncedBookmarksMerger.KIND_SEPARATOR,
         dateAdded,
+        unknownFields,
       }
     );
   }
@@ -1184,7 +1224,7 @@ export class SyncedBookmarksMirror {
     await this.db.execute(
       `SELECT id, syncChangeCounter, guid, isDeleted, type, isQuery,
               tagFolderName, keyword, url, IFNULL(title, '') AS title,
-              position, parentGuid,
+              position, parentGuid, unknownFields,
               IFNULL(parentTitle, '') AS parentTitle, dateAdded
        FROM itemsToUpload`,
       null,
@@ -1227,6 +1267,10 @@ export class SyncedBookmarksMirror {
         let parentRecordId =
           lazy.PlacesSyncUtils.bookmarks.guidToRecordId(parentGuid);
 
+        let unknownFieldsRow = row.getResultByName("unknownFields");
+        let unknownFields = unknownFieldsRow
+          ? JSON.parse(unknownFieldsRow)
+          : null;
         let type = row.getResultByName("type");
         switch (type) {
           case lazy.PlacesUtils.bookmarks.TYPE_BOOKMARK: {
@@ -1253,6 +1297,7 @@ export class SyncedBookmarksMirror {
                 title: row.getResultByName("title"),
                 // folderName should never be an empty string or null
                 folderName: row.getResultByName("tagFolderName") || undefined,
+                ...unknownFields,
               };
               changeRecords[recordId] = new BookmarkChangeRecord(
                 syncChangeCounter,
@@ -1270,6 +1315,7 @@ export class SyncedBookmarksMirror {
               dateAdded: row.getResultByName("dateAdded") || undefined,
               bmkUri: row.getResultByName("url"),
               title: row.getResultByName("title"),
+              ...unknownFields,
             };
             let keyword = row.getResultByName("keyword");
             if (keyword) {
@@ -1296,6 +1342,7 @@ export class SyncedBookmarksMirror {
               parentName: row.getResultByName("parentTitle"),
               dateAdded: row.getResultByName("dateAdded") || undefined,
               title: row.getResultByName("title"),
+              ...unknownFields,
             };
             let localId = row.getResultByName("id");
             let childRecordIds = childRecordIdsByLocalParentId.get(localId);
@@ -1317,6 +1364,7 @@ export class SyncedBookmarksMirror {
               dateAdded: row.getResultByName("dateAdded") || undefined,
               // Older Desktops use `pos` for deduping.
               pos: row.getResultByName("position"),
+              ...unknownFields,
             };
             changeRecords[recordId] = new BookmarkChangeRecord(
               syncChangeCounter,
@@ -1503,6 +1551,19 @@ async function migrateMirrorSchema(db, currentSchemaVersion) {
                       WHERE EXISTS (SELECT 1 FROM mirror.items
                                     WHERE guid = b.guid)`);
   }
+  if (currentSchemaVersion < 9) {
+    // Adding unknownFields to the mirror table, which allows us to
+    // keep fields we may not yet understand from other clients and roundtrip
+    // them during the sync process
+    let columns = await db.execute(`PRAGMA table_info(items)`);
+    // migration needs to be idempotent, so we check if the column exists first
+    let exists = columns.find(
+      row => row.getResultByName("name") === "unknownFields"
+    );
+    if (!exists) {
+      await db.execute(`ALTER TABLE items ADD COLUMN unknownFields TEXT`);
+    }
+  }
 }
 
 /**
@@ -1543,7 +1604,8 @@ async function initializeMirrorDatabase(db) {
     loadInSidebar BOOLEAN,
     smartBookmarkName TEXT,
     feedURL TEXT,
-    siteURL TEXT
+    siteURL TEXT,
+    unknownFields TEXT
   )`);
 
   await db.execute(`CREATE TABLE mirror.structure(
@@ -1932,7 +1994,8 @@ async function initializeTempMirrorEntities(db) {
     url TEXT,
     tagFolderName TEXT,
     keyword TEXT,
-    position INTEGER
+    position INTEGER,
+    unknownFields TEXT
   )`);
 
   await db.execute(`CREATE TEMP TABLE structureToUpload(
@@ -2525,6 +2588,42 @@ function anyAborted(finalizeSignal, interruptSignal = null) {
   finalizeSignal.addEventListener("abort", onAbort);
   interruptSignal.addEventListener("abort", onAbort);
   return controller.signal;
+}
+
+// Common unknown fields for places items
+const COMMON_UNKNOWN_FIELDS = [
+  "dateAdded",
+  "hasDupe",
+  "id",
+  "modified",
+  "parentid",
+  "parentName",
+  "type",
+];
+
+// Other clients might have new fields we don't quite understand yet,
+// so we add it to a "unknownFields" field to roundtrip back to the server
+// so other clients don't experience data loss
+function extractUnknownFields(record, validFields) {
+  let { unknownFields, hasUnknownFields } = Object.keys(record).reduce(
+    ({ unknownFields, hasUnknownFields }, key) => {
+      if (validFields.includes(key)) {
+        return { unknownFields, hasUnknownFields };
+      }
+      unknownFields[key] = record[key];
+      return { unknownFields, hasUnknownFields: true };
+    },
+    { unknownFields: {}, hasUnknownFields: false }
+  );
+  // If we found some unknown fields, we stringify it to be able
+  // to properly encrypt it for roundtripping since we can't know if
+  // it contained sensitive fields or not
+  if (hasUnknownFields) {
+    // For simplicity, we store the unknown fields as a string
+    // since we never operate on it and just need it for roundtripping
+    return JSON.stringify(unknownFields);
+  }
+  return null;
 }
 
 // In conclusion, this is why bookmark syncing is hard.

@@ -112,64 +112,64 @@ export class MigrationWizard extends HTMLElement {
               <div data-resource-type="BOOKMARKS" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span default-data-l10n-id="migration-bookmarks-option-label" ie-edge-data-l10n-id="migration-favorites-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="PASSWORDS" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-logins-and-passwords-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="HISTORY" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-history-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="EXTENSIONS" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-extensions-option-label"></span>
-                <a class="success-text deemphasized-text"></a>
-                <span class="success-text deemphasized-text"></span>
+                <a class="message-text deemphasized-text"></a>
+                <span class="message-text deemphasized-text"></span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="FORMDATA" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-form-autofill-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="PAYMENT_METHODS" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-payment-methods-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="COOKIES" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-cookies-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="SESSION" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-session-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
 
               <div data-resource-type="OTHERDATA" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-otherdata-option-label"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
                 <a class="support-text deemphasized-text"></a>
               </div>
             </div>
@@ -186,25 +186,25 @@ export class MigrationWizard extends HTMLElement {
               <div data-resource-type="PASSWORDS_FROM_FILE" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-passwords-from-file"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
               </div>
 
               <div data-resource-type="PASSWORDS_NEW" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-passwords-new"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
               </div>
 
               <div data-resource-type="PASSWORDS_UPDATED" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-passwords-updated"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
               </div>
 
               <div data-resource-type="BOOKMARKS_FROM_FILE" class="resource-progress-group">
                 <span class="progress-icon-parent"><span class="progress-icon" role="img"></span></span>
                 <span data-l10n-id="migration-bookmarks-from-file"></span>
-                <span class="success-text deemphasized-text">&nbsp;</span>
+                <span class="message-text deemphasized-text">&nbsp;</span>
               </div>
             </div>
             <moz-button-group class="buttons" part="buttons">
@@ -283,7 +283,7 @@ export class MigrationWizard extends HTMLElement {
 
   constructor() {
     super();
-    const shadow = this.attachShadow({ mode: "closed" });
+    const shadow = this.attachShadow({ mode: "open" });
 
     if (window.MozXULElement) {
       window.MozXULElement.insertFTLIfNeeded("branding/brand.ftl");
@@ -415,23 +415,20 @@ export class MigrationWizard extends HTMLElement {
     if (this.#browserProfileSelectorList) {
       return;
     }
-    this.#browserProfileSelectorList = this.querySelector("panel-list");
-    if (!this.#browserProfileSelectorList) {
-      throw new Error(
-        "Could not find a <panel-list> under the MigrationWizard during initialization."
-      );
-    }
+    this.#browserProfileSelectorList = document.createElement("panel-list");
     this.#browserProfileSelectorList.toggleAttribute(
       "min-width-from-anchor",
       true
     );
     this.#browserProfileSelectorList.addEventListener("click", this);
-    // Until bug 1823489 is fixed, this is the easiest way for the
-    // migration wizard to style the selector dropdown so that it more
-    // closely lines up with the edges of the selector button.
-    this.#browserProfileSelectorList.style.boxSizing = "border-box";
-    this.#browserProfileSelectorList.style.overflowY = "auto";
-    this.#browserProfileSelectorList.style.maxHeight = "100%";
+
+    if (document.createXULElement) {
+      let panel = document.createXULElement("panel");
+      panel.appendChild(this.#browserProfileSelectorList);
+      this.#shadowRoot.appendChild(panel);
+    } else {
+      this.#shadowRoot.appendChild(this.#browserProfileSelectorList);
+    }
   }
 
   /**
@@ -537,8 +534,16 @@ export class MigrationWizard extends HTMLElement {
     );
 
     let details = this.#shadowRoot.querySelector("details");
-    selectionPage.toggleAttribute("show-import-all", state.showImportAll);
-    details.open = !state.showImportAll;
+
+    if (this.hasAttribute("force-show-import-all")) {
+      let forceShowImportAll =
+        this.getAttribute("force-show-import-all") == "true";
+      selectionPage.toggleAttribute("show-import-all", forceShowImportAll);
+      details.open = !forceShowImportAll;
+    } else {
+      selectionPage.toggleAttribute("show-import-all", state.showImportAll);
+      details.open = !state.showImportAll;
+    }
 
     this.#expandedDetails = false;
 
@@ -552,32 +557,9 @@ export class MigrationWizard extends HTMLElement {
       opt.hasPermissions = migrator.hasPermissions;
       opt.brandImage = migrator.brandImage;
 
-      // Bug 1823489 - since the panel-list and panel-items are slotted, we
-      // cannot style them directly from migration-wizard.css. We use inline
-      // styles for now to achieve the desired appearance, but bug 1823489
-      // will investigate having MigrationWizard own the <xul:panel>,
-      // <panel-list> and <panel-item>'s so that styling can be done in the
-      // stylesheet instead.
       let button = opt.shadowRoot.querySelector("button");
-      button.style.minHeight = "40px";
       if (migrator.brandImage) {
         button.style.backgroundImage = `url(${migrator.brandImage})`;
-      } else {
-        button.style.backgroundImage = `url("chrome://global/skin/icons/defaultFavicon.svg")`;
-      }
-
-      // Bug 1823489 - since the panel-list and panel-items are slotted, we
-      // cannot style them or their children in migration-wizard.css. We use
-      // inline styles for now to achieve the desired appearance, but bug 1823489
-      // will investigate having MigrationWizard own the <xul:panel>,
-      // <panel-list> and <panel-item>'s so that styling can be done in the
-      // stylesheet instead.
-      if (migrator.type == MigrationWizardConstants.MIGRATOR_TYPES.FILE) {
-        button.style.backgroundSize = "20px";
-        button.style.backgroundPosition = "6px center";
-        if (this.#browserProfileSelectorList.isDocumentRTL()) {
-          button.style.backgroundPositionX = "right 6px";
-        }
       }
 
       if (migrator.profile) {
@@ -676,6 +658,7 @@ export class MigrationWizard extends HTMLElement {
     );
     let totalProgressGroups = Object.keys(state.progress).length;
     let remainingProgressGroups = totalProgressGroups;
+    let totalWarnings = 0;
 
     for (let group of resourceGroups) {
       let resourceType = group.dataset.resourceType;
@@ -686,8 +669,8 @@ export class MigrationWizard extends HTMLElement {
       group.hidden = false;
 
       let progressIcon = group.querySelector(".progress-icon");
-      let successText = group.querySelector("span.success-text");
-      let extensionsSuccessLink = group.querySelector("a.success-text");
+      let messageText = group.querySelector("span.message-text");
+      let extensionsSuccessLink = group.querySelector("a.message-text");
       let supportLink = group.querySelector(".support-text");
 
       let labelSpan = group.querySelector("span[default-data-l10n-id]");
@@ -704,7 +687,7 @@ export class MigrationWizard extends HTMLElement {
           );
         }
       }
-      successText.textContent = "";
+      messageText.textContent = "";
       if (extensionsSuccessLink) {
         extensionsSuccessLink.textContent = "";
         extensionsSuccessLink.removeAttribute("href");
@@ -721,7 +704,7 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-in-progress"
           );
           progressIcon.setAttribute("state", "loading");
-          successText.textContent = "";
+          messageText.textContent = "";
           if (extensionsSuccessLink) {
             extensionsSuccessLink.textContent = "";
             extensionsSuccessLink.removeAttribute("href");
@@ -730,7 +713,7 @@ export class MigrationWizard extends HTMLElement {
           supportLink.removeAttribute("href");
           // With no status text, we re-insert the &nbsp; so that the status
           // text area does not fully collapse.
-          successText.appendChild(document.createTextNode("\u00A0"));
+          messageText.appendChild(document.createTextNode("\u00A0"));
           break;
         }
         case MigrationWizardConstants.PROGRESS_VALUE.SUCCESS: {
@@ -739,12 +722,12 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-completed"
           );
           progressIcon.setAttribute("state", "success");
-          successText.textContent = state.progress[resourceType].message;
+          messageText.textContent = state.progress[resourceType].message;
           if (
             resourceType ==
             MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS
           ) {
-            successText.textContent = "";
+            messageText.textContent = "";
             extensionsSuccessLink.href = "about:addons";
             extensionsSuccessLink.textContent =
               state.progress[resourceType].message;
@@ -758,10 +741,11 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-completed"
           );
           progressIcon.setAttribute("state", "warning");
-          successText.textContent = state.progress[resourceType].message;
+          messageText.textContent = state.progress[resourceType].message;
           supportLink.textContent = state.progress[resourceType].linkText;
           supportLink.href = state.progress[resourceType].linkURL;
           remainingProgressGroups--;
+          totalWarnings++;
           break;
         }
         case MigrationWizardConstants.PROGRESS_VALUE.INFO: {
@@ -770,14 +754,14 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-completed"
           );
           progressIcon.setAttribute("state", "info");
-          successText.textContent = state.progress[resourceType].message;
+          messageText.textContent = state.progress[resourceType].message;
           supportLink.textContent = state.progress[resourceType].linkText;
           supportLink.href = state.progress[resourceType].linkURL;
           if (
             resourceType ==
             MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.EXTENSIONS
           ) {
-            successText.textContent = "";
+            messageText.textContent = "";
             extensionsSuccessLink.href = "about:addons";
             extensionsSuccessLink.textContent =
               state.progress[resourceType].message;
@@ -789,9 +773,16 @@ export class MigrationWizard extends HTMLElement {
     }
 
     let migrationDone = remainingProgressGroups == 0;
-    let headerL10nID = migrationDone
-      ? "migration-wizard-progress-done-header"
-      : "migration-wizard-progress-header";
+    let headerL10nID = "migration-wizard-progress-header";
+
+    if (migrationDone) {
+      if (totalWarnings) {
+        headerL10nID = "migration-wizard-progress-done-with-warnings-header";
+      } else {
+        headerL10nID = "migration-wizard-progress-done-header";
+      }
+    }
+
     let header = this.#shadowRoot.getElementById("progress-header");
     document.l10n.setAttributes(header, headerL10nID);
 
@@ -852,7 +843,7 @@ export class MigrationWizard extends HTMLElement {
       group.hidden = false;
 
       let progressIcon = group.querySelector(".progress-icon");
-      let successText = group.querySelector(".success-text");
+      let messageText = group.querySelector(".message-text");
 
       let progressValue = state.progress[resourceType].value;
       switch (progressValue) {
@@ -862,10 +853,10 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-in-progress"
           );
           progressIcon.setAttribute("state", "loading");
-          successText.textContent = "";
+          messageText.textContent = "";
           // With no status text, we re-insert the &nbsp; so that the status
           // text area does not fully collapse.
-          successText.appendChild(document.createTextNode("\u00A0"));
+          messageText.appendChild(document.createTextNode("\u00A0"));
           break;
         }
         case MigrationWizardConstants.PROGRESS_VALUE.SUCCESS: {
@@ -874,7 +865,7 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-completed"
           );
           progressIcon.setAttribute("state", "success");
-          successText.textContent = state.progress[resourceType].message;
+          messageText.textContent = state.progress[resourceType].message;
           remainingProgressGroups--;
           break;
         }
@@ -884,7 +875,7 @@ export class MigrationWizard extends HTMLElement {
             "migration-wizard-progress-icon-completed"
           );
           progressIcon.setAttribute("state", "warning");
-          successText.textContent = state.progress[resourceType].message;
+          messageText.textContent = state.progress[resourceType].message;
           remainingProgressGroups--;
           break;
         }

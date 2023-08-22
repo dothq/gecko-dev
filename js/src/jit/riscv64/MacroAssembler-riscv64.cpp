@@ -53,7 +53,7 @@ void MacroAssemblerRiscv64::ma_cmp_set(Register rd, Register rj, ImmPtr imm,
 
 void MacroAssemblerRiscv64::ma_cmp_set(Register rd, Address address, Imm32 imm,
                                        Condition c) {
-  // TODO(loong64): 32-bit ma_cmp_set?
+  // TODO(riscv): 32-bit ma_cmp_set?
   UseScratchRegisterScope temps(this);
   Register scratch2 = temps.Acquire();
   ma_load(scratch2, address, SizeWord);
@@ -1100,8 +1100,8 @@ void MacroAssemblerRiscv64::computeScaledAddress(const BaseIndex& address,
 void MacroAssemblerRiscv64Compat::wasmLoadI64Impl(
     const wasm::MemoryAccessDesc& access, Register memoryBase, Register ptr,
     Register ptrScratch, Register64 output, Register tmp) {
+  access.assertOffsetInGuardPages();
   uint32_t offset = access.offset();
-  MOZ_ASSERT(offset < asMasm().wasmMaxOffsetGuardLimit());
   MOZ_ASSERT_IF(offset, ptrScratch != InvalidReg);
 
   // Maybe add the offset.
@@ -1135,7 +1135,7 @@ void MacroAssemblerRiscv64Compat::wasmLoadI64Impl(
       lw(output.reg, ScratchRegister, 0);
       break;
     case Scalar::Uint32:
-      // TODO(loong64): Why need zero-extension here?
+      // TODO(riscv): Why need zero-extension here?
       add(ScratchRegister, memoryBase, ptr);
       lwu(output.reg, ScratchRegister, 0);
       break;
@@ -1154,8 +1154,8 @@ void MacroAssemblerRiscv64Compat::wasmLoadI64Impl(
 void MacroAssemblerRiscv64Compat::wasmStoreI64Impl(
     const wasm::MemoryAccessDesc& access, Register64 value, Register memoryBase,
     Register ptr, Register ptrScratch, Register tmp) {
+  access.assertOffsetInGuardPages();
   uint32_t offset = access.offset();
-  MOZ_ASSERT(offset < asMasm().wasmMaxOffsetGuardLimit());
   MOZ_ASSERT_IF(offset, ptrScratch != InvalidReg);
 
   // Maybe add the offset.
@@ -5549,7 +5549,7 @@ void MacroAssemblerRiscv64::ma_add32TestCarry(Condition cond, Register rd,
 
 void MacroAssemblerRiscv64::ma_subPtrTestOverflow(Register rd, Register rj,
                                                   Imm32 imm, Label* overflow) {
-  // TODO(loong64): Check subPtrTestOverflow
+  // TODO(riscv): Check subPtrTestOverflow
   MOZ_ASSERT(imm.value != INT32_MIN);
   ma_addPtrTestOverflow(rd, rj, Imm32(-imm.value), overflow);
 }
@@ -6343,8 +6343,8 @@ void MacroAssemblerRiscv64::wasmLoadImpl(const wasm::MemoryAccessDesc& access,
                                          Register memoryBase, Register ptr,
                                          Register ptrScratch,
                                          AnyRegister output, Register tmp) {
+  access.assertOffsetInGuardPages();
   uint32_t offset = access.offset();
-  MOZ_ASSERT(offset < asMasm().wasmMaxOffsetGuardLimit());
   MOZ_ASSERT_IF(offset, ptrScratch != InvalidReg);
 
   // Maybe add the offset.
@@ -6401,8 +6401,8 @@ void MacroAssemblerRiscv64::wasmStoreImpl(const wasm::MemoryAccessDesc& access,
                                           AnyRegister value,
                                           Register memoryBase, Register ptr,
                                           Register ptrScratch, Register tmp) {
+  access.assertOffsetInGuardPages();
   uint32_t offset = access.offset();
-  MOZ_ASSERT(offset < asMasm().wasmMaxOffsetGuardLimit());
   MOZ_ASSERT_IF(offset, ptrScratch != InvalidReg);
 
   // Maybe add the offset.

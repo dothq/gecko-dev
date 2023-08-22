@@ -7590,10 +7590,37 @@ void Document::SetScopeObject(nsIGlobalObject* aGlobal) {
   if (aGlobal) {
     mHasHadScriptHandlingObject = true;
 
-    nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
+    nsPIDOMWindowInner* window = aGlobal->AsInnerWindow();
     if (!window) {
       return;
     }
+
+    // Same origin data documents should have the same docGroup as their scope
+    // window.
+    if (mLoadedAsData && window->GetExtantDoc() &&
+        window->GetExtantDoc() != this &&
+        window->GetExtantDoc()->NodePrincipal() == NodePrincipal()) {
+      DocGroup* docGroup = window->GetExtantDoc()->GetDocGroup();
+
+      if (docGroup) {
+        if (!mDocGroup) {
+          mDocGroup = docGroup;
+          mDocGroup->AddDocument(this);
+        } else {
+          MOZ_ASSERT(mDocGroup == docGroup,
+                     "Data document has a mismatched doc group?");
+        }
+#ifdef DEBUG
+        AssertDocGroupMatchesKey();
+#endif
+        return;
+      }
+
+      MOZ_ASSERT_UNREACHABLE(
+          "Scope window doesn't have DocGroup when creating data document?");
+      // ... but fall through to be safe.
+    }
+
     BrowsingContextGroup* browsingContextGroup =
         window->GetBrowsingContextGroup();
 
@@ -8293,14 +8320,8 @@ static Element* GetCustomContentContainer(PresShell* aPresShell) {
 }
 
 already_AddRefed<AnonymousContent> Document::InsertAnonymousContent(
-    Element& aElement, bool aForce, ErrorResult& aRv) {
-  // Clone the node to avoid returning a direct reference.
-  nsCOMPtr<nsINode> clone = aElement.CloneNode(true, aRv);
-  if (aRv.Failed()) {
-    return nullptr;
-  }
-
-  PresShell* shell = GetPresShell();
+    bool aForce, ErrorResult& aRv) {
+  RefPtr<PresShell> shell = GetPresShell();
   if (aForce && !GetCustomContentContainer(shell)) {
     FlushPendingNotifications(FlushType::Layout);
     shell = GetPresShell();
@@ -8308,14 +8329,23 @@ already_AddRefed<AnonymousContent> Document::InsertAnonymousContent(
 
   nsAutoScriptBlocker scriptBlocker;
 
-  auto anonContent =
-      MakeRefPtr<AnonymousContent>(clone.forget().downcast<Element>());
+  RefPtr<AnonymousContent> anonContent = AnonymousContent::Create(*this);
+  if (!anonContent) {
+    aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
+    return nullptr;
+  }
 
   mAnonymousContents.AppendElement(anonContent);
 
-  if (Element* container = GetCustomContentContainer(shell)) {
-    container->AppendChildTo(&anonContent->ContentNode(), true, IgnoreErrors());
-    shell->GetCanvasFrame()->ShowCustomContentContainer();
+  if (RefPtr<Element> container = GetCustomContentContainer(shell)) {
+    // If the container is empty and we have other anon content we should be
+    // about to show all the other anonymous content nodes.
+    if (container->HasChildren() || mAnonymousContents.Length() == 1) {
+      container->AppendChildTo(anonContent->Host(), true, IgnoreErrors());
+      if (auto* canvasFrame = shell->GetCanvasFrame()) {
+        canvasFrame->ShowCustomContentContainer();
+      }
+    }
   }
 
   return anonContent.forget();
@@ -8327,7 +8357,7 @@ static void RemoveAnonContentFromCanvas(AnonymousContent& aAnonContent,
   if (!container) {
     return;
   }
-  container->RemoveChild(aAnonContent.ContentNode(), IgnoreErrors());
+  container->RemoveChild(*aAnonContent.Host(), IgnoreErrors());
 }
 
 void Document::RemoveAnonymousContent(AnonymousContent& aContent) {
@@ -10181,8 +10211,13 @@ void nsDOMAttributeMap::BlastSubtreeToPieces(nsINode* aNode) {
 
 namespace mozilla::dom {
 
-nsINode* Document::AdoptNode(nsINode& aAdoptedNode, ErrorResult& rv) {
+nsINode* Document::AdoptNode(nsINode& aAdoptedNode, ErrorResult& rv,
+                             bool aAcceptShadowRoot) {
   OwningNonNull<nsINode> adoptedNode = aAdoptedNode;
+  if (adoptedNode->IsShadowRoot() && !aAcceptShadowRoot) {
+    rv.ThrowHierarchyRequestError("The adopted node is a shadow root.");
+    return nullptr;
+  }
 
   // Scope firing mutation events so that we don't carry any state that
   // might be stale
@@ -10214,13 +10249,7 @@ nsINode* Document::AdoptNode(nsINode& aAdoptedNode, ErrorResult& rv) {
 
       break;
     }
-    case DOCUMENT_FRAGMENT_NODE: {
-      if (adoptedNode->IsShadowRoot()) {
-        rv.ThrowHierarchyRequestError("The adopted node is a shadow root.");
-        return nullptr;
-      }
-      [[fallthrough]];
-    }
+    case DOCUMENT_FRAGMENT_NODE:
     case ELEMENT_NODE:
     case PROCESSING_INSTRUCTION_NODE:
     case TEXT_NODE:
@@ -10992,9 +11021,6 @@ void Document::RemoveColorSchemeMeta(HTMLMetaElement& aMeta) {
 }
 
 void Document::RecomputeColorScheme() {
-  if (!StaticPrefs::layout_css_color_scheme_enabled()) {
-    return;
-  }
   auto oldColorScheme = mColorSchemeBits;
   mColorSchemeBits = 0;
   const nsTArray<HTMLMetaElement*>& elements = mColorSchemeMetaTags;
@@ -12470,6 +12496,10 @@ void Document::MaybePreLoadImage(nsIURI* aUri,
 }
 
 void Document::MaybePreconnect(nsIURI* aOrigURI, mozilla::CORSMode aCORSMode) {
+  if (!StaticPrefs::network_preconnect()) {
+    return;
+  }
+
   NS_MutateURI mutator(aOrigURI);
   if (NS_FAILED(mutator.GetStatus())) {
     return;
@@ -15345,18 +15375,6 @@ bool Document::FullscreenElementReadyCheck(FullscreenRequest& aRequest) {
     aRequest.Reject("FullscreenDeniedNotFocusedTab");
     return false;
   }
-  // Deny requests when a windowed plugin is focused.
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  if (!fm) {
-    NS_WARNING("Failed to retrieve focus manager in fullscreen request.");
-    aRequest.MayRejectPromise("An unexpected error occurred");
-    return false;
-  }
-  if (nsContentUtils::HasPluginWithUncontrolledEventDispatch(
-          fm->GetFocusedElement())) {
-    aRequest.Reject("FullscreenDeniedFocusedPlugin");
-    return false;
-  }
   return true;
 }
 
@@ -16251,18 +16269,39 @@ bool Document::RecomputeResistFingerprinting() {
   };
 
   if (shouldInheritFrom(mParentDocument)) {
+    MOZ_LOG(
+        nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+        ("Inside RecomputeResistFingerprinting with URI %s and deferring "
+         "to parent document %s",
+         GetDocumentURI() ? GetDocumentURI()->GetSpecOrDefault().get() : "null",
+         mParentDocument->GetDocumentURI()->GetSpecOrDefault().get()));
     mShouldResistFingerprinting = mParentDocument->ShouldResistFingerprinting(
         RFPTarget::IsAlwaysEnabledForPrecompute);
   } else if (opener && shouldInheritFrom(opener->GetDocument())) {
+    MOZ_LOG(
+        nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+        ("Inside RecomputeResistFingerprinting with URI %s and deferring to "
+         "opener document %s",
+         GetDocumentURI() ? GetDocumentURI()->GetSpecOrDefault().get() : "null",
+         opener->GetDocument()->GetDocumentURI()->GetSpecOrDefault().get()));
     mShouldResistFingerprinting =
         opener->GetDocument()->ShouldResistFingerprinting(
             RFPTarget::IsAlwaysEnabledForPrecompute);
   } else {
+    bool chromeDoc = nsContentUtils::IsChromeDoc(this);
+    MOZ_LOG(
+        nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+        ("Inside RecomputeResistFingerprinting with URI %s ChromeDoc:%x",
+         GetDocumentURI() ? GetDocumentURI()->GetSpecOrDefault().get() : "null",
+         chromeDoc));
     mShouldResistFingerprinting =
-        !nsContentUtils::IsChromeDoc(this) &&
-        nsContentUtils::ShouldResistFingerprinting(
-            mChannel, RFPTarget::IsAlwaysEnabledForPrecompute);
+        !chromeDoc && nsContentUtils::ShouldResistFingerprinting(
+                          mChannel, RFPTarget::IsAlwaysEnabledForPrecompute);
   }
+
+  MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+          ("Finished RecomputeResistFingerprinting with result %x",
+           mShouldResistFingerprinting));
 
   return previous != mShouldResistFingerprinting;
 }
@@ -18114,12 +18153,7 @@ void Document::RecordNavigationTiming(ReadyState aReadyState) {
   }
 }
 
-bool Document::ModuleScriptsEnabled() {
-  return nsContentUtils::IsChromeDoc(this) ||
-         StaticPrefs::dom_moduleScripts_enabled();
-}
-
-bool Document::ImportMapsEnabled() {
+bool Document::ImportMapsEnabled() const {
   return nsContentUtils::IsChromeDoc(this) ||
          StaticPrefs::dom_importMaps_enabled();
 }

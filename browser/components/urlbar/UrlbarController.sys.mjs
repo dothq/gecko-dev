@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 
 const lazy = {};
@@ -92,7 +90,7 @@ export class UrlbarController {
       options.eventTelemetryCategory
     );
 
-    XPCOMUtils.defineLazyGetter(this, "logger", () =>
+    ChromeUtils.defineLazyGetter(this, "logger", () =>
       lazy.UrlbarUtils.getLogger({ prefix: "Controller" })
     );
   }
@@ -711,7 +709,6 @@ class TelemetryEvent {
   constructor(controller, category) {
     this._controller = controller;
     this._category = category;
-    this._isPrivate = controller.input.isPrivate;
     this.#exposureResultTypes = new Set();
     this.#beginObservingPingPrefs();
   }
@@ -789,13 +786,11 @@ class TelemetryEvent {
     };
 
     let { queryContext } = this._controller._lastQueryContextWrapper || {};
-
     this._controller.manager.notifyEngagementChange(
-      this._isPrivate,
       "start",
       queryContext,
       {},
-      this._controller.browserWindow
+      this._controller
     );
   }
 
@@ -901,11 +896,10 @@ class TelemetryEvent {
       if (this._discarded && this._category && details?.selType !== "dismiss") {
         let { queryContext } = this._controller._lastQueryContextWrapper || {};
         this._controller.manager.notifyEngagementChange(
-          this._isPrivate,
           "discard",
           queryContext,
           {},
-          this._controller.browserWindow
+          this._controller
         );
       }
       return;
@@ -993,11 +987,10 @@ class TelemetryEvent {
 
     if (skipLegacyTelemetry) {
       this._controller.manager.notifyEngagementChange(
-        this._isPrivate,
         method,
         queryContext,
         details,
-        this._controller.browserWindow
+        this._controller
       );
       return;
     }
@@ -1053,21 +1046,20 @@ class TelemetryEvent {
 
     if (
       method === "engagement" &&
-      queryContext?.view?.visibleResults?.[0]?.autofill
+      this._controller.view?.visibleResults?.[0]?.autofill
     ) {
       // Record autofill impressions upon engagement.
       const type = lazy.UrlbarUtils.telemetryTypeFromResult(
-        queryContext.view.visibleResults[0]
+        this._controller.view.visibleResults[0]
       );
       Services.telemetry.scalarAdd(`urlbar.impression.${type}`, 1);
     }
 
     this._controller.manager.notifyEngagementChange(
-      this._isPrivate,
       method,
       queryContext,
       details,
-      this._controller.browserWindow
+      this._controller
     );
   }
 
@@ -1112,7 +1104,7 @@ class TelemetryEvent {
       searchMode
     );
     const search_mode = this.#getSearchMode(searchMode);
-    const currentResults = queryContext?.view?.visibleResults ?? [];
+    const currentResults = this._controller.view?.visibleResults ?? [];
     let numResults = currentResults.length;
     let groups = currentResults
       .map(r => lazy.UrlbarUtils.searchEngagementTelemetryGroup(r))
@@ -1133,7 +1125,7 @@ class TelemetryEvent {
           selectedElement
         );
 
-      if (selected_result === "input_field" && !queryContext?.view?.isOpen) {
+      if (selected_result === "input_field" && !this._controller.view?.isOpen) {
         numResults = 0;
         groups = "";
         results = "";

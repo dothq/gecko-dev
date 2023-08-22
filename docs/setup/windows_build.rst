@@ -78,7 +78,7 @@ Choosing a build type
 
 If you aren't modifying the Firefox backend, then select one of the
 :ref:`Artifact Mode <Understanding Artifact Builds>` options. If you are
-building Firefox for Android, you should also see the :ref:`GeckoView Contributor Guide`.
+building Firefox for Android, you should also see the :ref:`GeckoView Contributor Guide <geckoview-contributor-guide>`.
 
 .. _Ensure antivirus exclusions:
 
@@ -151,19 +151,11 @@ they may be resolved by `upgrading your MozillaBuild <https://wiki.mozilla.org/M
 Spaces in folder names
 ~~~~~~~~~~~~~~~~~~~~~~
 
-**Firefox will not build** if the path to the installation
-tool folders contains **spaces** or other breaking characters such as
-pluses, quotation marks, or metacharacters.  The Visual Studio tools and
-SDKs are an exception - they may be installed in a directory which
-contains spaces. It is strongly recommended that you accept the default
-settings for all installation locations.
-
-If your Windows username contains a space, the default ``.mozbuild`` path
-will also contain a space. You will need to move where ``.mozbuild`` directory
-lives by setting the ``MOZBUILD_STATE_PATH`` environment variable to a location
-without a space in the path (eg: ``MOZBUILD_STATE_PATH=C:\.mozbuild``). If your
-``.mozbuild`` already contains bootstrapped dependencies, you should copy or move it
-to that new location, otherwise you will need to run ``./mach bootstrap`` again.
+**Firefox will not build** if the path to MozillaBuild or the Firefox source
+contain **spaces** or other breaking characters such as pluses, quotation marks,
+or metacharacters.  The Visual Studio tools and SDKs are an exception - they may
+be installed in a directory which contains spaces. It is strongly recommended
+that you accept the default settings for all installation locations.
 
 Quotation marks in ``PATH``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

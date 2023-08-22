@@ -7,15 +7,9 @@
 
 #include <locale>
 
-#if JPEGXL_ENABLE_APNG
 #include "lib/extras/enc/apng.h"
-#endif
-#if JPEGXL_ENABLE_EXR
 #include "lib/extras/enc/exr.h"
-#endif
-#if JPEGXL_ENABLE_JPEG
 #include "lib/extras/enc/jpg.h"
-#endif
 #include "lib/extras/enc/npy.h"
 #include "lib/extras/enc/pgx.h"
 #include "lib/extras/enc/pnm.h"
@@ -58,9 +52,7 @@ Status Encoder::VerifyBitDepth(JxlDataType data_type, uint32_t bits_per_sample,
       (data_type == JXL_TYPE_UINT16 &&
        (bits_per_sample <= 8 || bits_per_sample > 16 || exponent_bits != 0)) ||
       (data_type == JXL_TYPE_FLOAT16 &&
-       (bits_per_sample != 16 || exponent_bits != 5)) ||
-      (data_type == JXL_TYPE_FLOAT &&
-       (bits_per_sample != 32 || exponent_bits != 8))) {
+       (bits_per_sample > 16 || exponent_bits > 5))) {
     return JXL_FAILURE(
         "Incompatible data_type %d and bit depth %u with exponent bits %u",
         (int)data_type, bits_per_sample, exponent_bits);
@@ -141,28 +133,16 @@ std::unique_ptr<Encoder> Encoder::FromExtension(std::string extension) {
   std::transform(
       extension.begin(), extension.end(), extension.begin(),
       [](char c) { return std::tolower(c, std::locale::classic()); });
-#if JPEGXL_ENABLE_APNG
   if (extension == ".png" || extension == ".apng") return GetAPNGEncoder();
-#endif
-
-#if JPEGXL_ENABLE_JPEG
   if (extension == ".jpg") return GetJPEGEncoder();
   if (extension == ".jpeg") return GetJPEGEncoder();
-#endif
-
   if (extension == ".npy") return GetNumPyEncoder();
-
   if (extension == ".pgx") return GetPGXEncoder();
-
   if (extension == ".pam") return GetPAMEncoder();
   if (extension == ".pgm") return GetPGMEncoder();
   if (extension == ".ppm") return GetPPMEncoder();
   if (extension == ".pfm") return GetPFMEncoder();
-
-#if JPEGXL_ENABLE_EXR
   if (extension == ".exr") return GetEXREncoder();
-#endif
-
   return nullptr;
 }
 

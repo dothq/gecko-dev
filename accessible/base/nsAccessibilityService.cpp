@@ -6,7 +6,6 @@
 #include "nsAccessibilityService.h"
 
 // NOTE: alphabetically ordered
-#include "AccAttributes.h"
 #include "ApplicationAccessibleWrap.h"
 #include "ARIAGridAccessible.h"
 #include "ARIAMap.h"
@@ -22,7 +21,6 @@
 #include "HTMLTableAccessible.h"
 #include "HyperTextAccessibleWrap.h"
 #include "RootAccessible.h"
-#include "StyleInfo.h"
 #include "nsAccUtils.h"
 #include "nsArrayUtils.h"
 #include "nsAttrName.h"
@@ -34,14 +32,13 @@
 #include "nsServiceManagerUtils.h"
 #include "nsTextFormatter.h"
 #include "OuterDocAccessible.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #ifdef MOZ_ACCESSIBILITY_ATK
 #  include "RootAccessibleWrap.h"
 #endif
 #include "States.h"
 #include "Statistics.h"
 #include "TextLeafAccessible.h"
-#include "TreeWalker.h"
 #include "xpcAccessibleApplication.h"
 
 #ifdef XP_WIN
@@ -55,12 +52,10 @@
 
 #include "nsExceptionHandler.h"
 #include "nsImageFrame.h"
-#include "nsINamed.h"
 #include "nsIObserverService.h"
 #include "nsMenuPopupFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsTreeBodyFrame.h"
-#include "nsTreeColumns.h"
 #include "nsTreeUtils.h"
 #include "mozilla/a11y/AccTypes.h"
 #include "mozilla/ArrayUtils.h"
@@ -447,21 +442,37 @@ nsAccessibilityService::ListenersChanged(nsIArray* aEventChanges) {
                      content == document->DocumentNode()->GetRootElement())) {
           acc = document;
         }
+        if (!acc && content->IsElement() &&
+            content->AsElement()->IsHTMLElement(nsGkAtoms::area)) {
+          // For area accessibles, we have to recreate the entire image map,
+          // since the image map accessible manages the tree itself. The click
+          // listener change may require us to update the role for the
+          // accessible associated with the area element.
+          LocalAccessible* areaAcc =
+              document->GetAccessibleEvenIfNotInMap(content);
+          if (areaAcc && areaAcc->LocalParent()) {
+            document->RecreateAccessible(areaAcc->LocalParent()->GetContent());
+          }
+        }
         if (!acc && nsCoreUtils::HasClickListener(content)) {
           // Create an accessible for a inaccessible element having click event
           // handler.
           document->ContentInserted(content, content->GetNextSibling());
         } else if (acc) {
-          if (acc->IsHTMLLink() && !acc->AsHTMLLink()->IsLinked()) {
-            // Notify of a LINKED state change if an HTML link gets a click
-            // listener but does not have an href attribute.
-            RefPtr<AccEvent> linkedChangeEvent =
-                new AccStateChangeEvent(acc, states::LINKED);
-            document->FireDelayedEvent(linkedChangeEvent);
+          if ((acc->IsHTMLLink() && !acc->AsHTMLLink()->IsLinked()) ||
+              (content->IsElement() &&
+               content->AsElement()->IsHTMLElement(nsGkAtoms::a) &&
+               !acc->IsHTMLLink())) {
+            // An HTML link without an href attribute should have a generic
+            // role, unless it has a click listener. Since we might have gained
+            // or lost a click listener here, recreate the accessible so that we
+            // can create the correct type of accessible. If it was a link, it
+            // may no longer be one. If it wasn't, it may become one.
+            document->RecreateAccessible(content);
           }
 
           // A click listener change might mean losing or gaining an action.
-          acc->SendCache(CacheDomain::Actions, CacheUpdateType::Update);
+          document->QueueCacheUpdate(acc, CacheDomain::Actions);
         }
       }
     }

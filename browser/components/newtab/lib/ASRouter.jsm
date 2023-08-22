@@ -15,6 +15,8 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   Downloader: "resource://services-settings/Attachments.sys.mjs",
   ExperimentAPI: "resource://nimbus/ExperimentAPI.sys.mjs",
+  FeatureCalloutBroker:
+    "resource://activity-stream/lib/FeatureCalloutBroker.sys.mjs",
   KintoHttpClient: "resource://services-common/kinto-http-client.sys.mjs",
   MacAttribution: "resource:///modules/MacAttribution.sys.mjs",
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
@@ -120,12 +122,19 @@ const MESSAGING_EXPERIMENTS_DEFAULT_FEATURES = [
   "moments-page",
   "pbNewtab",
   "spotlight",
+  "featureCallout",
 ];
 
 // Experiment groups that need to report the reach event in Messaging-Experiments.
 // If you're adding new groups to it, make sure they're also added in the
 // `messaging_experiments.reach.objects` defined in "toolkit/components/telemetry/Events.yaml"
-const REACH_EVENT_GROUPS = ["cfr", "moments-page", "infobar", "spotlight"];
+const REACH_EVENT_GROUPS = [
+  "cfr",
+  "moments-page",
+  "infobar",
+  "spotlight",
+  "featureCallout",
+];
 const REACH_EVENT_CATEGORY = "messaging_experiments";
 const REACH_EVENT_METHOD = "reach";
 
@@ -1409,6 +1418,20 @@ class _ASRouter {
           this.dispatchCFRAction
         );
         break;
+      case "feature_callout":
+        // featureCalloutCheck only comes from within FeatureCallout, where it
+        // is used to request a matching message. It is not a real trigger.
+        // pdfJsFeatureCalloutCheck is used for PDF.js feature callouts, which
+        // are managed by the trigger listener itself.
+        switch (trigger.id) {
+          case "featureCalloutCheck":
+          case "pdfJsFeatureCalloutCheck":
+          case "newtabFeatureCalloutCheck":
+            break;
+          default:
+            lazy.FeatureCalloutBroker.showFeatureCallout(browser, message);
+        }
+        break;
       case "toast_notification":
         lazy.ToastNotification.showToastNotification(
           message,
@@ -1444,8 +1467,8 @@ class _ASRouter {
       `entering addImpression for ${message.id}`
     );
 
-    const groupsWithFrequency = this.state.groups.filter(
-      ({ frequency, id }) => frequency && message.groups.includes(id)
+    const groupsWithFrequency = this.state.groups?.filter(
+      ({ frequency, id }) => frequency && message.groups?.includes(id)
     );
     // We only need to store impressions for messages that have frequency, or
     // that have providers that have frequency

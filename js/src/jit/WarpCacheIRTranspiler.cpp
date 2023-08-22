@@ -422,6 +422,9 @@ bool WarpCacheIRTranspiler::emitGuardAnyClass(ObjOperandId objId,
 bool WarpCacheIRTranspiler::emitGuardShape(ObjOperandId objId,
                                            uint32_t shapeOffset) {
   MDefinition* def = getOperand(objId);
+
+  // No read barrier is required because snapshot data is not weak and is traced
+  // as part of IonCompileTask.
   Shape* shape = shapeStubField(shapeOffset);
 
   auto* ins = MGuardShape::New(alloc(), def, shape);
@@ -2001,7 +2004,7 @@ bool WarpCacheIRTranspiler::emitLoadDenseElementHoleExistsResult(
   add(length);
 
   // Check if id < initLength and elem[id] not a hole.
-  auto* ins = MInArray::New(alloc(), elements, index, length, obj);
+  auto* ins = MInArray::New(alloc(), elements, index, length);
   add(ins);
 
   pushResult(ins);

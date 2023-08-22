@@ -94,6 +94,7 @@ browsertime:
     - browsertime-responsiveness
     - browsertime-regression-tests
     - browsertime-upload
+    - browsertime-speculative
 
 browsertime-clang:
     - browsertime-tp6
@@ -463,10 +464,10 @@ android-hw-browsertime:
     - browsertime-tp6m
     - browsertime-tp6m-essential
     - browsertime-tp6m-live
-    - browsertime-speedometer-mobile
-    - browsertime-speedometer3-mobile
+    - browsertime-benchmark-speedometer-mobile
+    - browsertime-benchmark-speedometer3-mobile
     - browsertime-youtube-playback-mobile
-    - browsertime-unity-webgl-mobile
+    - browsertime-benchmark-unity-webgl-mobile
 
 android-hw-browsertime-profiling:
     - browsertime-tp6m-profiling

@@ -1620,6 +1620,22 @@ void RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList) {
         // transformed by other means. It's OK to have the bit even if it's
         // not needed.
       }
+      // When dropping a running transform animation we will first add an
+      // nsChangeHint_UpdateTransformLayer hint as part of the animation-only
+      // restyle. During the subsequent regular restyle, if the animation was
+      // the only reason the element had any transform applied, we will add
+      // nsChangeHint_AddOrRemoveTransform as part of the regular restyle.
+      //
+      // With the Gecko backend, these two change hints are processed
+      // after each restyle but when using the Servo backend they accumulate
+      // and are processed together after we have already removed the
+      // transform as part of the regular restyle. Since we don't actually
+      // need the nsChangeHint_UpdateTransformLayer hint if we already have
+      // a nsChangeHint_AddOrRemoveTransform hint, and since we
+      // will fail an assertion in ApplyRenderingChangeToTree if we try
+      // specify nsChangeHint_UpdateTransformLayer but don't have any
+      // transform style, we just drop the unneeded hint here.
+      hint &= ~nsChangeHint_UpdateTransformLayer;
     }
 
     if (!frame->FrameMaintainsOverflow()) {
@@ -1639,25 +1655,6 @@ void RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList) {
       // nsChangeHint_UpdateTransformLayerhint.
       hint &= ~(nsChangeHint_UpdatePostTransformOverflow |
                 nsChangeHint_UpdateTransformLayer);
-    }
-
-    if (hint & nsChangeHint_AddOrRemoveTransform) {
-      // When dropping a running transform animation we will first add an
-      // nsChangeHint_UpdateTransformLayer hint as part of the animation-only
-      // restyle. During the subsequent regular restyle, if the animation was
-      // the only reason the element had any transform applied, we will add
-      // nsChangeHint_AddOrRemoveTransform as part of the regular restyle.
-      //
-      // With the Gecko backend, these two change hints are processed
-      // after each restyle but when using the Servo backend they accumulate
-      // and are processed together after we have already removed the
-      // transform as part of the regular restyle. Since we don't actually
-      // need the nsChangeHint_UpdateTransformLayer hint if we already have
-      // a nsChangeHint_AddOrRemoveTransform hint, and since we
-      // will fail an assertion in ApplyRenderingChangeToTree if we try
-      // specify nsChangeHint_UpdateTransformLayer but don't have any
-      // transform style, we just drop the unneeded hint here.
-      hint &= ~nsChangeHint_UpdateTransformLayer;
     }
 
     if ((hint & nsChangeHint_UpdateEffects) &&
@@ -1728,6 +1725,14 @@ void RestyleManager::ProcessRestyledFrames(nsStyleChangeList& aChangeList) {
          nsChangeHint_ChildrenOnlyTransform | nsChangeHint_SchedulePaint)) {
       ApplyRenderingChangeToTree(presContext->PresShell(), frame, hint);
     }
+
+    if (hint & (nsChangeHint_UpdateTransformLayer |
+                nsChangeHint_AddOrRemoveTransform)) {
+      // We need to trigger re-snapping to this content if we snapped to the
+      // content on the last scroll operation.
+      ScrollSnapUtils::PostPendingResnapIfNeededFor(frame);
+    }
+
     if ((hint & nsChangeHint_RecomputePosition) && !didReflowThisFrame) {
       // It is possible for this to fall back to a reflow
       if (!RecomputePosition(frame)) {
@@ -2413,7 +2418,7 @@ void RestyleManager::ClearRestyleStateFromSubtree(Element* aElement) {
     }
   }
 
-  bool wasRestyled;
+  bool wasRestyled = false;
   Unused << Servo_TakeChangeHint(aElement, &wasRestyled);
   aElement->UnsetFlags(Element::kAllServoDescendantBits);
 }
@@ -2729,7 +2734,7 @@ bool RestyleManager::ProcessPostTraversal(Element* aElement,
       primaryFrame && primaryFrame->IsColumnSpanInMulticolSubtree();
 
   // Grab the change hint from Servo.
-  bool wasRestyled;
+  bool wasRestyled = false;
   nsChangeHint changeHint =
       static_cast<nsChangeHint>(Servo_TakeChangeHint(aElement, &wasRestyled));
 
@@ -3603,11 +3608,25 @@ void RestyleManager::ReparentComputedStyleForFirstLine(nsIFrame* aFrame) {
   DoReparentComputedStyleForFirstLine(aFrame, *StyleSet());
 }
 
+static bool IsFrameAboutToGoAway(nsIFrame* aFrame) {
+  auto* element = Element::FromNode(aFrame->GetContent());
+  if (!element) {
+    return false;
+  }
+  return !element->HasServoData();
+}
+
 void RestyleManager::DoReparentComputedStyleForFirstLine(
     nsIFrame* aFrame, ServoStyleSet& aStyleSet) {
   if (aFrame->IsBackdropFrame()) {
     // Style context of backdrop frame has no parent style, and thus we do not
     // need to reparent it.
+    return;
+  }
+
+  if (IsFrameAboutToGoAway(aFrame)) {
+    // We're entering a display: none subtree, which we know it's going to get
+    // rebuilt. Don't bother reparenting.
     return;
   }
 
@@ -3712,7 +3731,7 @@ void RestyleManager::DoReparentComputedStyleForFirstLine(
     // We can't use UpdateAdditionalComputedStyles as-is because it needs a
     // ServoRestyleState and maintaining one of those during a _frametree_
     // traversal is basically impossible.
-    uint32_t index = 0;
+    int32_t index = 0;
     while (auto* oldAdditionalStyle =
                aFrame->GetAdditionalComputedStyle(index)) {
       RefPtr<ComputedStyle> newAdditionalContext =
@@ -3743,12 +3762,6 @@ void RestyleManager::DoReparentComputedStyleForFirstLine(
 void RestyleManager::ReparentFrameDescendants(nsIFrame* aFrame,
                                               nsIFrame* aProviderChild,
                                               ServoStyleSet& aStyleSet) {
-  if (aFrame->GetContent()->IsElement() &&
-      !aFrame->GetContent()->AsElement()->HasServoData()) {
-    // We're getting into a display: none subtree, avoid reparenting into stuff
-    // that is going to go away anyway in seconds.
-    return;
-  }
   for (const auto& childList : aFrame->ChildLists()) {
     for (nsIFrame* child : childList.mList) {
       // only do frames that are in flow

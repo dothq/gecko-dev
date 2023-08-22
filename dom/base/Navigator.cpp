@@ -307,11 +307,8 @@ void Navigator::GetAppVersion(nsAString& aAppVersion, CallerType aCallerType,
   }
 }
 
-void Navigator::GetAppName(nsAString& aAppName, CallerType aCallerType) const {
-  nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
-
-  AppName(aAppName, doc,
-          /* aUsePrefOverriddenValue = */ aCallerType != CallerType::System);
+void Navigator::GetAppName(nsAString& aAppName) const {
+  aAppName.AssignLiteral("Netscape");
 }
 
 /**
@@ -2028,32 +2025,6 @@ nsresult Navigator::GetAppVersion(nsAString& aAppVersion, Document* aCallerDoc,
   return rv;
 }
 
-/* static */
-void Navigator::AppName(nsAString& aAppName, Document* aCallerDoc,
-                        bool aUsePrefOverriddenValue) {
-  MOZ_ASSERT(NS_IsMainThread());
-
-  if (aUsePrefOverriddenValue) {
-    // If fingerprinting resistance is on, we will spoof this value. See
-    // nsRFPService.h for details about spoofed values.
-    if (ShouldResistFingerprinting(aCallerDoc, RFPTarget::NavigatorAppName)) {
-      aAppName.AssignLiteral(SPOOFED_APPNAME);
-      return;
-    }
-
-    nsAutoString override;
-    nsresult rv =
-        mozilla::Preferences::GetString("general.appname.override", override);
-
-    if (NS_SUCCEEDED(rv)) {
-      aAppName = override;
-      return;
-    }
-  }
-
-  aAppName.AssignLiteral("Netscape");
-}
-
 void Navigator::ClearUserAgentCache() {
   Navigator_Binding::ClearCachedUserAgentValue(this);
 }
@@ -2258,7 +2229,7 @@ webgpu::Instance* Navigator::Gpu() {
 
 dom::LockManager* Navigator::Locks() {
   if (!mLocks) {
-    mLocks = new dom::LockManager(GetWindow()->AsGlobal());
+    mLocks = dom::LockManager::Create(*GetWindow()->AsGlobal());
   }
   return mLocks;
 }

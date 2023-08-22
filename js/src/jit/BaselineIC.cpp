@@ -86,8 +86,7 @@ class MOZ_RAII FallbackICCodeCompiler final {
   void pushStubPayload(MacroAssembler& masm, Register scratch);
 
   // Emits a tail call to a VMFunction wrapper.
-  [[nodiscard]] bool tailCallVMInternal(MacroAssembler& masm,
-                                        TailCallVMFunctionId id);
+  [[nodiscard]] bool tailCallVMInternal(MacroAssembler& masm, VMFunctionId id);
 
   template <typename Fn, Fn fn>
   [[nodiscard]] bool tailCallVM(MacroAssembler& masm);
@@ -177,6 +176,56 @@ void ICEntry::trace(JSTracer* trc) {
 
   // Fallback stubs use runtime-wide trampoline code we don't need to trace.
   MOZ_ASSERT(stub->usesTrampolineCode());
+}
+
+inline ICFallbackStub* GetFallbackStub(ICEntry* entry) {
+  ICStub* stub = entry->firstStub();
+  while (!stub->isFallback()) {
+    stub = stub->toCacheIRStub()->next();
+  }
+  return stub->toFallbackStub();
+}
+
+bool ICEntry::traceWeak(JSTracer* trc) {
+  // Trace CacheIR stubs and remove those containing weak pointers to dead GC
+  // things.  Prebarriers are not necessary because this happens as part of GC.
+
+  ICFallbackStub* fallbackStub = GetFallbackStub(this);
+
+  ICStub* stub = firstStub();
+  ICCacheIRStub* prev = nullptr;
+  bool allSurvived = true;
+  while (!stub->isFallback()) {
+    ICCacheIRStub* cacheIRStub = stub->toCacheIRStub();
+    if (!cacheIRStub->traceWeak(trc)) {
+      fallbackStub->unlinkStubUnbarriered(this, prev, cacheIRStub);
+      allSurvived = false;
+    } else {
+      prev = cacheIRStub;
+    }
+
+    stub = cacheIRStub->next();
+    MOZ_ASSERT_IF(prev, prev->next() == stub);
+  }
+
+  // Clear the folded stubs flag if we know for sure that there are none
+  // left. The flag will remain set if we have removed all folded stubs but
+  // other stubs remain.
+  if (fallbackStub->numOptimizedStubs() == 0 &&
+      fallbackStub->mayHaveFoldedStub()) {
+    fallbackStub->clearMayHaveFoldedStub();
+  }
+
+#ifdef DEBUG
+  size_t count = 0;
+  for (ICStub* stub = firstStub(); stub != fallbackStub;
+       stub = stub->toCacheIRStub()->next()) {
+    count++;
+  }
+  MOZ_ASSERT(count == fallbackStub->state().numOptimizedStubs());
+#endif
+
+  return allSurvived;
 }
 
 // constexpr table mapping JSOp to BaselineICFallbackKind. Each value in the
@@ -402,6 +451,10 @@ void ICCacheIRStub::trace(JSTracer* trc) {
   TraceCacheIRStub(trc, this, stubInfo());
 }
 
+bool ICCacheIRStub::traceWeak(JSTracer* trc) {
+  return TraceWeakCacheIRStub(trc, this, stubInfo());
+}
+
 static void MaybeTransition(JSContext* cx, BaselineFrame* frame,
                             ICFallbackStub* stub) {
   if (stub->state().shouldTransition()) {
@@ -462,6 +515,16 @@ static void TryAttachStub(const char* name, JSContext* cx, BaselineFrame* frame,
 
 void ICFallbackStub::unlinkStub(Zone* zone, ICEntry* icEntry,
                                 ICCacheIRStub* prev, ICCacheIRStub* stub) {
+  // We are removing edges from ICStub to gcthings. Perform a barrier to let the
+  // GC know about those edges.
+  PreWriteBarrier(zone, stub);
+
+  unlinkStubUnbarriered(icEntry, prev, stub);
+}
+
+void ICFallbackStub::unlinkStubUnbarriered(ICEntry* icEntry,
+                                           ICCacheIRStub* prev,
+                                           ICCacheIRStub* stub) {
   if (prev) {
     MOZ_ASSERT(prev->next() == stub);
     prev->setNext(stub->next());
@@ -471,10 +534,6 @@ void ICFallbackStub::unlinkStub(Zone* zone, ICEntry* icEntry,
   }
 
   state_.trackUnlinkedStub();
-
-  // We are removing edges from ICStub to gcthings. Perform a barrier to let the
-  // GC know about those edges.
-  PreWriteBarrier(zone, stub);
 
 #ifdef DEBUG
   // Poison stub code to ensure we don't call this stub again. However, if
@@ -494,7 +553,7 @@ void ICFallbackStub::discardStubs(JSContext* cx, ICEntry* icEntry) {
                stub->toCacheIRStub());
     stub = stub->toCacheIRStub()->next();
   }
-  clearHasFoldedStub();
+  clearMayHaveFoldedStub();
 }
 
 static void InitMacroAssemblerForICStub(StackMacroAssembler& masm) {
@@ -509,10 +568,9 @@ static void InitMacroAssemblerForICStub(StackMacroAssembler& masm) {
 }
 
 bool FallbackICCodeCompiler::tailCallVMInternal(MacroAssembler& masm,
-                                                TailCallVMFunctionId id) {
+                                                VMFunctionId id) {
   TrampolinePtr code = cx->runtime()->jitRuntime()->getVMWrapper(id);
   const VMFunctionData& fun = GetVMFunction(id);
-  MOZ_ASSERT(fun.expectTailCall == TailCall);
   uint32_t argSize = fun.explicitStackSlots() * sizeof(void*);
   EmitBaselineTailCallVM(code, masm, argSize);
   return true;
@@ -523,7 +581,6 @@ bool FallbackICCodeCompiler::callVMInternal(MacroAssembler& masm,
   MOZ_ASSERT(inStubFrame_);
 
   TrampolinePtr code = cx->runtime()->jitRuntime()->getVMWrapper(id);
-  MOZ_ASSERT(GetVMFunction(id).expectTailCall == NonTailCall);
 
   EmitBaselineCallVM(code, masm);
   return true;
@@ -537,7 +594,7 @@ bool FallbackICCodeCompiler::callVM(MacroAssembler& masm) {
 
 template <typename Fn, Fn fn>
 bool FallbackICCodeCompiler::tailCallVM(MacroAssembler& masm) {
-  TailCallVMFunctionId id = TailCallVMFunctionToId<Fn, fn>::id;
+  VMFunctionId id = VMFunctionToId<Fn, fn>::id;
   return tailCallVMInternal(masm, id);
 }
 

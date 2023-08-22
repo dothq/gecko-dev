@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
 import { WebSocketConnection } from "chrome://remote/content/shared/WebSocketConnection.sys.mjs";
 
 const lazy = {};
@@ -14,12 +12,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
   Log: "chrome://remote/content/shared/Log.sys.mjs",
   processCapabilities:
     "chrome://remote/content/shared/webdriver/Capabilities.sys.mjs",
+  quit: "chrome://remote/content/shared/Browser.sys.mjs",
   RemoteAgent: "chrome://remote/content/components/RemoteAgent.sys.mjs",
   WEBDRIVER_CLASSIC_CAPABILITIES:
     "chrome://remote/content/shared/webdriver/Capabilities.sys.mjs",
 });
 
-XPCOMUtils.defineLazyGetter(lazy, "logger", () =>
+ChromeUtils.defineLazyGetter(lazy, "logger", () =>
   lazy.Log.get(lazy.Log.TYPES.WEBDRIVER_BIDI)
 );
 
@@ -35,6 +34,16 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
 
     // Each connection has only a single associated WebDriver session.
     this.session = null;
+  }
+
+  /**
+   * Perform required steps to end the session.
+   */
+  endSession() {
+    // TODO Bug 1838269. Implement session ending logic
+    // for the case of classic + bidi session.
+    // We currently only support one session, see Bug 1720707.
+    lazy.RemoteAgent.webDriverBiDi.deleteSession();
   }
 
   /**
@@ -122,6 +131,14 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
     this.send({ id, result });
   }
 
+  observe(subject, topic) {
+    switch (topic) {
+      case "quit-application-requested":
+        this.endSession();
+        break;
+    }
+  }
+
   // Transport hooks
 
   /**
@@ -197,10 +214,20 @@ export class WebDriverBiDiConnection extends WebSocketConnection {
 
       // Session clean up.
       if (module === "session" && command === "end") {
-        // TODO Bug 1838269. Implement session ending logic
-        // for the case of classic + bidi session.
-        // We currently only support one session, see Bug 1720707.
-        lazy.RemoteAgent.webDriverBiDi.deleteSession();
+        this.endSession();
+      }
+      // Close the browser.
+      // TODO Bug 1842018. Refactor this part to return the response
+      // when the quitting of the browser is finished.
+      else if (module === "browser" && command === "close") {
+        // Register handler to run WebDriver BiDi specific shutdown code.
+        Services.obs.addObserver(this, "quit-application-requested");
+
+        // TODO Bug 1836282. Add as the third argument "moz:windowless" capability
+        // from the session, when this capability is supported by Webdriver BiDi.
+        await lazy.quit(["eForceQuit"], false);
+
+        Services.obs.removeObserver(this, "quit-application-requested");
       }
     } catch (e) {
       this.sendError(id, e);

@@ -145,8 +145,8 @@
 #    include "mozilla/Sandbox.h"
 #    include "mozilla/SandboxInfo.h"
 #  elif defined(XP_MACOSX)
+#    include <CoreGraphics/CGError.h>
 #    include "mozilla/Sandbox.h"
-#    include "mozilla/gfx/QuartzSupport.h"
 #  elif defined(__OpenBSD__)
 #    include <err.h>
 #    include <sys/stat.h>
@@ -2757,15 +2757,6 @@ mozilla::ipc::IPCResult ContentChild::RecvLastPrivateDocShellDestroyed() {
   return IPC_OK();
 }
 
-// Method used for setting QoS levels on background main threads.
-#ifdef XP_MACOSX
-static bool PriorityUsesLowPowerMainThread(
-    const hal::ProcessPriority& aPriority) {
-  return aPriority == hal::PROCESS_PRIORITY_BACKGROUND ||
-         aPriority == hal::PROCESS_PRIORITY_PREALLOC;
-}
-#endif
-
 mozilla::ipc::IPCResult ContentChild::RecvNotifyProcessPriorityChanged(
     const hal::ProcessPriority& aPriority) {
   nsCOMPtr<nsIObserverService> os = services::GetObserverService();
@@ -2786,24 +2777,6 @@ mozilla::ipc::IPCResult ContentChild::RecvNotifyProcessPriorityChanged(
   if (mProcessPriority != hal::PROCESS_PRIORITY_UNKNOWN) {
     glean::RecordPowerMetrics();
   }
-
-#ifdef XP_MACOSX
-  // In cases where we have low-power threads enabled (such as on MacOS) we can
-  // go ahead and put the main thread in the background here. If the new
-  // priority is the background priority, we can tell the OS to put the main
-  // thread on low-power cores. Alternately, if we are changing from the
-  // background to a higher priority, we change the main thread back to the
-  // |user-interactive| state, defined in MacOS's QoS documentation as reserved
-  // for main threads.
-  if (StaticPrefs::threads_use_low_power_enabled() &&
-      StaticPrefs::threads_lower_mainthread_priority_in_background_enabled()) {
-    if (PriorityUsesLowPowerMainThread(aPriority)) {
-      pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
-    } else if (PriorityUsesLowPowerMainThread(mProcessPriority)) {
-      pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-    }
-  }
-#endif
 
   mProcessPriority = aPriority;
 
@@ -4344,7 +4317,7 @@ mozilla::ipc::IPCResult ContentChild::RecvLoadURI(
   if (aContext.IsNullOrDiscarded()) {
     return IPC_OK();
   }
-  BrowsingContext* context = aContext.get();
+  RefPtr<BrowsingContext> context = aContext.get();
   if (!context->IsInProcess()) {
     // The DocShell has been torn down or the BrowsingContext has changed
     // process in the middle of the load request. There's not much we can do at
@@ -4390,7 +4363,7 @@ mozilla::ipc::IPCResult ContentChild::RecvInternalLoad(
   if (aLoadState->TargetBrowsingContext().IsDiscarded()) {
     return IPC_OK();
   }
-  BrowsingContext* context = aLoadState->TargetBrowsingContext().get();
+  RefPtr<BrowsingContext> context = aLoadState->TargetBrowsingContext().get();
 
   context->InternalLoad(aLoadState);
 
@@ -4420,7 +4393,7 @@ mozilla::ipc::IPCResult ContentChild::RecvDisplayLoadError(
   if (aContext.IsNullOrDiscarded()) {
     return IPC_OK();
   }
-  BrowsingContext* context = aContext.get();
+  RefPtr<BrowsingContext> context = aContext.get();
 
   context->DisplayLoadError(aURI);
 
@@ -4533,7 +4506,7 @@ mozilla::ipc::IPCResult ContentChild::RecvGoBack(
   }
   BrowsingContext* bc = aContext.get();
 
-  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+  if (RefPtr<nsDocShell> docShell = nsDocShell::Cast(bc->GetDocShell())) {
     if (aCancelContentJSEpoch) {
       docShell->SetCancelContentJSEpoch(*aCancelContentJSEpoch);
     }
@@ -4556,7 +4529,7 @@ mozilla::ipc::IPCResult ContentChild::RecvGoForward(
   }
   BrowsingContext* bc = aContext.get();
 
-  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+  if (RefPtr<nsDocShell> docShell = nsDocShell::Cast(bc->GetDocShell())) {
     if (aCancelContentJSEpoch) {
       docShell->SetCancelContentJSEpoch(*aCancelContentJSEpoch);
     }
@@ -4578,7 +4551,7 @@ mozilla::ipc::IPCResult ContentChild::RecvGoToIndex(
   }
   BrowsingContext* bc = aContext.get();
 
-  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+  if (RefPtr<nsDocShell> docShell = nsDocShell::Cast(bc->GetDocShell())) {
     if (aCancelContentJSEpoch) {
       docShell->SetCancelContentJSEpoch(*aCancelContentJSEpoch);
     }
@@ -4600,7 +4573,7 @@ mozilla::ipc::IPCResult ContentChild::RecvReload(
   }
   BrowsingContext* bc = aContext.get();
 
-  if (auto* docShell = nsDocShell::Cast(bc->GetDocShell())) {
+  if (RefPtr<nsDocShell> docShell = nsDocShell::Cast(bc->GetDocShell())) {
     docShell->Reload(aReloadFlags);
   }
 

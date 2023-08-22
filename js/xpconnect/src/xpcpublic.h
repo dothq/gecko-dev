@@ -55,6 +55,7 @@ struct nsXPTInterfaceInfo;
 namespace JS {
 class Compartment;
 class ContextOptions;
+class PrefableCompileOptions;
 class Realm;
 class RealmOptions;
 class Value;
@@ -593,6 +594,9 @@ bool ShouldDiscardSystemSource();
 void SetPrefableRealmOptions(JS::RealmOptions& options);
 void SetPrefableContextOptions(JS::ContextOptions& options);
 
+// This function may be used off-main-thread.
+void SetPrefableCompileOptions(JS::PrefableCompileOptions& options);
+
 class ErrorBase {
  public:
   nsString mErrorMsg;
@@ -715,7 +719,7 @@ void AddGCCallback(xpcGCCallback cb);
 void RemoveGCCallback(xpcGCCallback cb);
 
 // We need an exact page size only if we run the binary in automation.
-#if defined(XP_DARWIN) && defined(__aarch64__)
+#if (defined(XP_DARWIN) && defined(__aarch64__)) || defined(__loongarch__)
 const size_t kAutomationPageSize = 16384;
 #else
 const size_t kAutomationPageSize = 4096;

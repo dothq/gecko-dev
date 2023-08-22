@@ -39,10 +39,6 @@ notes = "This is a pinned version of the upstream code, presumably to get a fix 
 audit-as-crates-io = true
 notes = "This is upstream plus a warning fix from bug 1823866."
 
-[policy.d3d12]
-audit-as-crates-io = true
-notes = "Unpublished wgpu revisions point to unpublished d3d12 revisions."
-
 [policy.firefox-on-glean]
 audit-as-crates-io = false
 notes = "The crates.io version of this is just a placeholder to allow public crates to depend on firefox-on-glean."
@@ -84,9 +80,20 @@ notes = "This was originally servo code which Bobby Holley put on crates.io some
 audit-as-crates-io = false
 notes = "This is a first-party crate which is also published to crates.io. We certify audits for this crate as part of the documented release process, but that step happens after the version bump lands on central so we don't enforce it here."
 
+[policy.metal]
+audit-as-crates-io = false
+
 [policy.midir]
 audit-as-crates-io = true
 notes = "This is a pinned version of the upstream code, presumably to get a fix that hadn't been released yet. We should consider switching to the latest official release."
+
+[policy."minidump-common:0.17.0@git:87a29fba5e19cfae5ebf73a57ba31504a3872545"]
+audit-as-crates-io = true
+notes = "Unreleased upstream."
+
+[policy.minidump-writer]
+audit-as-crates-io = true
+notes = "Unreleased upstream."
 
 [policy."mio:0.6.23"]
 audit-as-crates-io = true
@@ -105,8 +112,9 @@ dependency-criteria = { rustc_version = "safe-to-run" }
 notes = "The rustc_version dependency is only used in the build script, and does not generate any runtime code"
 
 [policy.mozilla-central-workspace-hack]
+audit-as-crates-io = false
 criteria = "safe-to-run"
-notes = "The dependencies from this crate are dependencies of other crates that will get the right criteria through them, but using safe-to-deploy for this one would be too broad."
+notes = "This is a first-party crate which is also published to crates.io as a convenience for other in-tree crates that depend on it and are published as well. The dependencies from this crate are dependencies of other crates that will get the right criteria through them, but using safe-to-deploy for this one would be too broad."
 
 [policy.mozprofile]
 audit-as-crates-io = false
@@ -130,10 +138,6 @@ audit-as-crates-io = false
 audit-as-crates-io = true
 notes = "wgpu-core pins this crate."
 
-[policy.num-derive]
-audit-as-crates-io = true
-notes = "Local fork with a patch from https://github.com/rust-num/num-derive/pull/54"
-
 [policy.packed_simd_2]
 audit-as-crates-io = true
 notes = "Based on upstream, see bug 1719674."
@@ -143,10 +147,6 @@ audit-as-crates-io = false
 
 [policy.peek-poke-derive]
 audit-as-crates-io = false
-
-[policy.phf_macros]
-audit-as-crates-io = true
-notes = "Local fork with a patch from https://github.com/rust-phf/rust-phf/pull/284"
 
 [policy.pulse]
 audit-as-crates-io = false
@@ -217,10 +217,6 @@ notes = "Upstream project which we pin."
 [policy.wr_malloc_size_of]
 audit-as-crates-io = false
 
-[[exemptions.adler]]
-version = "1.0.2"
-criteria = "safe-to-deploy"
-
 [[exemptions.ahash]]
 version = "0.7.6"
 criteria = "safe-to-deploy"
@@ -243,10 +239,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.askama_escape]]
 version = "0.10.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.askama_shared]]
-version = "0.12.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.async-task]]
@@ -553,10 +545,6 @@ criteria = "safe-to-deploy"
 version = "0.6.5"
 criteria = "safe-to-deploy"
 
-[[exemptions.metal]]
-version = "0.23.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.midir]]
 version = "0.7.0"
 criteria = "safe-to-deploy"
@@ -649,10 +637,6 @@ criteria = "safe-to-deploy"
 version = "0.10.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.pin-project-lite]]
-version = "0.2.9"
-criteria = "safe-to-deploy"
-
 [[exemptions.plain]]
 version = "0.2.3"
 criteria = "safe-to-deploy"
@@ -691,14 +675,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.rand_chacha]]
 version = "0.3.1"
-criteria = "safe-to-deploy"
-
-[[exemptions.rand_core]]
-version = "0.6.3"
-criteria = "safe-to-deploy"
-
-[[exemptions.redox_syscall]]
-version = "0.2.13"
 criteria = "safe-to-deploy"
 
 [[exemptions.remove_dir_all]]
@@ -755,10 +731,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.sfv]]
 version = "0.9.2"
-criteria = "safe-to-deploy"
-
-[[exemptions.sha2]]
-version = "0.10.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.shlex]]

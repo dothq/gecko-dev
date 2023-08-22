@@ -78,9 +78,9 @@ add_task(async function test_new_login_marked_vulnerable_in_both_windows() {
         "The 'alerts' option should be hidden when there are no breached or vulnerable logins in the list"
       );
 
-      let createButton = loginList.shadowRoot.querySelector(
-        ".create-login-button"
-      );
+      let createButton = loginList.shadowRoot
+        .querySelector(".create-login-button")
+        .shadowRoot.querySelector("button");
       createButton.click();
 
       let loginItem = content.document.querySelector("login-item");
@@ -120,7 +120,8 @@ add_task(async function test_new_login_marked_vulnerable_in_both_windows() {
         "vulnerable login list item should be marked as such"
       );
       Assert.ok(
-        !loginItem.shadowRoot.querySelector(".vulnerable-alert").hidden,
+        !loginItem.shadowRoot.querySelector("login-vulnerable-password-alert")
+          .hidden,
         "vulnerable alert on login-item should be visible"
       );
 

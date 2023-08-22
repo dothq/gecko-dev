@@ -2,55 +2,104 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { html } from "chrome://global/content/vendor/lit.all.mjs";
+import { html, ifDefined } from "chrome://global/content/vendor/lit.all.mjs";
 import { ViewPage } from "./viewpage.mjs";
+// eslint-disable-next-line import/no-unassigned-import
+import "chrome://browser/content/migration/migration-wizard.mjs";
 
-const { PlacesQuery } = ChromeUtils.importESModule(
-  "resource://gre/modules/PlacesQuery.sys.mjs"
-);
-const { BrowserUtils } = ChromeUtils.importESModule(
-  "resource://gre/modules/BrowserUtils.sys.mjs"
-);
+const lazy = {};
 
-function getWindow() {
-  return window.browsingContext.embedderWindowGlobal.browsingContext.window;
-}
+ChromeUtils.defineESModuleGetters(lazy, {
+  BrowserUtils: "resource://gre/modules/BrowserUtils.sys.mjs",
+  FirefoxViewPlacesQuery:
+    "resource:///modules/firefox-view-places-query.sys.mjs",
+  PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
+  ProfileAge: "resource://gre/modules/ProfileAge.sys.mjs",
+});
+
+let XPCOMUtils = ChromeUtils.importESModule(
+  "resource://gre/modules/XPCOMUtils.sys.mjs"
+).XPCOMUtils;
+
+const NEVER_REMEMBER_HISTORY_PREF = "browser.privatebrowsing.autostart";
+const HAS_IMPORTED_HISTORY_PREF = "browser.migrate.interactions.history";
+const IMPORT_HISTORY_DISMISSED_PREF =
+  "browser.tabs.firefox-view.importHistory.dismissed";
 
 class HistoryInView extends ViewPage {
   constructor() {
     super();
-    this.allHistoryItems = [];
+    this.allHistoryItems = new Map();
     this.historyMapByDate = [];
     this.historyMapBySite = [];
     // Setting maxTabsLength to -1 for no max
     this.maxTabsLength = -1;
-    this.placesQuery = new PlacesQuery();
+    this.placesQuery = new lazy.FirefoxViewPlacesQuery();
     this.sortOption = "date";
+    this.profileAge = 8;
+    this.fullyUpdated = false;
   }
 
   async connectedCallback() {
     super.connectedCallback();
-    this.updateHistoryData();
+    await this.updateHistoryData();
     this.placesQuery.observeHistory(newHistory => {
-      this.allHistoryItems = [...newHistory];
       this.resetHistoryMaps();
+      this.allHistoryItems = newHistory;
+      this.lists.forEach(list => list.requestUpdate());
     });
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "importHistoryDismissedPref",
+      IMPORT_HISTORY_DISMISSED_PREF,
+      false,
+      () => {
+        this.requestUpdate();
+      }
+    );
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "hasImportedHistoryPref",
+      HAS_IMPORTED_HISTORY_PREF,
+      false,
+      () => {
+        this.requestUpdate();
+      }
+    );
+    if (!this.importHistoryDismissedPref && !this.hasImportedHistoryPrefs) {
+      let profileAccessor = await lazy.ProfileAge();
+      let profileCreateTime = await profileAccessor.created;
+      let timeNow = new Date().getTime();
+      let profileAge = timeNow - profileCreateTime;
+      // Convert milliseconds to days
+      this.profileAge = profileAge / 1000 / 60 / 60 / 24;
+    }
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this.placesQuery.close();
+    this.migrationWizardDialog.removeEventListener(
+      "MigrationWizard:Close",
+      this.migrationWizardDialog
+    );
   }
 
   static queries = {
-    cards: { all: "card-container" },
+    cards: { all: "card-container:not([hidden])" },
+    migrationWizardDialog: "#migrationWizardDialog",
+    emptyState: "fxview-empty-state",
+    lists: { all: "fxview-tab-list" },
   };
 
   static properties = {
     ...ViewPage.properties,
-    allHistoryItems: { type: Array },
+    allHistoryItems: { type: Map },
     historyMapByDate: { type: Array },
     historyMapBySite: { type: Array },
+    // Making profileAge a reactive property for testing
+    profileAge: { type: Number },
+    sortOption: { type: String },
   };
 
   async getUpdateComplete() {
@@ -58,14 +107,15 @@ class HistoryInView extends ViewPage {
     await Promise.all(Array.from(this.cards).map(card => card.updateComplete));
   }
 
-  async updateHistoryData(newHistoryData) {
-    if (!newHistoryData) {
-      this.allHistoryItems = await this.placesQuery.getHistory({ daysOld: 60 });
-    } else {
-      this.allHistoryItems = newHistoryData;
-      // Reset history maps before sorting, normalizing, and creating updated maps
-      this.resetHistoryMaps();
-    }
+  async updateHistoryData() {
+    this.allHistoryItems = await this.placesQuery.getHistory({
+      daysOld: 60,
+      limit: Services.prefs.getIntPref(
+        "browser.firefox-view.max-history-rows",
+        -1
+      ),
+      sortBy: this.sortOption,
+    });
   }
 
   resetHistoryMaps() {
@@ -73,166 +123,60 @@ class HistoryInView extends ViewPage {
     this.historyMapBySite = [];
   }
 
-  sortHistoryData() {
-    if (this.sortOption == "date" && !this.historyMapByDate.length) {
-      this.allHistoryItems.sort((a, b) => {
-        return new Date(b.date) - new Date(a.date);
-      });
-    } else if (!this.historyMapBySite.length) {
-      this.allHistoryItems.sort((a, b) => {
-        return BrowserUtils.formatURIStringForDisplay(a.url.toLowerCase()) >
-          BrowserUtils.formatURIStringForDisplay(b.url.toLowerCase())
-          ? 1
-          : -1;
-      });
-    }
-    return this.allHistoryItems;
-  }
-
-  normalizeHistoryData() {
-    // Normalize data for fxview-tabs-list
-    this.allHistoryItems.forEach(historyItem => {
-      historyItem.time = historyItem.date.getTime();
-      historyItem.title = historyItem.title
-        ? historyItem.title
-        : historyItem.url;
-      historyItem.icon = `page-icon:${historyItem.url}`;
-      historyItem.primaryL10nId = "fxviewtabrow-tabs-list-tab";
-      historyItem.primaryL10nArgs = JSON.stringify({
-        targetURI: historyItem.url,
-      });
-      historyItem.secondaryL10nId = "fxviewtabrow-open-menu-button";
-    });
-  }
-
-  isDateToday(dateObj) {
-    const today = new Date();
-    return (
-      dateObj.getDate() === today.getDate() &&
-      dateObj.getMonth() === today.getMonth() &&
-      dateObj.getFullYear() === today.getFullYear()
-    );
-  }
-
-  isDateYesterday(dateObj) {
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    return (
-      dateObj.getDate() === yesterday.getDate() &&
-      dateObj.getMonth() === today.getMonth() &&
-      dateObj.getFullYear() === today.getFullYear()
-    );
-  }
-
-  isDateThisMonth(dateObj) {
-    const today = new Date();
-    return (
-      !this.isDateToday(dateObj) &&
-      !this.isDateYesterday(dateObj) &&
-      dateObj.getMonth() === today.getMonth() &&
-      dateObj.getFullYear() === today.getFullYear()
-    );
-  }
-
-  isDatePrevMonth(dateObj) {
-    const today = new Date();
-    return (
-      dateObj.getFullYear() === today.getFullYear() &&
-      dateObj.getMonth() !== today.getMonth()
-    );
-  }
-
   createHistoryMaps() {
     if (this.sortOption === "date" && !this.historyMapByDate.length) {
-      let todayItems = this.allHistoryItems.filter(historyItem =>
-        this.isDateToday(historyItem.date)
-      );
-      if (todayItems.length) {
+      const {
+        visitsFromToday,
+        visitsFromYesterday,
+        visitsByDay,
+        visitsByMonth,
+      } = this.placesQuery;
+
+      // Add visits from today and yesterday.
+      if (visitsFromToday.length) {
         this.historyMapByDate.push({
           l10nId: "firefoxview-history-date-today",
-          items: todayItems,
+          items: visitsFromToday,
         });
       }
-      let yesterdayItems = this.allHistoryItems.filter(historyItem =>
-        this.isDateYesterday(historyItem.date)
-      );
-      if (yesterdayItems.length) {
+      if (visitsFromYesterday.length) {
         this.historyMapByDate.push({
           l10nId: "firefoxview-history-date-yesterday",
-          items: yesterdayItems,
+          items: visitsFromYesterday,
         });
       }
-      let historyThisMonth = this.allHistoryItems.filter(historyItem =>
-        this.isDateThisMonth(historyItem.date)
-      );
-      historyThisMonth.forEach(historyItem => {
-        let historyAtDayThisMonth = historyThisMonth.filter(
-          historyItemThisMonth =>
-            historyItemThisMonth.date.getDate() === historyItem.date.getDate()
-        );
-        if (historyAtDayThisMonth.length) {
-          this.historyMapByDate.push({
-            l10nId: "firefoxview-history-date-this-month",
-            items: historyAtDayThisMonth,
-          });
-          historyThisMonth = historyThisMonth.filter(
-            historyItemThisMonth =>
-              historyItemThisMonth.date.getDate() !== historyItem.date.getDate()
-          );
-        }
+
+      // Add visits from this month, grouped by day.
+      visitsByDay.forEach(visits => {
+        this.historyMapByDate.push({
+          l10nId: "firefoxview-history-date-this-month",
+          items: visits,
+        });
       });
 
-      let historyOlderThanThisMonth = this.allHistoryItems.filter(historyItem =>
-        this.isDatePrevMonth(historyItem.date)
-      );
-      historyOlderThanThisMonth.forEach(historyItem => {
-        let items = historyOlderThanThisMonth.filter(
-          historyItemOlderThanThisMonth =>
-            historyItemOlderThanThisMonth.date.getMonth() ===
-            historyItem.date.getMonth()
-        );
-        if (items.length) {
-          this.historyMapByDate.push({
-            l10nId: "firefoxview-history-date-prev-month",
-            items,
-          });
-          historyOlderThanThisMonth = historyOlderThanThisMonth.filter(
-            historyItemOlderThanThisMonth =>
-              historyItemOlderThanThisMonth.date.getMonth() !==
-              historyItem.date.getMonth()
-          );
-        }
+      // Add visits from previous months, grouped by month.
+      visitsByMonth.forEach(visits => {
+        this.historyMapByDate.push({
+          l10nId: "firefoxview-history-date-prev-month",
+          items: visits,
+        });
       });
-    } else if (!this.historyMapBySite.length) {
-      let allHistoryCopy = [...this.allHistoryItems];
-      allHistoryCopy.forEach(historyItem => {
-        let domain = BrowserUtils.formatURIStringForDisplay(historyItem.url);
-        let items = allHistoryCopy.filter(
-          historyCopyItem =>
-            BrowserUtils.formatURIStringForDisplay(historyCopyItem.url) ===
-            domain
-        );
-        if (items.length) {
-          this.historyMapBySite.push({
-            domain,
-            items,
-          });
-          allHistoryCopy = allHistoryCopy.filter(
-            historyCopyItem =>
-              BrowserUtils.formatURIStringForDisplay(historyCopyItem.url) !==
-              domain
-          );
-        }
-      });
+    } else if (this.sortOption === "site" && !this.historyMapBySite.length) {
+      this.historyMapBySite = Array.from(
+        this.allHistoryItems.entries(),
+        ([domain, items]) => ({
+          domain,
+          items,
+          l10nId: domain ? null : "firefoxview-history-site-localhost",
+        })
+      ).sort((a, b) => a.domain.localeCompare(b.domain));
     }
   }
 
   onPrimaryAction(e) {
-    let currentWindow = getWindow();
+    let currentWindow = this.getWindow();
     if (currentWindow.openTrustedLinkIn) {
-      let where = BrowserUtils.whereToOpenLink(
+      let where = lazy.BrowserUtils.whereToOpenLink(
         e.detail.originalEvent,
         false,
         true
@@ -245,35 +189,93 @@ class HistoryInView extends ViewPage {
   }
 
   onSecondaryAction(e) {
+    this.triggerNode = e.originalTarget;
     e.target.querySelector("panel-list").toggle(e.detail.originalEvent);
   }
 
-  async toggleSortOption(e) {
+  deleteFromHistory(e) {
+    lazy.PlacesUtils.history.remove(this.triggerNode.url);
+  }
+
+  async onChangeSortOption(e) {
     this.sortOption = e.target.value;
     this.updateHistoryData();
   }
 
   showAllHistory() {
     // Open History view in Library window
-    getWindow().PlacesCommandHook.showPlacesOrganizer("History");
+    this.getWindow().PlacesCommandHook.showPlacesOrganizer("History");
+  }
+
+  async openMigrationWizard() {
+    let migrationWizardDialog = this.migrationWizardDialog;
+
+    if (migrationWizardDialog.open) {
+      return;
+    }
+
+    await customElements.whenDefined("migration-wizard");
+
+    // If we've been opened before, remove the old wizard and insert a
+    // new one to put it back into its starting state.
+    if (!migrationWizardDialog.firstElementChild) {
+      let wizard = document.createElement("migration-wizard");
+      wizard.toggleAttribute("dialog-mode", true);
+      migrationWizardDialog.appendChild(wizard);
+    }
+    migrationWizardDialog.firstElementChild.requestState();
+
+    this.migrationWizardDialog.addEventListener(
+      "MigrationWizard:Close",
+      function (e) {
+        e.currentTarget.close();
+      }
+    );
+
+    migrationWizardDialog.showModal();
+  }
+
+  shouldShowImportBanner() {
+    return (
+      this.profileAge < 8 &&
+      !this.hasImportedHistoryPref &&
+      !this.importHistoryDismissedPref
+    );
+  }
+
+  dismissImportHistory() {
+    Services.prefs.setBoolPref(IMPORT_HISTORY_DISMISSED_PREF, true);
+  }
+
+  updated() {
+    this.fullyUpdated = true;
   }
 
   panelListTemplate() {
     return html`
       <panel-list slot="menu">
-        <panel-item data-l10n-id="fxviewtabrow-delete"></panel-item>
         <panel-item
-          data-l10n-id="fxviewtabrow-forget-about-this-site"
+          @click=${this.deleteFromHistory}
+          data-l10n-id="firefoxview-history-context-delete"
+          data-l10n-attrs="accesskey"
         ></panel-item>
         <hr />
-        <panel-item data-l10n-id="fxviewtabrow-open-in-window"></panel-item>
         <panel-item
+          @click=${this.openInNewWindow}
+          data-l10n-id="fxviewtabrow-open-in-window"
+          data-l10n-attrs="accesskey"
+        ></panel-item>
+        <panel-item
+          @click=${this.openInNewPrivateWindow}
           data-l10n-id="fxviewtabrow-open-in-private-window"
+          data-l10n-attrs="accesskey"
         ></panel-item>
         <hr />
-        <panel-item data-l10n-id="fxviewtabrow-add-bookmark"></panel-item>
-        <panel-item data-l10n-id="fxviewtabrow-save-to-pocket"></panel-item>
-        <panel-item data-l10n-id="fxviewtabrow-copy-link"></panel-item>
+        <panel-item
+          @click=${this.copyLink}
+          data-l10n-id="fxviewtabrow-copy-link"
+          data-l10n-attrs="accesskey"
+        ></panel-item>
       </panel-list>
     `;
   }
@@ -281,7 +283,7 @@ class HistoryInView extends ViewPage {
   historyCardsTemplate() {
     let cardsTemplate = [];
     if (this.sortOption === "date" && this.historyMapByDate.length) {
-      this.historyMapByDate.forEach((historyItem, index) => {
+      this.historyMapByDate.forEach(historyItem => {
         if (historyItem.items.length) {
           let dateArg = JSON.stringify({ date: historyItem.items[0].time });
           cardsTemplate.push(html`<card-container>
@@ -311,7 +313,9 @@ class HistoryInView extends ViewPage {
       this.historyMapBySite.forEach(historyItem => {
         if (historyItem.items.length) {
           cardsTemplate.push(html`<card-container>
-            <h2 slot="header">${historyItem.domain}</h2>
+            <h2 slot="header" data-l10n-id="${ifDefined(historyItem.l10nId)}">
+              ${historyItem.domain}
+            </h2>
             <fxview-tab-list
               slot="main"
               class="history"
@@ -332,11 +336,41 @@ class HistoryInView extends ViewPage {
   }
 
   emptyMessageTemplate() {
-    // TO-DO: Bug 1826604 - Add History empty states and banner
+    let descriptionHeader;
+    let descriptionLabels;
+    let descriptionLink;
+    if (Services.prefs.getBoolPref(NEVER_REMEMBER_HISTORY_PREF, false)) {
+      // History pref set to never remember history
+      descriptionHeader = "firefoxview-dont-remember-history-empty-header";
+      descriptionLabels = [
+        "firefoxview-dont-remember-history-empty-description",
+        "firefoxview-dont-remember-history-empty-description-two",
+      ];
+      descriptionLink = {
+        url: "about:preferences#privacy",
+        name: "history-settings-url-two",
+      };
+    } else {
+      descriptionHeader = "firefoxview-history-empty-header";
+      descriptionLabels = [
+        "firefoxview-history-empty-description",
+        "firefoxview-history-empty-description-two",
+      ];
+      descriptionLink = {
+        url: "about:preferences#privacy",
+        name: "history-settings-url",
+      };
+    }
     return html`
-      <card-container hideHeader="true" class"empty-state history">
-        <p slot="main">EMPTY MESSAGE</p>
-      </card-container>
+      <fxview-empty-state
+        headerLabel=${descriptionHeader}
+        .descriptionLabels=${descriptionLabels}
+        .descriptionLink=${descriptionLink}
+        class="empty-state history"
+        ?isSelectedTab=${this.selectedTab}
+        mainImageUrl="chrome://browser/content/firefoxview/history-empty.svg"
+      >
+      </fxview-empty-state>
     `;
   }
 
@@ -353,17 +387,18 @@ class HistoryInView extends ViewPage {
         rel="stylesheet"
         href="chrome://browser/content/firefoxview/history.css"
       />
+      <dialog id="migrationWizardDialog"></dialog>
       <div class="sticky-container bottom-fade">
         <h2 class="page-header" data-l10n-id="firefoxview-history-header"></h2>
-        <span class="history-sort-options">
+        <div class="history-sort-options">
           <div class="history-sort-option">
             <input
               type="radio"
               id="sort-by-date"
               name="history-sort-option"
               value="date"
-              checked
-              @click=${this.toggleSortOption}
+              ?checked=${this.sortOption === "date"}
+              @click=${this.onChangeSortOption}
             />
             <label
               for="sort-by-date"
@@ -373,23 +408,54 @@ class HistoryInView extends ViewPage {
           <div class="history-sort-option">
             <input
               type="radio"
+              id="sort-by-site"
               name="history-sort-option"
               value="site"
-              @click=${this.toggleSortOption}
+              ?checked=${this.sortOption === "site"}
+              @click=${this.onChangeSortOption}
             />
             <label
               for="sort-by-site"
               data-l10n-id="firefoxview-sort-history-by-site-label"
             ></label>
           </div>
-        </span>
+        </div>
       </div>
       <div class="cards-container">
-        ${!this.allHistoryItems.length
+        <card-container
+          class="import-history-banner"
+          hideHeader="true"
+          ?hidden=${!this.shouldShowImportBanner()}
+        >
+          <div slot="main">
+            <div class="banner-text">
+              <span data-l10n-id="firefoxview-import-history-header"></span>
+              <span
+                data-l10n-id="firefoxview-import-history-description"
+              ></span>
+            </div>
+            <div class="buttons">
+              <button
+                class="primary choose-browser"
+                data-l10n-id="firefoxview-choose-browser-button"
+                @click=${this.openMigrationWizard}
+              ></button>
+              <button
+                class="close ghost-button"
+                data-l10n-id="firefoxview-import-history-close-button"
+                @click=${this.dismissImportHistory}
+              ></button>
+            </div>
+          </div>
+        </card-container>
+        ${!this.allHistoryItems.size
           ? this.emptyMessageTemplate()
           : this.historyCardsTemplate()}
       </div>
-      <div class="show-all-history-footer">
+      <div
+        class="show-all-history-footer"
+        ?hidden=${!this.allHistoryItems.size}
+      >
         <span
           class="show-all-history-link"
           data-l10n-id="firefoxview-show-all-history"
@@ -399,10 +465,11 @@ class HistoryInView extends ViewPage {
     `;
   }
 
-  willUpdate() {
-    this.sortHistoryData();
-    this.normalizeHistoryData();
-    if (this.allHistoryItems.length) {
+  willUpdate(changedProperties) {
+    this.fullyUpdated = false;
+    if (this.allHistoryItems.size && !changedProperties.has("sortOption")) {
+      // onChangeSortOption() will update history data once it has been fetched
+      // from the API.
       this.createHistoryMaps();
     }
   }

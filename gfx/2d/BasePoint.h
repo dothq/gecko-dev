@@ -82,7 +82,10 @@ struct BasePoint {
     return x.value * aPoint.x.value + y.value * aPoint.y.value;
   }
 
-  Coord Length() const { return hypot(x.value, y.value); }
+  // FIXME: Maybe Length() should return a float Coord event for integer Points?
+  Coord Length() const {
+    return static_cast<decltype(x.value)>(hypot(x.value, y.value));
+  }
 
   T LengthSquare() const { return x.value * x.value + y.value * y.value; }
 
@@ -100,7 +103,6 @@ struct BasePoint {
     using FloatType =
         std::conditional_t<std::is_same_v<T, float>, float, double>;
     return (std::isfinite(FloatType(x)) && std::isfinite(FloatType(y)));
-    return true;
   }
 
   void Clamp(Coord aMaxAbsValue) {

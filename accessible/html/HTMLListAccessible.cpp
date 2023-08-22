@@ -7,11 +7,8 @@
 #include "HTMLListAccessible.h"
 
 #include "AccAttributes.h"
-#include "DocAccessible.h"
-#include "EventTree.h"
-#include "nsAccUtils.h"
-#include "nsPersistentProperties.h"
-#include "Role.h"
+#include "nsAccessibilityService.h"
+#include "mozilla/a11y/Role.h"
 #include "States.h"
 
 #include "nsLayoutUtils.h"

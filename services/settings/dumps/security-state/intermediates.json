@@ -1,22 +1,40 @@
 {
   "data": [
     {
-      "schema": 1691743681420,
-      "derHash": "DtVnGu6WFs3norGz3SOYtuEeWR2pdEki2MMtF/Z8ypM=",
-      "subject": "CN=TWCA Secure SSL Certification Authority,OU=Secure SSL Sub-CA,O=TAIWAN-CA,C=TW",
-      "subjectDN": "MG8xCzAJBgNVBAYTAlRXMRIwEAYDVQQKEwlUQUlXQU4tQ0ExGjAYBgNVBAsTEVNlY3VyZSBTU0wgU3ViLUNBMTAwLgYDVQQDEydUV0NBIFNlY3VyZSBTU0wgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHk=",
+      "schema": 1692154077124,
+      "derHash": "ZSPDTx6Hmt12A8sgSKiYpeLwxsS1EsDSJ4K4XUOuM3E=",
+      "subject": "CN=DigiCert Global Root G2,OU=www.digicert.com,O=DigiCert Inc,C=US",
+      "subjectDN": "MGExCzAJBgNVBAYTAlVTMRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5jb20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcy",
       "whitelist": false,
       "attachment": {
-        "hash": "ecec9266ff245492e1a172585358e3e67c817179645c78b040729531a2ce40cc",
-        "size": 2032,
-        "filename": "UF3fknYIk07Cq2Y0ayIdVanP0UaBIGpSIs6_eA0d_e0=.pem",
-        "location": "security-state-staging/intermediates/92beeb38-0a3f-4c91-85a1-0747906a534f.pem",
+        "hash": "1faa137dd2ee40cf50b2a051a7173d1010108a663e5440ea1fbac6c0031bf529",
+        "size": 1622,
+        "filename": "i7WTqTvh0OioIruIfFR4kMPnBqrS2rdiVPl_s2uC_CY=.pem",
+        "location": "security-state-staging/intermediates/104e770c-06a1-4448-b8d3-2f728cdcec56.pem",
         "mimetype": "application/x-pem-file"
       },
-      "pubKeyHash": "UF3fknYIk07Cq2Y0ayIdVanP0UaBIGpSIs6/eA0d/e0=",
+      "pubKeyHash": "i7WTqTvh0OioIruIfFR4kMPnBqrS2rdiVPl/s2uC/CY=",
       "crlite_enrolled": false,
-      "id": "afa677b2-2744-4891-aa66-0e302ea96f30",
-      "last_modified": 1691744223786
+      "id": "44effbc9-9ad4-4720-a022-dae2b23ec1d9",
+      "last_modified": 1692154623711
+    },
+    {
+      "schema": 1692154076819,
+      "derHash": "7e3QBTy4RFkuZz7yoIHBWzjuPsvrWFbJpP6bcWn6/+c=",
+      "subject": "CN=CrowdStrike Federal EV RSA CA G1,O=CrowdStrike\\, Inc.,C=US",
+      "subjectDN": "MFQxCzAJBgNVBAYTAlVTMRowGAYDVQQKExFDcm93ZFN0cmlrZSwgSW5jLjEpMCcGA1UEAxMgQ3Jvd2RTdHJpa2UgRmVkZXJhbCBFViBSU0EgQ0EgRzE=",
+      "whitelist": false,
+      "attachment": {
+        "hash": "c585aeefd429ffa446cafab9abe59c8d732dd69f53b70ea3fc57cbb15df590df",
+        "size": 2056,
+        "filename": "jlNmuWU1h89xgXejpUIIUrORzlvSrzWGeDUMnmVY_c0=.pem",
+        "location": "security-state-staging/intermediates/e8217047-9ec4-482d-a6b7-6f791422852c.pem",
+        "mimetype": "application/x-pem-file"
+      },
+      "pubKeyHash": "jlNmuWU1h89xgXejpUIIUrORzlvSrzWGeDUMnmVY/c0=",
+      "crlite_enrolled": false,
+      "id": "970d042d-6df8-4a99-a686-c6a5f58570e2",
+      "last_modified": 1692154623708
     },
     {
       "schema": 1691462897692,
@@ -28855,5 +28873,5 @@
       "last_modified": 1559865863642
     }
   ],
-  "timestamp": 1691765823425
+  "timestamp": 1692284223687
 }

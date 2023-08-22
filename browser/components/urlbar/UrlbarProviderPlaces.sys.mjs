@@ -103,8 +103,6 @@ const SQL_SWITCHTAB_QUERY = `SELECT :query_type, t.url, t.url, NULL, NULL, NULL,
 
 // Getters
 
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
 import {
   UrlbarProvider,
   UrlbarUtils,
@@ -114,6 +112,7 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   KeywordUtils: "resource://gre/modules/KeywordUtils.sys.mjs",
+  ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
   Sqlite: "resource://gre/modules/Sqlite.sys.mjs",
@@ -125,10 +124,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.sys.mjs",
 });
 
-XPCOMUtils.defineLazyModuleGetters(lazy, {
-  ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
-});
-
 function setTimeout(callback, ms) {
   let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
   timer.initWithCallback(callback, ms, timer.TYPE_ONE_SHOT);
@@ -136,7 +131,7 @@ function setTimeout(callback, ms) {
 }
 
 // Maps restriction character types to textual behaviors.
-XPCOMUtils.defineLazyGetter(lazy, "typeToBehaviorMap", () => {
+ChromeUtils.defineLazyGetter(lazy, "typeToBehaviorMap", () => {
   return new Map([
     [lazy.UrlbarTokenizer.TYPE.RESTRICT_HISTORY, "history"],
     [lazy.UrlbarTokenizer.TYPE.RESTRICT_BOOKMARK, "bookmark"],
@@ -148,7 +143,7 @@ XPCOMUtils.defineLazyGetter(lazy, "typeToBehaviorMap", () => {
   ]);
 });
 
-XPCOMUtils.defineLazyGetter(lazy, "sourceToBehaviorMap", () => {
+ChromeUtils.defineLazyGetter(lazy, "sourceToBehaviorMap", () => {
   return new Map([
     [UrlbarUtils.RESULT_SOURCE.HISTORY, "history"],
     [UrlbarUtils.RESULT_SOURCE.BOOKMARKS, "bookmark"],
@@ -1479,7 +1474,7 @@ class ProviderPlaces extends UrlbarProvider {
     search.notifyResult(false);
   }
 
-  onEngagement(isPrivate, state, queryContext, details) {
+  onEngagement(state, queryContext, details, controller) {
     let { result } = details;
     if (result?.providerName != this.name) {
       return;
@@ -1492,14 +1487,14 @@ class ProviderPlaces extends UrlbarProvider {
           // from browsing history.
           let { url } = UrlbarUtils.getUrlFromResult(result);
           lazy.PlacesUtils.history.remove(url).catch(console.error);
-          queryContext.view.controller.removeResult(result);
+          controller.removeResult(result);
           break;
         case UrlbarUtils.RESULT_TYPE.URL:
           // Remove browsing history entries from Places.
           lazy.PlacesUtils.history
             .remove(result.payload.url)
             .catch(console.error);
-          queryContext.view.controller.removeResult(result);
+          controller.removeResult(result);
           break;
       }
     }

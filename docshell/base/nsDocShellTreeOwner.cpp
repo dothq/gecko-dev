@@ -924,9 +924,14 @@ nsDocShellTreeOwner::HandleEvent(Event* aEvent) {
     handler->CanDropLink(dragEvent, false, &canDropLink);
     if (canDropLink) {
       aEvent->PreventDefault();
+      WidgetDragEvent* asWidgetDropEvent =
+          dragEvent->WidgetEventPtr()->AsDragEvent();
+      asWidgetDropEvent->UpdateDefaultPreventedOnContent(
+          asWidgetDropEvent->mCurrentTarget);
     }
   } else if (eventType.EqualsLiteral("drop")) {
-    nsIWebNavigation* webnav = static_cast<nsIWebNavigation*>(mWebBrowser);
+    nsCOMPtr<nsIWebNavigation> webnav =
+        static_cast<nsIWebNavigation*>(mWebBrowser);
 
     // The page might have cancelled the dragover event itself, so check to
     // make sure that the link can be dropped first.
@@ -974,6 +979,10 @@ nsDocShellTreeOwner::HandleEvent(Event* aEvent) {
     } else {
       aEvent->StopPropagation();
       aEvent->PreventDefault();
+      WidgetDragEvent* asWidgetDropEvent =
+          dragEvent->WidgetEventPtr()->AsDragEvent();
+      asWidgetDropEvent->UpdateDefaultPreventedOnContent(
+          asWidgetDropEvent->mCurrentTarget);
     }
   }
 

@@ -854,21 +854,14 @@ var basicShapeOtherValues = [
   "polygon(20cm 20mm)",
   "polygon(20px 20px, 30px 30px)",
   "polygon(20px 20px, 30% 30%, 30px 30px)",
-  "polygon(nonzero, 20px 20px, 30% 30%, 30px 30px)",
-  "polygon(evenodd, 20px 20px, 30% 30%, 30px 30px)",
 
   "content-box",
   "padding-box",
   "border-box",
-  "margin-box",
 
   "polygon(0 0) content-box",
   "border-box polygon(0 0)",
   "padding-box    polygon(   0  20px ,  30px    20% )  ",
-  "polygon(evenodd, 20% 20em) content-box",
-  "polygon(evenodd, 20vh 20em) padding-box",
-  "polygon(evenodd, 20vh calc(20% + 20em)) border-box",
-  "polygon(evenodd, 20vh 20vw) margin-box",
 
   "circle()",
   "circle(at center)",
@@ -911,6 +904,15 @@ var basicShapeOtherValues = [
   "inset(1px 2px round 3px / 3px)",
   "inset(1px 2px 3px round 3px 2em / 20%)",
   "inset(1px 2px 3px 4px round 3px 2vw 20% / 20px 3em 2vh 20%)",
+];
+
+var basicShapeOtherValuesWithFillRule = [
+  "polygon(nonzero, 20px 20px, 30% 30%, 30px 30px)",
+  "polygon(evenodd, 20px 20px, 30% 30%, 30px 30px)",
+  "polygon(evenodd, 20% 20em) content-box",
+  "polygon(evenodd, 20vh 20em) padding-box",
+  "polygon(evenodd, 20vh calc(20% + 20em)) border-box",
+  "polygon(evenodd, 20vh 20vw) margin-box",
 ];
 
 var basicShapeInvalidValues = [
@@ -1014,6 +1016,28 @@ var basicShapeUnbalancedValues = [
   "inset(1px 2px 3px 4px round 5px",
   "inset(1px 2px 3px 4px round 5px / 6px",
 ];
+
+var basicShapeXywhRectValues = [];
+if (IsCSSPropertyPrefEnabled("layout.css.basic-shape-xywh.enabled")) {
+  basicShapeXywhRectValues.push(
+    "xywh(1px 2% 3px 4em)",
+    "xywh(1px 2% 3px 4em round 0px)",
+    "xywh(1px 2% 3px 4em round 0px 1%)",
+    "xywh(1px 2% 3px 4em round 0px 1% 2px)",
+    "xywh(1px 2% 3px 4em round 0px 1% 2px 3em)"
+  );
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.basic-shape-rect.enabled")) {
+  basicShapeXywhRectValues.push(
+    "rect(auto auto auto auto)",
+    "rect(1px 2% auto 4em)",
+    "rect(1px 2% auto 4em round 0px)",
+    "rect(1px 2% auto 4em round 0px 1%)",
+    "rect(1px 2% auto 4em round 0px 1% 2px)",
+    "rect(1px 2% auto 4em round 0px 1% 2px 3em)"
+  );
+}
 
 if (/* mozGradientsEnabled */ true) {
   // Maybe one day :(
@@ -1653,6 +1677,10 @@ var gCSSProperties = {
       "steps(386)",
       "steps(3, end)",
       "steps(calc(2 + 1))",
+      "steps(1, jump-start)",
+      "steps(1, jump-end)",
+      "steps(2, jump-none)",
+      "steps(1, jump-both)",
     ],
     invalid_values: [
       "none",
@@ -1667,6 +1695,10 @@ var gCSSProperties = {
       "steps(0)",
       "steps(-2)",
       "steps(0, step-end, 1)",
+      "steps(0, jump-start)",
+      "steps(0, jump-end)",
+      "steps(1, jump-none)",
+      "steps(0, jump-both)",
     ],
   },
   appearance: {
@@ -2582,6 +2614,24 @@ var gCSSProperties = {
     type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
     alias_for: "print-color-adjust",
     subproperties: ["print-color-adjust"],
+  },
+  "color-scheme": {
+    domProp: "colorScheme",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["normal"],
+    other_values: [
+      "light",
+      "dark",
+      "light dark",
+      "light dark purple",
+      "light light dark",
+      "only light",
+      "only light dark",
+      "only light dark purple",
+      "light only",
+    ],
+    invalid_values: ["only normal", "normal only", "only light only"],
   },
   columns: {
     domProp: "columns",
@@ -8347,6 +8397,10 @@ var gCSSProperties = {
       "steps(2, start)",
       "steps(386)",
       "steps(3, end)",
+      "steps(1, jump-start)",
+      "steps(1, jump-end)",
+      "steps(2, jump-none)",
+      "steps(1, jump-both)",
     ],
     invalid_values: [
       "none",
@@ -8361,6 +8415,10 @@ var gCSSProperties = {
       "steps(0)",
       "steps(-2)",
       "steps(0, step-end, 1)",
+      "steps(0, jump-start)",
+      "steps(0, jump-end)",
+      "steps(1, jump-none)",
+      "steps(0, jump-both)",
     ],
   },
   "unicode-bidi": {
@@ -8675,9 +8733,12 @@ var gCSSProperties = {
       "url(#mypath)",
       "url('404.svg#mypath')",
       "url(#my-clip-path)",
+      "margin-box",
     ]
       .concat(basicShapeSVGBoxValues)
-      .concat(basicShapeOtherValues),
+      .concat(basicShapeOtherValues)
+      .concat(basicShapeOtherValuesWithFillRule)
+      .concat(basicShapeXywhRectValues),
     invalid_values: [
       "path(nonzero)",
       "path(abs, 'M 10 10 L 10 10 z')",
@@ -9180,8 +9241,9 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     applies_to_first_letter: true,
     initial_values: ["none"],
-    other_values: ["url(#my-shape-outside)"].concat(
+    other_values: ["url(#my-shape-outside)", "margin-box"].concat(
       basicShapeOtherValues,
+      basicShapeOtherValuesWithFillRule,
       validNonUrlImageValues
     ),
     invalid_values: [].concat(
@@ -13036,16 +13098,16 @@ if (IsCSSPropertyPrefEnabled("layout.css.contain-intrinsic-size.enabled")) {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["none"],
-    other_values: ["1em", "1px", "auto 1px"],
-    invalid_values: ["auto auto", "auto none", "auto", "-1px"],
+    other_values: ["1em", "1px", "auto 1px", "auto none"],
+    invalid_values: ["auto auto", "auto", "-1px"],
   };
   gCSSProperties["contain-intrinsic-height"] = {
     domProp: "containIntrinsicHeight",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["none"],
-    other_values: ["1em", "1px", "auto 1px"],
-    invalid_values: ["auto auto", "auto none", "auto", "-1px"],
+    other_values: ["1em", "1px", "auto 1px", "auto none"],
+    invalid_values: ["auto auto", "auto", "-1px"],
   };
   gCSSProperties["contain-intrinsic-block-size"] = {
     domProp: "containIntrinsicBlockSize",
@@ -13053,8 +13115,8 @@ if (IsCSSPropertyPrefEnabled("layout.css.contain-intrinsic-size.enabled")) {
     logical: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["none"],
-    other_values: ["1em", "1px", "auto 1px"],
-    invalid_values: ["auto auto", "auto none", "auto", "-1px"],
+    other_values: ["1em", "1px", "auto 1px", "auto none"],
+    invalid_values: ["auto auto", "auto", "-1px"],
   };
   gCSSProperties["contain-intrinsic-inline-size"] = {
     domProp: "containIntrinsicInlineSize",
@@ -13062,8 +13124,8 @@ if (IsCSSPropertyPrefEnabled("layout.css.contain-intrinsic-size.enabled")) {
     logical: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["none"],
-    other_values: ["1em", "1px", "auto 1px"],
-    invalid_values: ["auto auto", "auto none", "auto", "-1px"],
+    other_values: ["1em", "1px", "auto 1px", "auto none"],
+    invalid_values: ["auto auto", "auto", "-1px"],
   };
 
   gCSSProperties["contain-intrinsic-size"] = {
@@ -13466,6 +13528,13 @@ if (IsCSSPropertyPrefEnabled("layout.css.motion-path.enabled")) {
     );
   }
 
+  if (IsCSSPropertyPrefEnabled("layout.css.motion-path-basic-shapes.enabled")) {
+    gCSSProperties["offset-path"]["other_values"].push(
+      ...basicShapeOtherValues,
+      ...basicShapeXywhRectValues
+    );
+  }
+
   gCSSProperties["offset-distance"] = {
     domProp: "offsetDistance",
     inherited: false,
@@ -13536,34 +13605,6 @@ if (
   };
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.step-position-jump.enabled")) {
-  gCSSProperties["animation-timing-function"].other_values.push(
-    "steps(1, jump-start)",
-    "steps(1, jump-end)",
-    "steps(2, jump-none)",
-    "steps(1, jump-both)"
-  );
-  gCSSProperties["animation-timing-function"].invalid_values.push(
-    "steps(0, jump-start)",
-    "steps(0, jump-end)",
-    "steps(1, jump-none)",
-    "steps(0, jump-both)"
-  );
-
-  gCSSProperties["transition-timing-function"].other_values.push(
-    "steps(1, jump-start)",
-    "steps(1, jump-end)",
-    "steps(2, jump-none)",
-    "steps(1, jump-both)"
-  );
-  gCSSProperties["transition-timing-function"].invalid_values.push(
-    "steps(0, jump-start)",
-    "steps(0, jump-end)",
-    "steps(1, jump-none)",
-    "steps(0, jump-both)"
-  );
-}
-
 if (IsCSSPropertyPrefEnabled("layout.css.linear-easing-function.enabled")) {
   let linear_function_other_values = [
     "linear(0, 1)",
@@ -13626,13 +13667,14 @@ if (IsCSSPropertyPrefEnabled("layout.css.math-depth.enabled")) {
     type: CSS_TYPE_LONGHAND,
     initial_values: ["0"],
     other_values: [
-      "auto-add",
+      // auto-add cannot be tested here because it has no effect when the
+      // inherited math-style is equal to the default (normal).
       "123",
       "-123",
       "add(123)",
       "add(-123)",
       "calc(1 + 2*3)",
-      "add(calc(1 - 2/3))",
+      "add(calc(4 - 2/3))",
     ],
     invalid_values: ["auto", "1,23", "1.23", "add(1,23)", "add(1.23)"],
   };
@@ -13665,27 +13707,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.color-mix.enabled")) {
     "color-mix(in srgb, red blue)",
     "color-mix(in srgb, red 10% blue)"
   );
-}
-
-if (IsCSSPropertyPrefEnabled("layout.css.color-scheme.enabled")) {
-  gCSSProperties["color-scheme"] = {
-    domProp: "colorScheme",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: ["normal"],
-    other_values: [
-      "light",
-      "dark",
-      "light dark",
-      "light dark purple",
-      "light light dark",
-      "only light",
-      "only light dark",
-      "only light dark purple",
-      "light only",
-    ],
-    invalid_values: ["only normal", "normal only", "only light only"],
-  };
 }
 
 if (IsCSSPropertyPrefEnabled("layout.css.forced-color-adjust.enabled")) {

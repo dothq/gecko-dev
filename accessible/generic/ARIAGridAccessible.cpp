@@ -8,13 +8,12 @@
 #include <stdint.h>
 #include "LocalAccessible-inl.h"
 #include "AccAttributes.h"
-#include "AccIterator.h"
 #include "mozilla/a11y/TableAccessible.h"
 #include "mozilla/a11y/TableCellAccessible.h"
 #include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
 #include "nsGkAtoms.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #include "States.h"
 
 using namespace mozilla;

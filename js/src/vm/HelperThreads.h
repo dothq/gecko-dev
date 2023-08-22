@@ -189,9 +189,6 @@ inline void CancelOffThreadIonCompile(JSRuntime* runtime) {
 bool HasOffThreadIonCompile(JS::Realm* realm);
 #endif
 
-// True iff the current thread is a ParseTask or a DelazifyTask.
-bool CurrentThreadIsParseThread();
-
 /*
  * Cancel all scheduled, in progress or finished parses for runtime.
  *
@@ -239,11 +236,6 @@ JS::OffThreadToken* StartOffThreadCompileModuleToStencil(
 JS::OffThreadToken* StartOffThreadDecodeStencil(
     JSContext* cx, const JS::DecodeOptions& options,
     const JS::TranscodeRange& range, JS::OffThreadCompileCallback callback,
-    void* callbackData);
-
-JS::OffThreadToken* StartOffThreadDecodeMultiStencils(
-    JSContext* cx, const JS::DecodeOptions& options,
-    JS::TranscodeSources& sources, JS::OffThreadCompileCallback callback,
     void* callbackData);
 
 // Start off-thread delazification task, to race the delazification of inner

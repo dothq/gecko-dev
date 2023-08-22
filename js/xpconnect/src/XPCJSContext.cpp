@@ -781,6 +781,7 @@ static mozilla::Atomic<bool> sShadowRealmsEnabled(false);
 #ifdef NIGHTLY_BUILD
 static mozilla::Atomic<bool> sArrayGroupingEnabled(false);
 static mozilla::Atomic<bool> sWellFormedUnicodeStringsEnabled(false);
+static mozilla::Atomic<bool> sArrayBufferTransferEnabled(false);
 #endif
 static mozilla::Atomic<bool> sChangeArrayByCopyEnabled(false);
 static mozilla::Atomic<bool> sArrayFromAsyncEnabled(true);
@@ -813,6 +814,7 @@ void xpc::SetPrefableRealmOptions(JS::RealmOptions& options) {
 #ifdef NIGHTLY_BUILD
       .setArrayGroupingEnabled(sArrayGroupingEnabled)
       .setWellFormedUnicodeStringsEnabled(sWellFormedUnicodeStringsEnabled)
+      .setArrayBufferTransferEnabled(sArrayBufferTransferEnabled)
 #endif
       .setChangeArrayByCopyEnabled(sChangeArrayByCopyEnabled)
       .setArrayFromAsyncEnabled(sArrayFromAsyncEnabled)
@@ -822,9 +824,20 @@ void xpc::SetPrefableRealmOptions(JS::RealmOptions& options) {
       ;
 }
 
+void xpc::SetPrefableCompileOptions(JS::PrefableCompileOptions& options) {
+  options
+      .setSourcePragmas(StaticPrefs::javascript_options_source_pragmas())
+#ifdef NIGHTLY_BUILD
+      .setImportAssertions(
+          StaticPrefs::javascript_options_experimental_import_assertions())
+#endif
+      .setAsmJS(StaticPrefs::javascript_options_asmjs())
+      .setThrowOnAsmJSValidationFailure(
+          StaticPrefs::javascript_options_throw_on_asmjs_validation_failure());
+}
+
 void xpc::SetPrefableContextOptions(JS::ContextOptions& options) {
   options
-      .setAsmJS(Preferences::GetBool(JS_OPTIONS_DOT_STR "asmjs"))
 #ifdef FUZZING
       .setFuzzing(Preferences::GetBool(JS_OPTIONS_DOT_STR "fuzzing.enabled"))
 #endif
@@ -834,24 +847,17 @@ void xpc::SetPrefableContextOptions(JS::ContextOptions& options) {
       .setWasmIon(Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_optimizingjit"))
       .setWasmBaseline(
           Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_baselinejit"))
-#define WASM_FEATURE(NAME, LOWER_NAME, COMPILE_PRED, COMPILER_PRED, FLAG_PRED, \
-                     SHELL, PREF)                                              \
+#define WASM_FEATURE(NAME, LOWER_NAME, STAGE, COMPILE_PRED, COMPILER_PRED, \
+                     FLAG_PRED, FLAG_FORCE_ON, SHELL, PREF)                \
   .setWasm##NAME(Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_" PREF))
-          JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE, WASM_FEATURE)
+          JS_FOR_WASM_FEATURES(WASM_FEATURE)
 #undef WASM_FEATURE
       .setWasmVerbose(Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_verbose"))
-      .setThrowOnAsmJSValidationFailure(Preferences::GetBool(
-          JS_OPTIONS_DOT_STR "throw_on_asmjs_validation_failure"))
-      .setSourcePragmas(
-          Preferences::GetBool(JS_OPTIONS_DOT_STR "source_pragmas"))
       .setAsyncStack(Preferences::GetBool(JS_OPTIONS_DOT_STR "asyncstack"))
       .setAsyncStackCaptureDebuggeeOnly(Preferences::GetBool(
-          JS_OPTIONS_DOT_STR "asyncstack_capture_debuggee_only"))
-#ifdef NIGHTLY_BUILD
-      .setImportAssertions(Preferences::GetBool(
-          JS_OPTIONS_DOT_STR "experimental.import_assertions"))
-#endif
-      ;
+          JS_OPTIONS_DOT_STR "asyncstack_capture_debuggee_only"));
+
+  SetPrefableCompileOptions(options.compileOptions());
 }
 
 // Mirrored value of javascript.options.self_hosted.use_shared_memory.
@@ -1017,6 +1023,8 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
       Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.array_grouping");
   sWellFormedUnicodeStringsEnabled = Preferences::GetBool(
       JS_OPTIONS_DOT_STR "experimental.well_formed_unicode_strings");
+  sArrayBufferTransferEnabled = Preferences::GetBool(
+      JS_OPTIONS_DOT_STR "experimental.arraybuffer_transfer");
 #endif
   sChangeArrayByCopyEnabled = Preferences::GetBool(
       JS_OPTIONS_DOT_STR "experimental.enable_change_array_by_copy");
@@ -1059,7 +1067,7 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
   }
 
   JS_SetParallelParsingEnabled(
-      cx, Preferences::GetBool(JS_OPTIONS_DOT_STR "parallel_parsing"));
+      cx, StaticPrefs::javascript_options_parallel_parsing());
 }
 
 XPCJSContext::~XPCJSContext() {
@@ -1176,7 +1184,8 @@ class HelperThreadTaskHandler : public Task {
     JS::RunHelperThreadTask();
     return true;
   }
-  explicit HelperThreadTaskHandler() : Task(false, EventQueuePriority::Normal) {
+  explicit HelperThreadTaskHandler()
+      : Task(Kind::OffMainThreadOnly, EventQueuePriority::Normal) {
     // Bug 1703185: Currently all tasks are run at the same priority.
   }
 

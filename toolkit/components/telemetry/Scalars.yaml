@@ -861,6 +861,7 @@ browser.startup:
       - 1754641
       - 1781978
       - 1811151
+      - 1841926
     description: >
       How the about:home startup cache functioned on startup.
 
@@ -875,7 +876,7 @@ browser.startup:
       8: User did not load about:home on its own by default.
       9: Cache is disabled because about:newtab preloading is disabled.
 
-    expires: "118"
+    expires: never
     kind: uint
     notification_emails:
       - mconley@mozilla.com
@@ -896,11 +897,12 @@ browser.startup:
       - 1754641
       - 1781978
       - 1811151
+      - 1841926
     description: >
       True if the about:home startup cache was written via the AsyncShutdown
       blocker.
 
-    expires: "118"
+    expires: never
     kind: boolean
     notification_emails:
       - mconley@mozilla.com
@@ -1661,6 +1663,23 @@ extensions.apis.dnr:
     record_in_processes:
       - main
 
+extensions.quarantinedDomains:
+
+  listsize:
+    bug_numbers:
+      - 1840615
+    description: >
+      Number of domains listed in the quarantined domains list pref for the client during
+      this session.
+    kind: uint
+    expires: "123"
+    notification_emails:
+      - addons-dev-internal@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
 extensions.startupCache:
   write_byteLength:
     bug_numbers:
@@ -1703,7 +1722,7 @@ extensions.startupCache:
       Unlike the related glean metric, this scalar has an expiring date,
       set as a deadline to consider removing the mirrored scalar in
       favor to just use the Glean metric).
-    expires: "118"
+    expires: "125"
     kind: uint
     notification_emails:
       - addons-dev-internal@mozilla.com
@@ -1722,17 +1741,19 @@ security:
       - 1689269
       - 1754650
       - 1811156
+      - 1841930
     description: >
       Counts of how often Web Authentication was used in this session, keyed
       by authenticator protocol, method and result. Currently: CTAPRegisterFinish,
       CTAPRegisterAbort, CTAPSignFinish, CTAPSignAbort, U2FRegisterFinish,
       U2FRegisterAbort, U2FSignFinish, U2FSignAbort.
-    expires: "118"
+    expires: "124"
     kind: uint
     keyed: true
     notification_emails:
       - seceng-telemetry@mozilla.com
       - jschanck@mozilla.com
+      - dkeeler@mozilla.com
     release_channel_collection: opt-out
     products:
       - 'firefox'
@@ -2126,27 +2147,6 @@ downloads:
       - 'firefox'
     record_in_processes:
       - 'main'
-
-sandbox:
-  no_job:
-    bug_numbers:
-      - 1392570
-    description: >
-      Indicates that we can't use a job object for sandboxed child processes.
-      Keyed by whether we are in a remote session or not from ::GetSystemMetrics(SM_REMOTESESSION).
-    expires: "62"
-    kind: boolean
-    keyed: true
-    notification_emails:
-      - bowen@mozilla.com
-    release_channel_collection: opt-out
-    products:
-      - 'firefox'
-      - 'fennec'
-    record_in_processes:
-      - main
-    operating_systems:
-      - "windows"
 
 findbar:
   shown:
@@ -8348,6 +8348,36 @@ migration:
       - 'firefox'
     record_in_processes:
       - main
+  time_to_produce_legacy_migrator_list:
+    bug_numbers:
+      - 1840917
+    description: >
+      The amount of time it took in milliseconds to produce the list of migrators in the
+      legacy migration wizard.
+    expires: never
+    kind: uint
+    notification_emails:
+      - mconley@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+  time_to_produce_migrator_list:
+    bug_numbers:
+      - 1840917
+    description: >
+      The amount of time it took in milliseconds to produce the list of migrators and profiles
+      for the first time the migration wizard opened during the process lifetime.
+    expires: never
+    kind: uint
+    notification_emails:
+      - mconley@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
 
 contextual.services.topsites:
   impression:
@@ -9896,6 +9926,38 @@ firstStartup:
       - 1749345
     description: >
       Number of milliseconds the FirstRun service took to run.
+    expires: never
+    kind: uint
+    notification_emails:
+      - rhelmer@mozilla.com
+      - mconley@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+  normandyInitTime:
+    bug_numbers:
+      - 1841138
+    description: >
+      Number of milliseconds until Normandy.init resolved in FirstStartup.
+    expires: never
+    kind: uint
+    notification_emails:
+      - rhelmer@mozilla.com
+      - mconley@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+  deleteTasksTime:
+    bug_numbers:
+      - 1841138
+    description: >
+      Number of milliseconds until TaskScheduler.deleteAllTasks resolved in FirstStartup.
     expires: never
     kind: uint
     notification_emails:

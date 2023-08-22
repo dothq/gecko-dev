@@ -34,7 +34,6 @@
 #include "jsnum.h"
 #include "jstypes.h"
 
-#include "frontend/BytecodeCompiler.h"
 #include "frontend/FoldConstants.h"
 #include "frontend/FunctionSyntaxKind.h"  // FunctionSyntaxKind
 #include "frontend/ModuleSharedContext.h"
@@ -42,7 +41,7 @@
 #include "frontend/ParseNodeVerify.h"
 #include "frontend/ParserAtom.h"  // TaggedParserAtomIndex, ParserAtomsTable, ParserAtom
 #include "frontend/ScriptIndex.h"  // ScriptIndex
-#include "frontend/TokenStream.h"
+#include "frontend/TokenStream.h"  // IsKeyword, ReservedWordTokenKind, ReservedWordToCharZ, DeprecatedContent, *TokenStream*, CharBuffer, TokenKindToDesc
 #include "irregexp/RegExpAPI.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/HashTable.h"
@@ -276,13 +275,6 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
   SourceExtent extent;
   extent.toStringStart = toStringStart;
 
-  /*
-   * We use JSContext.tempLifoAlloc to allocate parsed objects and place them
-   * on a list in this Parser to ensure GC safety. Thus the tempLifoAlloc
-   * arenas containing the entries must be alive until we are done with
-   * scanning, parsing and code generation for the whole script or top-level
-   * function.
-   */
   FunctionBox* funbox = alloc_.new_<FunctionBox>(
       fc_, extent, compilationState_, inheritedDirectives, generatorKind,
       asyncKind, isInitialStencil, explicitName, flags, index);
@@ -311,13 +303,6 @@ FunctionBox* PerHandlerParser<ParseHandler>::newFunctionBox(
     return nullptr;
   }
 
-  /*
-   * We use JSContext.tempLifoAlloc to allocate parsed objects and place them
-   * on a list in this Parser to ensure GC safety. Thus the tempLifoAlloc
-   * arenas containing the entries must be alive until we are done with
-   * scanning, parsing and code generation for the whole script or top-level
-   * function.
-   */
   FunctionBox* funbox = alloc_.new_<FunctionBox>(
       fc_, cachedScriptExtra.extent, compilationState_,
       Directives(/* strict = */ false), cachedScriptExtra.generatorKind(),
@@ -499,9 +484,10 @@ void GeneralParser<ParseHandler, Unit>::reportMissingClosing(
 }
 
 template <class ParseHandler, typename Unit>
-void GeneralParser<ParseHandler, Unit>::reportRedeclaration(
-    TaggedParserAtomIndex name, DeclarationKind prevKind, TokenPos pos,
-    uint32_t prevPos) {
+void GeneralParser<ParseHandler, Unit>::reportRedeclarationHelper(
+    TaggedParserAtomIndex& name, DeclarationKind& prevKind, TokenPos& pos,
+    uint32_t& prevPos, const unsigned& errorNumber,
+    const unsigned& noteErrorNumber) {
   UniqueChars bytes = this->parserAtoms().toPrintableString(name);
   if (!bytes) {
     ReportOutOfMemory(this->fc_);
@@ -509,7 +495,7 @@ void GeneralParser<ParseHandler, Unit>::reportRedeclaration(
   }
 
   if (prevPos == DeclaredNameInfo::npos) {
-    errorAt(pos.begin, JSMSG_REDECLARED_VAR, DeclarationKindString(prevKind),
+    errorAt(pos.begin, errorNumber, DeclarationKindString(prevKind),
             bytes.get());
     return;
   }
@@ -530,13 +516,29 @@ void GeneralParser<ParseHandler, Unit>::reportRedeclaration(
   SprintfLiteral(lineNumber, "%" PRIu32, line);
 
   if (!notes->addNoteASCII(this->fc_, getFilename().c_str(), 0, line, column,
-                           GetErrorMessage, nullptr, JSMSG_REDECLARED_PREV,
+                           GetErrorMessage, nullptr, noteErrorNumber,
                            lineNumber, columnNumber)) {
     return;
   }
 
-  errorWithNotesAt(std::move(notes), pos.begin, JSMSG_REDECLARED_VAR,
+  errorWithNotesAt(std::move(notes), pos.begin, errorNumber,
                    DeclarationKindString(prevKind), bytes.get());
+}
+
+template <class ParseHandler, typename Unit>
+void GeneralParser<ParseHandler, Unit>::reportRedeclaration(
+    TaggedParserAtomIndex name, DeclarationKind prevKind, TokenPos pos,
+    uint32_t prevPos) {
+  reportRedeclarationHelper(name, prevKind, pos, prevPos, JSMSG_REDECLARED_VAR,
+                            JSMSG_PREV_DECLARATION);
+}
+
+template <class ParseHandler, typename Unit>
+void GeneralParser<ParseHandler, Unit>::reportMismatchedPlacement(
+    TaggedParserAtomIndex name, DeclarationKind prevKind, TokenPos pos,
+    uint32_t prevPos) {
+  reportRedeclarationHelper(name, prevKind, pos, prevPos,
+                            JSMSG_MISMATCHED_PLACEMENT, JSMSG_PREV_DECLARATION);
 }
 
 // notePositionalFormalParameter is called for both the arguments of a regular
@@ -701,8 +703,7 @@ bool GeneralParser<ParseHandler, Unit>::noteDeclaredName(
     case DeclarationKind::SloppyLexicalFunction: {
       // Functions in block have complex allowances in sloppy mode for being
       // labelled that other lexical declarations do not have. Those checks
-      // are more complex than calling checkLexicalDeclarationDirectlyWithin-
-      // Block and are done in checkFunctionDefinition.
+      // are done in functionStmt.
 
       ParseContext::Scope* scope = pc_->innermostScope();
       if (AddDeclaredNamePtr p = scope->lookupDeclaredNameForAdd(name)) {
@@ -789,7 +790,8 @@ bool GeneralParser<ParseHandler, Unit>::noteDeclaredName(
     case DeclarationKind::VarForAnnexBLexicalFunction:
       MOZ_CRASH(
           "Synthesized Annex B vars should go through "
-          "tryDeclareVarForAnnexBLexicalFunction");
+          "addPossibleAnnexBFunctionBox, and "
+          "propagateAndMarkAnnexBFunctionBoxes");
       break;
   }
 
@@ -808,8 +810,12 @@ bool GeneralParser<ParseHandler, Unit>::noteDeclaredPrivateName(
   PrivateNameKind kind;
   switch (propType) {
     case PropertyType::Field:
-    case PropertyType::FieldWithAccessor:
       kind = PrivateNameKind::Field;
+      break;
+    case PropertyType::FieldWithAccessor:
+      // In this case, we create a new private field for the underlying storage,
+      // and use the current name for the getter and setter.
+      kind = PrivateNameKind::GetterSetter;
       break;
     case PropertyType::Method:
     case PropertyType::GeneratorMethod:
@@ -858,7 +864,7 @@ bool GeneralParser<ParseHandler, Unit>::noteDeclaredPrivateName(
       }
     }
 
-    reportRedeclaration(name, p->value()->kind(), pos, p->value()->pos());
+    reportMismatchedPlacement(name, p->value()->kind(), pos, p->value()->pos());
     return false;
   }
 
@@ -1079,10 +1085,9 @@ static MOZ_ALWAYS_INLINE void InitializeBindingData(
   data->length = count;
 }
 
-Maybe<GlobalScope::ParserData*> NewGlobalScopeData(FrontendContext* fc,
-                                                   ParseContext::Scope& scope,
-                                                   LifoAlloc& alloc,
-                                                   ParseContext* pc) {
+static Maybe<GlobalScope::ParserData*> NewGlobalScopeData(
+    FrontendContext* fc, ParseContext::Scope& scope, LifoAlloc& alloc,
+    ParseContext* pc) {
   ParserBindingNameVector vars(fc);
   ParserBindingNameVector lets(fc);
   ParserBindingNameVector consts(fc);
@@ -1144,10 +1149,9 @@ Maybe<GlobalScope::ParserData*> ParserBase::newGlobalScopeData(
   return NewGlobalScopeData(fc_, scope, stencilAlloc(), pc_);
 }
 
-Maybe<ModuleScope::ParserData*> NewModuleScopeData(FrontendContext* fc,
-                                                   ParseContext::Scope& scope,
-                                                   LifoAlloc& alloc,
-                                                   ParseContext* pc) {
+static Maybe<ModuleScope::ParserData*> NewModuleScopeData(
+    FrontendContext* fc, ParseContext::Scope& scope, LifoAlloc& alloc,
+    ParseContext* pc) {
   ParserBindingNameVector imports(fc);
   ParserBindingNameVector vars(fc);
   ParserBindingNameVector lets(fc);
@@ -1212,10 +1216,9 @@ Maybe<ModuleScope::ParserData*> ParserBase::newModuleScopeData(
   return NewModuleScopeData(fc_, scope, stencilAlloc(), pc_);
 }
 
-Maybe<EvalScope::ParserData*> NewEvalScopeData(FrontendContext* fc,
-                                               ParseContext::Scope& scope,
-                                               LifoAlloc& alloc,
-                                               ParseContext* pc) {
+static Maybe<EvalScope::ParserData*> NewEvalScopeData(
+    FrontendContext* fc, ParseContext::Scope& scope, LifoAlloc& alloc,
+    ParseContext* pc) {
   ParserBindingNameVector vars(fc);
 
   // Treat all bindings as closed over in non-strict eval.
@@ -1254,7 +1257,7 @@ Maybe<EvalScope::ParserData*> ParserBase::newEvalScopeData(
   return NewEvalScopeData(fc_, scope, stencilAlloc(), pc_);
 }
 
-Maybe<FunctionScope::ParserData*> NewFunctionScopeData(
+static Maybe<FunctionScope::ParserData*> NewFunctionScopeData(
     FrontendContext* fc, ParseContext::Scope& scope, bool hasParameterExprs,
     LifoAlloc& alloc, ParseContext* pc) {
   ParserBindingNameVector positionalFormals(fc);
@@ -1391,10 +1394,10 @@ VarScope::ParserData* NewEmptyVarScopeData(FrontendContext* fc,
   return NewEmptyBindingData<VarScope>(fc, alloc, numBindings);
 }
 
-Maybe<VarScope::ParserData*> NewVarScopeData(FrontendContext* fc,
-                                             ParseContext::Scope& scope,
-                                             LifoAlloc& alloc,
-                                             ParseContext* pc) {
+static Maybe<VarScope::ParserData*> NewVarScopeData(FrontendContext* fc,
+                                                    ParseContext::Scope& scope,
+                                                    LifoAlloc& alloc,
+                                                    ParseContext* pc) {
   ParserBindingNameVector vars(fc);
 
   bool allBindingsClosedOver =
@@ -1446,10 +1449,9 @@ Maybe<VarScope::ParserData*> ParserBase::newVarScopeData(
   return NewVarScopeData(fc_, scope, stencilAlloc(), pc_);
 }
 
-Maybe<LexicalScope::ParserData*> NewLexicalScopeData(FrontendContext* fc,
-                                                     ParseContext::Scope& scope,
-                                                     LifoAlloc& alloc,
-                                                     ParseContext* pc) {
+static Maybe<LexicalScope::ParserData*> NewLexicalScopeData(
+    FrontendContext* fc, ParseContext::Scope& scope, LifoAlloc& alloc,
+    ParseContext* pc) {
   ParserBindingNameVector lets(fc);
   ParserBindingNameVector consts(fc);
 
@@ -1526,7 +1528,7 @@ Maybe<LexicalScope::ParserData*> ParserBase::newLexicalScopeData(
   return NewLexicalScopeData(fc_, scope, stencilAlloc(), pc_);
 }
 
-Maybe<ClassBodyScope::ParserData*> NewClassBodyScopeData(
+static Maybe<ClassBodyScope::ParserData*> NewClassBodyScopeData(
     FrontendContext* fc, ParseContext::Scope& scope, LifoAlloc& alloc,
     ParseContext* pc) {
   ParserBindingNameVector privateBrand(fc);
@@ -4966,7 +4968,7 @@ bool GeneralParser<ParseHandler, Unit>::assertClause(
     ListNodeType assertionsSet) {
   MOZ_ASSERT(anyChars.isCurrentTokenType(TokenKind::Assert));
 
-  if (!options().importAssertions) {
+  if (!options().importAssertions()) {
     error(JSMSG_IMPORT_ASSERTIONS_NOT_SUPPORTED);
     return false;
   }
@@ -7675,7 +7677,7 @@ GeneralParser<ParseHandler, Unit>::decoratorList(YieldHandling yieldHandling) {
       // We've hit a `(`, so it's actually a DecoratorCallExpression
       if (tt == TokenKind::LeftParen) {
         bool isSpread = false;
-        Node args = argumentList(yieldHandling, &isSpread);
+        ListNodeType args = argumentList(yieldHandling, &isSpread);
         if (!args) {
           return null();
         }
@@ -7811,6 +7813,8 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
     }
 
 #ifdef ENABLE_DECORATORS
+    ClassMethodType accessorGetterNode = null();
+    ClassMethodType accessorSetterNode = null();
     if (propType == PropertyType::FieldWithAccessor) {
       // Decorators Proposal
       // https://arai-a.github.io/ecma262-compare/?pr=2417&id=sec-runtime-semantics-classfielddefinitionevaluation
@@ -7842,26 +7846,46 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
 
       // Step 5. Let getter be MakeAutoAccessorGetter(homeObject, name,
       // privateStateName).
-      Node method = synthesizeAccessor(
+      accessorGetterNode = synthesizeAccessor(
           propName, propNamePos, propAtom, privateStateName, isStatic,
-          FunctionSyntaxKind::Getter, decorators, classInitializedMembers);
-      if (!method) {
+          FunctionSyntaxKind::Getter, classInitializedMembers);
+      if (!accessorGetterNode) {
         return false;
       }
-      if (!handler_.addClassMemberDefinition(classMembers, method)) {
-        return false;
+      // If the accessor is not decorated or is a non-static private field,
+      // add it to the class here. Otherwise, we'll handle this when the
+      // decorators are called. We don't need to keep a reference to the node
+      // after this except for non-static private accessors. Please see the
+      // comment in the definition of ClassField for details.
+      bool addAccessorImmediately =
+          !decorators || (!isStatic && handler_.isPrivateName(propName));
+      if (addAccessorImmediately) {
+        if (!handler_.addClassMemberDefinition(classMembers,
+                                               accessorGetterNode)) {
+          return false;
+        }
+        if (!handler_.isPrivateName(propName)) {
+          accessorGetterNode = null();
+        }
       }
 
       // Step 6. Let setter be MakeAutoAccessorSetter(homeObject, name,
       // privateStateName).
-      method = synthesizeAccessor(
+      accessorSetterNode = synthesizeAccessor(
           propName, propNamePos, propAtom, privateStateName, isStatic,
-          FunctionSyntaxKind::Setter, decorators, classInitializedMembers);
-      if (!method) {
+          FunctionSyntaxKind::Setter, classInitializedMembers);
+      if (!accessorSetterNode) {
         return false;
       }
-      if (!handler_.addClassMemberDefinition(classMembers, method)) {
-        return false;
+
+      if (addAccessorImmediately) {
+        if (!handler_.addClassMemberDefinition(classMembers,
+                                               accessorSetterNode)) {
+          return false;
+        }
+        if (!handler_.isPrivateName(propName)) {
+          accessorSetterNode = null();
+        }
       }
 
       // Step 10. Return ClassElementDefinition Record { [[Key]]: name,
@@ -7870,7 +7894,9 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
       // initializers, [[Decorators]]: empty }.
       propName = handler_.newPrivateName(privateStateName, pos());
       propAtom = privateStateName;
-      decorators = handler_.newList(ParseNodeKind::DecoratorList, pos());
+      // We maintain `decorators` here to perform this step at the same time:
+      // https://arai-a.github.io/ecma262-compare/?pr=2417&id=sec-static-semantics-classelementevaluation
+      // 4. Set fieldDefinition.[[Decorators]] to decorators.
     }
 #endif
     if (isStatic) {
@@ -7895,7 +7921,7 @@ bool GeneralParser<ParseHandler, Unit>::classMember(
         propName, initializer, isStatic
 #ifdef ENABLE_DECORATORS
         ,
-        decorators, propType == PropertyType::FieldWithAccessor
+        decorators, accessorGetterNode, accessorSetterNode
 #endif
     );
     if (!field) {
@@ -8265,7 +8291,7 @@ GeneralParser<ParseHandler, Unit>::classDefinition(
           0) {
         // We declare `.privateBrand` as ClosedOver because the constructor
         // always uses it, even a default constructor. We could equivalently
-        // `noteNameUsed` when parsing the constructor, except that at that
+        // `noteUsedName` when parsing the constructor, except that at that
         // time, we don't necessarily know if the class has a private brand.
         if (!noteDeclaredName(
                 TaggedParserAtomIndex::WellKnown::dotPrivateBrand(),
@@ -9059,11 +9085,11 @@ GeneralParser<ParseHandler, Unit>::synthesizePrivateMethodInitializer(
 #ifdef ENABLE_DECORATORS
 
 template <class ParseHandler, typename Unit>
-typename ParseHandler::Node
+typename ParseHandler::ClassMethodType
 GeneralParser<ParseHandler, Unit>::synthesizeAccessor(
     Node propName, TokenPos propNamePos, TaggedParserAtomIndex propAtom,
     TaggedParserAtomIndex privateStateNameAtom, bool isStatic,
-    FunctionSyntaxKind syntaxKind, ListNodeType decorators,
+    FunctionSyntaxKind syntaxKind,
     ClassInitializedMembers& classInitializedMembers) {
   // Decorators Proposal
   // https://arai-a.github.io/ecma262-compare/?pr=2417&id=sec-makeautoaccessorgetter
@@ -9084,7 +9110,7 @@ GeneralParser<ParseHandler, Unit>::synthesizeAccessor(
                                   : AccessorType::Setter;
 
   mozilla::Maybe<FunctionNodeType> initializerIfPrivate = Nothing();
-  if (handler_.isPrivateName(propName)) {
+  if (!isStatic && handler_.isPrivateName(propName)) {
     classInitializedMembers.privateAccessors++;
     auto initializerNode =
         synthesizePrivateMethodInitializer(propAtom, accessorType, propNamePos);
@@ -9100,8 +9126,16 @@ GeneralParser<ParseHandler, Unit>::synthesizeAccessor(
   //
   // https://arai-a.github.io/ecma262-compare/?pr=2417&id=sec-makeautoaccessorsetter
   // 2. Let setter be CreateBuiltinFunction(setterClosure, 1, "set", « »).
-  FunctionNodeType funNode =
-      synthesizeAccessorBody(propNamePos, privateStateNameAtom, syntaxKind);
+  StringBuffer storedMethodName(fc_);
+  if (!storedMethodName.append(accessorType == AccessorType::Getter ? "get"
+                                                                    : "set")) {
+    return null();
+  }
+  TaggedParserAtomIndex funNameAtom =
+      storedMethodName.finishParserAtom(this->parserAtoms(), fc_);
+
+  FunctionNodeType funNode = synthesizeAccessorBody(
+      funNameAtom, propNamePos, privateStateNameAtom, syntaxKind);
   if (!funNode) {
     return null();
   }
@@ -9113,16 +9147,15 @@ GeneralParser<ParseHandler, Unit>::synthesizeAccessor(
   // https://arai-a.github.io/ecma262-compare/?pr=2417&id=sec-makeautoaccessorsetter
   // 3. Perform MakeMethod(setter, homeObject).
   // 4. Return setter.
-  return handler_.newClassMethodDefinition(propName, funNode, accessorType,
-                                           isStatic, initializerIfPrivate,
-                                           decorators);
+  return handler_.newClassMethodDefinition(
+      propName, funNode, accessorType, isStatic, initializerIfPrivate, null());
 }
 
 template <class ParseHandler, typename Unit>
 typename ParseHandler::FunctionNodeType
 GeneralParser<ParseHandler, Unit>::synthesizeAccessorBody(
-    TokenPos propNamePos, TaggedParserAtomIndex propAtom,
-    FunctionSyntaxKind syntaxKind) {
+    TaggedParserAtomIndex funNameAtom, TokenPos propNamePos,
+    TaggedParserAtomIndex propNameAtom, FunctionSyntaxKind syntaxKind) {
   if (!abortIfSyntaxParser()) {
     return null();
   }
@@ -9142,8 +9175,8 @@ GeneralParser<ParseHandler, Unit>::synthesizeAccessorBody(
   // Create the FunctionBox and link it to the function object.
   Directives directives(true);
   FunctionBox* funbox =
-      newFunctionBox(funNode, TaggedParserAtomIndex::null(), flags,
-                     propNamePos.begin, directives, generatorKind, asyncKind);
+      newFunctionBox(funNode, funNameAtom, flags, propNamePos.begin, directives,
+                     generatorKind, asyncKind);
   if (!funbox) {
     return null();
   }
@@ -9189,7 +9222,7 @@ GeneralParser<ParseHandler, Unit>::synthesizeAccessorBody(
     return null();
   }
 
-  NameNodeType privateNameNode = privateNameReference(propAtom);
+  NameNodeType privateNameNode = privateNameReference(propNameAtom);
   if (!privateNameNode) {
     return null();
   }
@@ -9760,7 +9793,7 @@ GeneralParser<ParseHandler, Unit>::statementListItem(
       //   DecoratorList[?Yield, ?Await] opt ClassDeclaration[?Yield, ~Default]
 #ifdef ENABLE_DECORATORS
     case TokenKind::At:
-      return classDefinition(yieldHandling, ClassExpression, NameRequired);
+      return classDefinition(yieldHandling, ClassStatement, NameRequired);
 #endif
 
     case TokenKind::Class:
@@ -10948,7 +10981,7 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::memberExpr(
       }
 
       bool isSpread = false;
-      Node args;
+      ListNodeType args;
       if (matched) {
         args = argumentList(yieldHandling, &isSpread);
       } else {
@@ -11172,7 +11205,7 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::memberSuperCall(
   // generator, we still inherit the yieldHandling of the
   // memberExpression, per spec. Curious.
   bool isSpread = false;
-  Node args = argumentList(yieldHandling, &isSpread);
+  ListNodeType args = argumentList(yieldHandling, &isSpread);
   if (!args) {
     return null();
   }
@@ -11247,7 +11280,8 @@ typename ParseHandler::Node GeneralParser<ParseHandler, Unit>::memberCall(
     bool isSpread = false;
     PossibleError* asyncPossibleError =
         maybeAsyncArrow ? possibleError : nullptr;
-    Node args = argumentList(yieldHandling, &isSpread, asyncPossibleError);
+    ListNodeType args =
+        argumentList(yieldHandling, &isSpread, asyncPossibleError);
     if (!args) {
       return null();
     }
@@ -12791,7 +12825,7 @@ GeneralParser<ParseHandler, Unit>::importExpr(YieldHandling yieldHandling,
     }
 
     Node optionalArg;
-    if (options().importAssertions) {
+    if (options().importAssertions()) {
       if (next == TokenKind::Comma) {
         tokenStream.consumeKnownToken(TokenKind::Comma,
                                       TokenStream::SlashIsRegExp);

@@ -12,11 +12,13 @@
 #include "mozilla/Components.h"
 #include "mozilla/ContentBlockingAllowList.h"
 #include "mozilla/ContentBlockingUserInteraction.h"
+#include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Document.h"
+#include "mozilla/dom/FeaturePolicy.h"
 #include "mozilla/dom/WindowContext.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/net/CookieJarSettings.h"
@@ -106,7 +108,7 @@ StorageAccessAPIHelper::AllowAccessFor(
 
   if (MOZ_LOG_TEST(gAntiTrackingLog, mozilla::LogLevel::Debug)) {
     nsAutoCString origin;
-    aPrincipal->GetWebExposedOriginSerialization(origin);
+    aPrincipal->GetOriginNoSuffix(origin);
     LOG(("Adding a first-party storage exception for %s, triggered by %s",
          PromiseFlatCString(origin).get(),
          AntiTrackingUtils::GrantedReasonToString(aReason).get()));
@@ -172,7 +174,7 @@ StorageAccessAPIHelper::AllowAccessFor(
   // We are a first party resource.
   if (!isParentThirdParty) {
     nsAutoCString origin;
-    nsresult rv = aPrincipal->GetWebExposedOriginSerialization(origin);
+    nsresult rv = aPrincipal->GetOriginNoSuffix(origin);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       LOG(("Can't get the origin from the URI"));
       return StorageAccessPermissionGrantPromise::CreateAndReject(false,
@@ -864,6 +866,21 @@ Maybe<bool> StorageAccessAPIHelper::CheckCallingContextDecidesStorageAccessAPI(
 
   if (aDocument->IsTopLevelContentDocument()) {
     return Some(true);
+  }
+
+  if (aRequestingStorageAccess) {
+    // Perform a Permission Policy Request
+    dom::FeaturePolicy* policy = aDocument->FeaturePolicy();
+    MOZ_ASSERT(policy);
+
+    if (!policy->AllowsFeature(u"storage-access"_ns,
+                               dom::Optional<nsAString>())) {
+      nsContentUtils::ReportToConsole(
+          nsIScriptError::errorFlag, nsLiteralCString("requestStorageAccess"),
+          aDocument, nsContentUtils::eDOM_PROPERTIES,
+          "RequestStorageAccessPermissionsPolicy");
+      return Some(false);
+    }
   }
 
   RefPtr<BrowsingContext> bc = aDocument->GetBrowsingContext();

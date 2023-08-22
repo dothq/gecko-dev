@@ -12,18 +12,14 @@
 #include "nsEventShell.h"
 #include "nsTextEquivUtils.h"
 #include "Relation.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #include "States.h"
 
 #include "nsContentList.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/HTMLTextAreaElement.h"
 #include "nsIFormControl.h"
-#include "nsITextControlFrame.h"
-#include "nsNameSpaceManager.h"
-#include "mozilla/dom/ScriptSettings.h"
 
-#include "mozilla/EditorBase.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/TextEditor.h"
@@ -441,16 +437,26 @@ already_AddRefed<EditorBase> HTMLTextFieldAccessible::GetEditor() const {
   return textEditor.forget();
 }
 
+void HTMLTextFieldAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
+                                                  nsAtom* aAttribute,
+                                                  int32_t aModType,
+                                                  const nsAttrValue* aOldValue,
+                                                  uint64_t aOldState) {
+  if (aAttribute == nsGkAtoms::placeholder) {
+    mDoc->QueueCacheUpdate(this, CacheDomain::NameAndDescription);
+    return;
+  }
+  HyperTextAccessibleWrap::DOMAttributeChanged(aNameSpaceID, aAttribute,
+                                               aModType, aOldValue, aOldState);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // HTMLTextFieldAccessible: Widgets
 
 bool HTMLTextFieldAccessible::IsWidget() const { return true; }
 
 LocalAccessible* HTMLTextFieldAccessible::ContainerWidget() const {
-  if (!mParent || mParent->Role() != roles::AUTOCOMPLETE) {
-    return nullptr;
-  }
-  return mParent;
+  return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

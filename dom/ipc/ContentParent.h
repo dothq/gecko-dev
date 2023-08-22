@@ -322,10 +322,6 @@ class ContentParent final : public PContentParent,
 
   mozilla::ipc::IPCResult RecvCreateGMPService();
 
-  mozilla::ipc::IPCResult RecvRemovePermission(
-      nsIPrincipal* aPrincipal, const nsACString& aPermissionType,
-      nsresult* aRv);
-
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(ContentParent, nsIObserver)
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -569,6 +565,8 @@ class ContentParent final : public PContentParent,
       BrowserParent* aBrowserParent,
       nsIRemoteTab::NavigationType aNavigationType,
       const CancelContentJSOptions& aCancelContentJSOptions);
+
+  void SetMainThreadQoSPriority(nsIThread::QoSPriority aQoSPriority);
 
   // This function is called when we are about to load a document from an
   // HTTP(S) or FTP channel for a content process.  It is a useful place

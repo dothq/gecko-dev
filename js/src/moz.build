@@ -159,6 +159,7 @@ EXPORTS.js += [
     "../public/Id.h",
     "../public/Initialization.h",
     "../public/Interrupt.h",
+    "../public/Iterator.h",
     "../public/JitCodeAPI.h",
     "../public/JSON.h",
     "../public/LocaleSensitive.h",
@@ -377,8 +378,9 @@ UNIFIED_SOURCES += [
     "vm/Initialization.cpp",
     "vm/InternalThreadPool.cpp",
     "vm/Iteration.cpp",
+    "vm/Iterator.cpp",
     "vm/JitActivation.cpp",
-    "vm/JSAtom.cpp",
+    "vm/JSAtomUtils.cpp",
     "vm/JSContext.cpp",
     "vm/JSFunction.cpp",
     "vm/JSObject.cpp",
@@ -482,7 +484,6 @@ if CONFIG["MOZ_INSTRUMENTS"]:
 if CONFIG["OS_ARCH"] == "WINNT":
     OS_LIBS += [
         "advapi32",
-        "winmm",
     ]
     UNIFIED_SOURCES += [
         "threading/windows/CpuCount.cpp",

@@ -307,9 +307,10 @@ body:fullscreen #controls[showing]:hover {
 
 #audio-scrubber {
   grid-area: audio-scrubber;
+  align-self: center;
   width: 64px;
   background-color: transparent;
-  padding: 15px 0;
+  padding: 6px 2px;
   margin: 0;
 }
 
@@ -335,7 +336,7 @@ body:fullscreen #controls[showing]:hover {
 #audio-scrubber::-moz-range-track,
 #audio-scrubber::-moz-range-progress {
   height: 2px;
-  border-radius: 4px;
+  border-radius: 10px;
 }
 
 #fullscreen {
@@ -578,7 +579,7 @@ input:checked + .slider::before {
 #scrubber {
   width: 100%;
   background-color: transparent;
-  padding: 6px;
+  padding: 6px 2px;
 }
 
 #scrubber::-moz-range-thumb {
@@ -634,7 +635,29 @@ input:checked + .slider::before {
   }
 }
 
-@media (height <= 325px), (width <= 475px) {
+@media (width <= 475px) {
+  #closed-caption {
+    display: none;
+  }
+
+  .end-controls {
+    grid-template-columns: repeat(2, 1fr);
+    grid-template-areas: "audio fullscreen";
+  }
+}
+
+@media (height <= 325px) and (width > 630px) {
+  #closed-caption {
+    display: none;
+  }
+
+  .end-controls {
+    grid-template-columns: 1fr 2fr 1fr;
+    grid-template-areas: "audio audio-scrubber fullscreen";
+  }
+}
+
+@media (height <= 325px) and (width <= 630px) {
   #closed-caption,
   #audio-scrubber {
     display: none;

@@ -1445,6 +1445,18 @@ static void EraseCallback(CallbackVector<F>& vector, F callback) {
   }
 }
 
+template <typename F>
+static bool EraseCallback(CallbackVector<F>& vector, F callback, void* data) {
+  for (Callback<F>* p = vector.begin(); p != vector.end(); p++) {
+    if (p->op == callback && p->data == data) {
+      vector.erase(p);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void GCRuntime::removeFinalizeCallback(JSFinalizeCallback callback) {
   EraseCallback(finalizeCallbacks.ref(), callback);
 }
@@ -1509,9 +1521,23 @@ JS::GCSliceCallback GCRuntime::setSliceCallback(JS::GCSliceCallback callback) {
   return stats().setSliceCallback(callback);
 }
 
-JS::GCNurseryCollectionCallback GCRuntime::setNurseryCollectionCallback(
-    JS::GCNurseryCollectionCallback callback) {
-  return stats().setNurseryCollectionCallback(callback);
+bool GCRuntime::addNurseryCollectionCallback(
+    JS::GCNurseryCollectionCallback callback, void* data) {
+  return nurseryCollectionCallbacks.ref().append(
+      Callback<JS::GCNurseryCollectionCallback>(callback, data));
+}
+
+void GCRuntime::removeNurseryCollectionCallback(
+    JS::GCNurseryCollectionCallback callback, void* data) {
+  MOZ_ALWAYS_TRUE(
+      EraseCallback(nurseryCollectionCallbacks.ref(), callback, data));
+}
+
+void GCRuntime::callNurseryCollectionCallbacks(JS::GCNurseryProgress progress,
+                                               JS::GCReason reason) {
+  for (auto const& p : nurseryCollectionCallbacks.ref()) {
+    p.op(rt->mainContextFromOwnThread(), progress, reason, p.data);
+  }
 }
 
 JS::DoCycleCollectionCallback GCRuntime::setDoCycleCollectionCallback(
@@ -2236,12 +2262,6 @@ void GCRuntime::purgeRuntime() {
 
   MOZ_ASSERT(marker().unmarkGrayStack.empty());
   marker().unmarkGrayStack.clearAndFree();
-
-  // If we're the main runtime, tell helper threads to free their unused
-  // memory when they are next idle.
-  if (!rt->parentRuntime) {
-    HelperThreadState().triggerFreeUnusedMemory();
-  }
 }
 
 bool GCRuntime::shouldPreserveJITCode(Realm* realm,
@@ -2746,9 +2766,10 @@ void GCRuntime::endPreparePhase(JS::GCReason reason) {
 
     AutoUnlockHelperThreadState unlock(helperLock);
 
-    // Discard JIT code. For incremental collections, the sweep phase will
+    // Discard JIT code. For incremental collections, the sweep phase may
     // also discard JIT code.
     discardJITCodeForGC();
+    haveDiscardedJITCodeThisSlice = true;
 
     /*
      * Relazify functions after discarding JIT code (we can't relazify
@@ -3495,7 +3516,6 @@ static bool NeedToCollectNursery(GCRuntime* gc) {
 
 #ifdef DEBUG
 static const char* DescribeBudget(const SliceBudget& budget) {
-  MOZ_ASSERT(TlsContext.get()->isMainThreadContext());
   constexpr size_t length = 32;
   static char buffer[length];
   budget.describe(buffer, length);
@@ -3529,6 +3549,7 @@ void GCRuntime::incrementalSlice(SliceBudget& budget, JS::GCReason reason,
   initialState = incrementalState;
   isIncremental = !budget.isUnlimited();
   useBackgroundThreads = ShouldUseBackgroundThreads(isIncremental, reason);
+  haveDiscardedJITCodeThisSlice = false;
 
 #ifdef JS_GC_ZEAL
   // Do the incremental collection type specified by zeal mode if the collection

@@ -7,7 +7,7 @@
   // start private scope for gBrowser
   /**
    * A set of known icons to use for internal pages. These are hardcoded so we can
-   * start loading them faster than ContentLinkHandler would normally find them.
+   * start loading them faster than FaviconLoader would normally find them.
    */
   const FAVICON_DEFAULTS = {
     "about:newtab": "chrome://branding/content/icon32.png",
@@ -299,10 +299,6 @@
 
     _hoverTabTimer: null,
 
-    _featureCallout: null,
-
-    _featureCalloutPanelId: null,
-
     get tabContainer() {
       delete this.tabContainer;
       return (this.tabContainer = document.getElementById("tabbrowser-tabs"));
@@ -367,37 +363,6 @@
       return this._selectedBrowser;
     },
 
-    get featureCallout() {
-      return this._featureCallout;
-    },
-
-    set featureCallout(val) {
-      this._featureCallout = val;
-    },
-
-    get instantiateFeatureCalloutTour() {
-      return this._instantiateFeatureCalloutTour;
-    },
-
-    get featureCalloutPanelId() {
-      return this._featureCalloutPanelId;
-    },
-
-    _instantiateFeatureCalloutTour(browser, panelId) {
-      this._featureCalloutPanelId = panelId;
-      const { FeatureCallout } = ChromeUtils.importESModule(
-        "resource:///modules/FeatureCallout.sys.mjs"
-      );
-      // Note - once we have additional browser chrome messages,
-      // only use PDF.js pref value when navigating to PDF viewer
-      this._featureCallout = new FeatureCallout({
-        win: window,
-        browser,
-        prefName: "browser.pdfjs.feature-tour",
-        page: "chrome",
-        theme: { preset: "pdfjs", simulateContent: true },
-      });
-    },
     _setupInitialBrowserAndTab() {
       // See browser.js for the meaning of window.arguments.
       // Bug 1485961 covers making this more sane.
@@ -613,10 +578,6 @@
 
     get sessionHistory() {
       return this.selectedBrowser.sessionHistory;
-    },
-
-    get markupDocumentViewer() {
-      return this.selectedBrowser.markupDocumentViewer;
     },
 
     get contentDocument() {
@@ -1129,25 +1090,6 @@
       }
 
       let newTab = this.getTabForBrowser(newBrowser);
-
-      if (
-        this._featureCallout &&
-        this._featureCalloutPanelId !== newTab.linkedPanel
-      ) {
-        this._featureCallout.endTour(true);
-        this._featureCallout = null;
-      }
-
-      // For now, only check for Feature Callout messages
-      // when viewing PDFs. Later, we can expand this to check
-      // for callout messages on every change of tab location.
-      if (
-        !this._featureCallout &&
-        newBrowser.contentPrincipal.originNoSuffix === "resource://pdf.js"
-      ) {
-        this._instantiateFeatureCalloutTour(newBrowser, newTab.linkedPanel);
-        window.gBrowser.featureCallout.showFeatureCallout();
-      }
 
       if (!aForceUpdate) {
         TelemetryStopwatch.start("FX_TAB_SWITCH_UPDATE_MS");
@@ -3035,6 +2977,10 @@
         usingPreloadedContent,
       };
 
+      if (BookmarkingUI.isOnNewTabPage(uri)) {
+        this.getPanel(b).classList.add("newTabBrowserPanel");
+      }
+
       // Hack to ensure that the about:newtab, and about:welcome favicon is loaded
       // instantaneously, to avoid flickering and improve perceived performance.
       this.setDefaultIcon(tab, uri);
@@ -3972,7 +3918,7 @@
         !aTab.pinned &&
         !aTab.hidden &&
         aTab._fullyOpen &&
-        triggeringEvent?.mozInputSource == MouseEvent.MOZ_SOURCE_MOUSE &&
+        triggeringEvent?.inputSource == MouseEvent.MOZ_SOURCE_MOUSE &&
         triggeringEvent?.target.closest(".tabbrowser-tab");
       if (lockTabSizing) {
         this.tabContainer._lockTabSizing(aTab, tabWidth);
@@ -6903,6 +6849,13 @@
             this.mTab.linkedBrowser.mute();
           }
 
+          gBrowser
+            .getPanel(this.mBrowser)
+            .classList.toggle(
+              "newTabBrowserPanel",
+              BookmarkingUI.isOnNewTabPage(aLocation)
+            );
+
           if (gBrowser.isFindBarInitialized(this.mTab)) {
             let findBar = gBrowser.getCachedFindBar(this.mTab);
 
@@ -6983,30 +6936,6 @@
           if (tabCacheIndex != -1) {
             gBrowser._tabLayerCache.splice(tabCacheIndex, 1);
             gBrowser._getSwitcher().cleanUpTabAfterEviction(this.mTab);
-          }
-        } else {
-          if (
-            gBrowser.featureCallout &&
-            (gBrowser.featureCalloutPanelId !==
-              gBrowser.selectedTab.linkedPanel ||
-              gBrowser.contentPrincipal.originNoSuffix !== "resource://pdf.js")
-          ) {
-            gBrowser.featureCallout.endTour(true);
-            gBrowser.featureCallout = null;
-          }
-
-          // For now, only check for Feature Callout messages
-          // when viewing PDFs. Later, we can expand this to check
-          // for callout messages on every change of tab location.
-          if (
-            !gBrowser.featureCallout &&
-            gBrowser.contentPrincipal.originNoSuffix === "resource://pdf.js"
-          ) {
-            gBrowser.instantiateFeatureCalloutTour(
-              gBrowser.selectedBrowser,
-              gBrowser.selectedTab.linkedPanel
-            );
-            gBrowser.featureCallout.showFeatureCallout();
           }
         }
       }
@@ -7506,7 +7435,7 @@ var TabContextMenu = {
 
     // Session store
     document.getElementById("context_undoCloseTab").disabled =
-      SessionStore.getClosedTabCountForWindow(window) == 0;
+      SessionStore.getClosedTabCount() == 0;
 
     // Show/hide fullscreen context menu items and set the
     // autohide item's checked state to mirror the autohide pref.

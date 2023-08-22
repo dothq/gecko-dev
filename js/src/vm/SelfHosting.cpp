@@ -44,9 +44,9 @@
 #ifdef ENABLE_RECORD_TUPLE
 #  include "builtin/TupleObject.h"
 #endif
-#include "frontend/BytecodeCompilation.h"  // CompileGlobalScriptToStencil
-#include "frontend/CompilationStencil.h"   // js::frontend::CompilationStencil
-#include "frontend/FrontendContext.h"      // AutoReportFrontendContext
+#include "frontend/BytecodeCompiler.h"    // CompileGlobalScriptToStencil
+#include "frontend/CompilationStencil.h"  // js::frontend::CompilationStencil
+#include "frontend/FrontendContext.h"     // AutoReportFrontendContext
 #include "jit/AtomicOperations.h"
 #include "jit/InlinableNatives.h"
 #include "js/CompilationAndEvaluation.h"
@@ -75,6 +75,7 @@
 #include "vm/GeneratorObject.h"
 #include "vm/Interpreter.h"
 #include "vm/Iteration.h"
+#include "vm/JSAtomUtils.h"  // Atomize
 #include "vm/JSContext.h"
 #include "vm/JSFunction.h"
 #include "vm/JSObject.h"
@@ -89,7 +90,7 @@
 #include "vm/WrapperObject.h"
 
 #include "vm/Compartment-inl.h"
-#include "vm/JSAtom-inl.h"
+#include "vm/JSAtomUtils-inl.h"  // PrimitiveValueToId
 #include "vm/JSFunction-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
@@ -1531,7 +1532,7 @@ bool js::ReportIncompatibleSelfHostedMethod(JSContext* cx,
   // in the somethingSelfHosted, not in the sort() call.
 
   static const char* const internalNames[] = {
-      "IsTypedArrayEnsuringArrayBuffer",
+      "EnsureTypedArrayWithArrayBuffer",
       "RegExpSearchSlowPath",
       "RegExpReplaceSlowPath",
       "RegExpMatchSlowPath",
@@ -1788,6 +1789,64 @@ static bool intrinsic_NewAsyncIteratorHelper(JSContext* cx, unsigned argc,
   return true;
 }
 
+static JSObject* NewIteratorRecord(JSContext* cx, HandleObject iterator,
+                                   HandleValue nextMethod) {
+  gc::AllocKind allocKind = gc::GetGCObjectKind(3);
+  Rooted<PlainObject*> obj(
+      cx, NewPlainObjectWithProtoAndAllocKind(cx, nullptr, allocKind));
+  if (!obj) {
+    return nullptr;
+  }
+
+  RootedId propid(cx, NameToId(cx->names().iterator));
+  RootedValue value(cx, ObjectValue(*iterator));
+  if (!NativeDefineDataProperty(cx, obj, propid, value, JSPROP_ENUMERATE)) {
+    return nullptr;
+  }
+
+  propid = NameToId(cx->names().nextMethod);
+  value.set(nextMethod);
+  if (!NativeDefineDataProperty(cx, obj, propid, value, JSPROP_ENUMERATE)) {
+    return nullptr;
+  }
+
+  propid = NameToId(cx->names().done);
+  value.setBoolean(false);
+  if (!NativeDefineDataProperty(cx, obj, propid, value, JSPROP_ENUMERATE)) {
+    return nullptr;
+  }
+
+  return obj;
+}
+
+static bool intrinsic_CreateAsyncFromSyncIterator(JSContext* cx, unsigned argc,
+                                                  Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 2);
+
+  RootedObject iterator(cx, &args[0].toObject());
+  RootedObject asyncIterator(
+      cx, CreateAsyncFromSyncIterator(cx, iterator, args[1]));
+  if (!asyncIterator) {
+    return false;
+  }
+
+  RootedValue nextMethod(cx);
+  if (!GetProperty(cx, asyncIterator, asyncIterator, cx->names().next,
+                   &nextMethod)) {
+    return false;
+  }
+
+  RootedObject iteratorRecord(cx,
+                              NewIteratorRecord(cx, asyncIterator, nextMethod));
+  if (!iteratorRecord) {
+    return false;
+  }
+
+  args.rval().setObject(*iteratorRecord);
+  return true;
+}
+
 static bool intrinsic_NoPrivateGetter(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   MOZ_ASSERT(args.length() == 0);
@@ -1858,6 +1917,8 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("ConstructorForTypedArray", intrinsic_ConstructorForTypedArray, 1, 0),
     JS_FN("CopyDataPropertiesOrGetOwnKeys",
           intrinsic_CopyDataPropertiesOrGetOwnKeys, 3, 0),
+    JS_FN("CreateAsyncFromSyncIterator", intrinsic_CreateAsyncFromSyncIterator,
+          2, 0),
     JS_FN("CreateMapIterationResultPair",
           intrinsic_CreateMapIterationResultPair, 0, 0),
     JS_FN("CreateSetIterationResult", intrinsic_CreateSetIterationResult, 0, 0),

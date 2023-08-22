@@ -15,32 +15,27 @@ import {
   getFileURL,
 } from "../../../utils/source";
 import { createLocation } from "../../../utils/location";
-import {
-  getBreakpointsForSource,
-  getContext,
-  getFirstSourceActorForGeneratedSource,
-} from "../../../selectors";
+import { getFirstSourceActorForGeneratedSource } from "../../../selectors";
 
 import SourceIcon from "../../shared/SourceIcon";
-
-import showContextMenu from "./BreakpointHeadingsContextMenu";
 
 class BreakpointHeading extends PureComponent {
   static get propTypes() {
     return {
-      cx: PropTypes.object.isRequired,
       sources: PropTypes.array.isRequired,
       source: PropTypes.object.isRequired,
       firstSourceActor: PropTypes.object,
       selectSource: PropTypes.func.isRequired,
     };
   }
-  onContextMenu = e => {
-    showContextMenu({ ...this.props, contextMenuEvent: e });
+  onContextMenu = event => {
+    event.preventDefault();
+
+    this.props.showBreakpointHeadingContextMenu(event, this.props.source);
   };
 
   render() {
-    const { cx, sources, source, selectSource } = this.props;
+    const { sources, source, selectSource } = this.props;
 
     const path = getDisplayPath(source, sources);
     const query = getSourceQueryString(source);
@@ -49,7 +44,7 @@ class BreakpointHeading extends PureComponent {
       <div
         className="breakpoint-heading"
         title={getFileURL(source, false)}
-        onClick={() => selectSource(cx, source)}
+        onClick={() => selectSource(source)}
         onContextMenu={this.onContextMenu}
       >
         <SourceIcon
@@ -75,14 +70,10 @@ class BreakpointHeading extends PureComponent {
 }
 
 const mapStateToProps = (state, { source }) => ({
-  cx: getContext(state),
-  breakpointsForSource: getBreakpointsForSource(state, source.id),
   firstSourceActor: getFirstSourceActorForGeneratedSource(state, source.id),
 });
 
 export default connect(mapStateToProps, {
   selectSource: actions.selectSource,
-  enableBreakpointsInSource: actions.enableBreakpointsInSource,
-  disableBreakpointsInSource: actions.disableBreakpointsInSource,
-  removeBreakpointsInSource: actions.removeBreakpointsInSource,
+  showBreakpointHeadingContextMenu: actions.showBreakpointHeadingContextMenu,
 })(BreakpointHeading);

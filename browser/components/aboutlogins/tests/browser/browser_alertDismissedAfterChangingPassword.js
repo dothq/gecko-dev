@@ -112,7 +112,10 @@ add_task(async function test_added_login_shows_breach_warning() {
   // should still be marked as vulnerable afterwards.
   await SpecialPowers.spawn(browser, [], () => {
     let loginItem = Cu.waiveXrays(content.document.querySelector("login-item"));
-    loginItem.shadowRoot.querySelector(".edit-button").click();
+    loginItem.shadowRoot
+      .querySelector(".edit-button")
+      .shadowRoot.querySelector("button")
+      .click();
   });
   await reauthObserved;
   await SpecialPowers.spawn(
@@ -184,11 +187,14 @@ add_task(async function test_added_login_shows_breach_warning() {
       }, "waiting for vulnerable login to get selected");
       Assert.ok(
         !ContentTaskUtils.is_hidden(
-          loginItem.shadowRoot.querySelector(".vulnerable-alert")
+          loginItem.shadowRoot.querySelector("login-vulnerable-password-alert")
         ),
         "the vulnerable alert should be visible"
       );
-      loginItem.shadowRoot.querySelector(".edit-button").click();
+      loginItem.shadowRoot
+        .querySelector(".edit-button")
+        .shadowRoot.querySelector("button")
+        .click();
       await ContentTaskUtils.waitForCondition(
         () => loginItem.dataset.editing == "true",
         "waiting for login-item to enter edit mode"
@@ -206,7 +212,7 @@ add_task(async function test_added_login_shows_breach_warning() {
 
       Assert.ok(
         ContentTaskUtils.is_hidden(
-          loginItem.shadowRoot.querySelector(".vulnerable-alert")
+          loginItem.shadowRoot.querySelector("login-vulnerable-password-alert")
         ),
         "the vulnerable alert should be hidden now"
       );

@@ -1,4 +1,4 @@
-// |reftest| skip -- iterator-helpers is not supported
+// |reftest| shell-option(--enable-iterator-helpers) skip-if(!this.hasOwnProperty('Iterator')||!xulRuntime.shell) -- iterator-helpers is not enabled unconditionally, requires shell-options
 // Copyright (C) 2023 Michael Ficarra. All rights reserved.
 // This code is governed by the BSD license found in the LICENSE file.
 /*---
@@ -38,5 +38,19 @@ assert.throws(TypeError, function () {
 assert.compareArray(Array.from(Iterator.from(new Number(5))), [0, 1, 2, 3, 4]);
 
 assert.compareArray(Array.from(Iterator.from('string')), ['s', 't', 'r', 'i', 'n', 'g']);
+
+const originalStringIterator = String.prototype[Symbol.iterator];
+let observedType;
+Object.defineProperty(String.prototype, Symbol.iterator, {
+  get() {
+    'use strict';
+    observedType = typeof this;
+    return originalStringIterator;
+  }
+});
+Iterator.from('');
+assert.sameValue(observedType, 'string');
+Iterator.from(new String(''));
+assert.sameValue(observedType, 'object');
 
 reportCompare(0, 0);

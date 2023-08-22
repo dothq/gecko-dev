@@ -39,12 +39,6 @@ pref("dom.webshare.enabled", true);
 // Enable capture attribute for file input.
 pref("dom.capture.enabled", true);
 
-// Disable Web Push until we get it working
-pref("dom.push.enabled", true);
-
-// enable storage access API
-pref("dom.storage_access.enabled", true);
-
 // Inherit locale from the OS, used for multi-locale builds
 pref("intl.locale.requested", "");
 

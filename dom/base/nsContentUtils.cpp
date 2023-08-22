@@ -212,6 +212,7 @@
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/ipc/SharedMemory.h"
 #include "mozilla/net/UrlClassifierCommon.h"
+#include "mozilla/Tokenizer.h"
 #include "mozilla/widget/IMEData.h"
 #include "nsAboutProtocolUtils.h"
 #include "nsAlgorithm.h"
@@ -2170,12 +2171,13 @@ bool nsContentUtils::ShouldResistFingerprinting(nsIGlobalObject* aGlobalObject,
 // Newer Should RFP Functions ----------------------------------
 // Utilities ---------------------------------------------------
 
-inline void LogDomainAndPrefList(const char* exemptedDomainsPrefName,
+inline void LogDomainAndPrefList(const char* urlType,
+                                 const char* exemptedDomainsPrefName,
                                  nsAutoCString& url, bool isExemptDomain) {
   nsAutoCString list;
   Preferences::GetCString(exemptedDomainsPrefName, list);
   MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
-          ("Domain \"%s\" is %s the exempt list \"%s\"",
+          ("%s \"%s\" is %s the exempt list \"%s\"", urlType,
            PromiseFlatCString(url).get(), isExemptDomain ? "in" : "NOT in",
            PromiseFlatCString(list).get()));
 }
@@ -2265,13 +2267,54 @@ inline bool SchemeSaysShouldNotResistFingerprinting(nsIPrincipal* aPrincipal) {
     return true;
   }
 
-  bool isSpecialAboutURI;
-  Unused << aPrincipal->IsContentAccessibleAboutURI(&isSpecialAboutURI);
-  return isSpecialAboutURI;
+  if (!aPrincipal->SchemeIs("about")) {
+    return false;
+  }
+
+  bool isContentAccessibleAboutURI;
+  Unused << aPrincipal->IsContentAccessibleAboutURI(
+      &isContentAccessibleAboutURI);
+  return !isContentAccessibleAboutURI;
 }
 
 const char* kExemptedDomainsPrefName =
     "privacy.resistFingerprinting.exemptedDomains";
+
+inline bool PartionKeyIsAlsoExempted(
+    const mozilla::OriginAttributes& aOriginAttributes) {
+  // If we've gotten here we have (probably) passed the CookieJarSettings
+  // check that would tell us that if we _are_ a subdocument, then we are on
+  // an exempted top-level domain and we should see if we ourselves are
+  // exempted. But we may have gotten here because we directly called the
+  // _dangerous function and we haven't done that check, but we _were_
+  // instatiated from a state where we could have been partitioned.
+  // So perform this last-ditch check for that scenario.
+  // We arbitrarily use https as the scheme, but it doesn't matter.
+  nsresult rv = NS_ERROR_NOT_INITIALIZED;
+  nsCOMPtr<nsIURI> uri;
+  if (StaticPrefs::privacy_firstparty_isolate() &&
+      !aOriginAttributes.mFirstPartyDomain.IsEmpty()) {
+    rv = NS_NewURI(getter_AddRefs(uri),
+                   u"https://"_ns + aOriginAttributes.mFirstPartyDomain);
+  } else if (!aOriginAttributes.mPartitionKey.IsEmpty()) {
+    rv = NS_NewURI(getter_AddRefs(uri),
+                   u"https://"_ns + aOriginAttributes.mPartitionKey);
+  }
+
+  if (!NS_FAILED(rv)) {
+    bool isExemptPartitionKey =
+        nsContentUtils::IsURIInPrefList(uri, kExemptedDomainsPrefName);
+    if (MOZ_LOG_TEST(nsContentUtils::ResistFingerprintingLog(),
+                     mozilla::LogLevel::Debug)) {
+      nsAutoCString url;
+      uri->GetHost(url);
+      LogDomainAndPrefList("Partition Key", kExemptedDomainsPrefName, url,
+                           isExemptPartitionKey);
+    }
+    return isExemptPartitionKey;
+  }
+  return true;
+}
 
 // Functions ---------------------------------------------------
 
@@ -2342,6 +2385,9 @@ bool nsContentUtils::ShouldResistFingerprinting(nsIChannel* aChannel,
   }
 
   if (CookieJarSettingsSaysShouldResistFingerprinting(loadInfo)) {
+    MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+            ("Inside ShouldResistFingerprinting(nsIChannel*)"
+             " CookieJarSettingsSaysShouldResistFingerprinting said true"));
     return true;
   }
 
@@ -2414,6 +2460,11 @@ bool nsContentUtils::ShouldResistFingerprinting_dangerous(
     return false;
   }
 
+  MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+          ("Inside ShouldResistFingerprinting_dangerous(nsIURI*,"
+           " OriginAttributes) and the URI is %s",
+           aURI->GetSpecOrDefault().get()));
+
   if (!StaticPrefs::privacy_resistFingerprinting_DoNotUseDirectly() &&
       !StaticPrefs::privacy_fingerprintingProtection_DoNotUseDirectly()) {
     // If neither of the 'regular' RFP prefs are set, then one (or both)
@@ -2426,6 +2477,9 @@ bool nsContentUtils::ShouldResistFingerprinting_dangerous(
 
   // Exclude internal schemes and web extensions
   if (SchemeSaysShouldNotResistFingerprinting(aURI)) {
+    MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+            ("Inside ShouldResistFingerprinting(nsIURI*)"
+             " SchemeSaysShouldNotResistFingerprinting said false"));
     return false;
   }
 
@@ -2439,7 +2493,11 @@ bool nsContentUtils::ShouldResistFingerprinting_dangerous(
                    mozilla::LogLevel::Debug)) {
     nsAutoCString url;
     aURI->GetHost(url);
-    LogDomainAndPrefList(kExemptedDomainsPrefName, url, isExemptDomain);
+    LogDomainAndPrefList("URI", kExemptedDomainsPrefName, url, isExemptDomain);
+  }
+
+  if (isExemptDomain) {
+    isExemptDomain &= PartionKeyIsAlsoExempted(aOriginAttributes);
   }
 
   return !isExemptDomain;
@@ -2479,11 +2537,17 @@ bool nsContentUtils::ShouldResistFingerprinting_dangerous(
 
   // Exclude internal schemes and web extensions
   if (SchemeSaysShouldNotResistFingerprinting(aPrincipal)) {
+    MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+            ("Inside ShouldResistFingerprinting(nsIPrincipal*)"
+             " SchemeSaysShouldNotResistFingerprinting said false"));
     return false;
   }
 
   // Web extension principals are also excluded
   if (BasePrincipal::Cast(aPrincipal)->AddonPolicy()) {
+    MOZ_LOG(nsContentUtils::ResistFingerprintingLog(), LogLevel::Debug,
+            ("Inside ShouldResistFingerprinting_dangerous(nsIPrincipal*)"
+             " and AddonPolicy said false"));
     return false;
   }
 
@@ -2493,35 +2557,13 @@ bool nsContentUtils::ShouldResistFingerprinting_dangerous(
   if (MOZ_LOG_TEST(nsContentUtils::ResistFingerprintingLog(),
                    mozilla::LogLevel::Debug)) {
     nsAutoCString origin;
-    aPrincipal->GetWebExposedOriginSerialization(origin);
-    LogDomainAndPrefList(kExemptedDomainsPrefName, origin, isExemptDomain);
+    aPrincipal->GetOrigin(origin);
+    LogDomainAndPrefList("URI", kExemptedDomainsPrefName, origin,
+                         isExemptDomain);
   }
 
-  // If we've gotten here we have (probably) passed the CookieJarSettings
-  // check that would tell us that if we _are_ a subdocument, then we are on
-  // an exempted top-level domain and we should see if we ourselves are
-  // exempted. But we may have gotten here because we directly called the
-  // _dangerous function and we haven't done that check, but we _were_
-  // instatiated from a state where we could have been partitioned.
-  // So perform this last-ditch check for that scenario.
-  // We arbitrarily use https as the scheme, but it doesn't matter.
-  nsCOMPtr<nsIURI> uri;
-  if (isExemptDomain && StaticPrefs::privacy_firstparty_isolate() &&
-      !originAttributes.mFirstPartyDomain.IsEmpty()) {
-    nsresult rv =
-        NS_NewURI(getter_AddRefs(uri),
-                  u"https://"_ns + originAttributes.mFirstPartyDomain);
-    if (!NS_FAILED(rv)) {
-      isExemptDomain =
-          nsContentUtils::IsURIInPrefList(uri, kExemptedDomainsPrefName);
-    }
-  } else if (isExemptDomain && !originAttributes.mPartitionKey.IsEmpty()) {
-    nsresult rv = NS_NewURI(getter_AddRefs(uri),
-                            u"https://"_ns + originAttributes.mPartitionKey);
-    if (!NS_FAILED(rv)) {
-      isExemptDomain =
-          nsContentUtils::IsURIInPrefList(uri, kExemptedDomainsPrefName);
-    }
+  if (isExemptDomain) {
+    isExemptDomain &= PartionKeyIsAlsoExempted(originAttributes);
   }
 
   return !isExemptDomain;
@@ -7013,9 +7055,7 @@ bool nsContentUtils::AllowXULXBLForPrincipal(nsIPrincipal* aPrincipal) {
     return true;
   }
 
-  return (StaticPrefs::dom_allow_XUL_XBL_for_file() &&
-          aPrincipal->SchemeIs("file")) ||
-         IsSitePermAllow(aPrincipal, "allowXULXBL"_ns);
+  return xpc::IsInAutomation() && IsSitePermAllow(aPrincipal, "allowXULXBL"_ns);
 }
 
 bool nsContentUtils::IsPDFJSEnabled() {
@@ -7025,7 +7065,7 @@ bool nsContentUtils::IsPDFJSEnabled() {
 }
 
 bool nsContentUtils::IsPDFJS(nsIPrincipal* aPrincipal) {
-  if (!aPrincipal) {
+  if (!aPrincipal || !aPrincipal->SchemeIs("resource")) {
     return false;
   }
   nsAutoCString spec;
@@ -7250,12 +7290,6 @@ bool nsContentUtils::HaveEqualPrincipals(Document* aDoc1, Document* aDoc2) {
   bool principalsEqual = false;
   aDoc1->NodePrincipal()->Equals(aDoc2->NodePrincipal(), &principalsEqual);
   return principalsEqual;
-}
-
-/* static */
-bool nsContentUtils::HasPluginWithUncontrolledEventDispatch(
-    nsIContent* aContent) {
-  return false;
 }
 
 /* static */
@@ -7558,6 +7592,77 @@ bool nsContentUtils::ContainsForbiddenMethod(const nsACString& headerValue) {
   return hasInsecureMethod;
 }
 
+Maybe<nsContentUtils::ParsedRange> nsContentUtils::ParseSingleRangeRequest(
+    const nsACString& aHeaderValue, bool aAllowWhitespace) {
+  // See https://fetch.spec.whatwg.org/#simple-range-header-value
+  mozilla::Tokenizer p(aHeaderValue);
+  Maybe<uint32_t> rangeStart;
+  Maybe<uint32_t> rangeEnd;
+
+  // Step 2 and 3
+  if (!p.CheckWord("bytes")) {
+    return Nothing();
+  }
+
+  // Step 4
+  if (aAllowWhitespace) {
+    p.SkipWhites();
+  }
+
+  // Step 5 and 6
+  if (!p.CheckChar('=')) {
+    return Nothing();
+  }
+
+  // Step 7
+  if (aAllowWhitespace) {
+    p.SkipWhites();
+  }
+
+  // Step 8 and 9
+  int32_t res;
+  if (p.ReadInteger(&res)) {
+    rangeStart = Some(res);
+  }
+
+  // Step 10
+  if (aAllowWhitespace) {
+    p.SkipWhites();
+  }
+
+  // Step 11
+  if (!p.CheckChar('-')) {
+    return Nothing();
+  }
+
+  // Step 13
+  if (aAllowWhitespace) {
+    p.SkipWhites();
+  }
+
+  // Step 14 and 15
+  if (p.ReadInteger(&res)) {
+    rangeEnd = Some(res);
+  }
+
+  // Step 16
+  if (!p.CheckEOF()) {
+    return Nothing();
+  }
+
+  // Step 17
+  if (!rangeStart && !rangeEnd) {
+    return Nothing();
+  }
+
+  // Step 18
+  if (rangeStart && rangeEnd && *rangeStart > *rangeEnd) {
+    return Nothing();
+  }
+
+  return Some(ParsedRange(rangeStart, rangeEnd));
+}
+
 // static
 bool nsContentUtils::IsCorsUnsafeRequestHeaderValue(
     const nsACString& aHeaderValue) {
@@ -7627,6 +7732,19 @@ bool nsContentUtils::IsAllowedNonCorsLanguage(const nsACString& aHeaderValue) {
   return true;
 }
 
+bool nsContentUtils::IsAllowedNonCorsRange(const nsACString& aHeaderValue) {
+  Maybe<ParsedRange> parsedRange = ParseSingleRangeRequest(aHeaderValue, false);
+  if (!parsedRange) {
+    return false;
+  }
+
+  if (!parsedRange->Start()) {
+    return false;
+  }
+
+  return true;
+}
+
 // static
 bool nsContentUtils::IsCORSSafelistedRequestHeader(const nsACString& aName,
                                                    const nsACString& aValue) {
@@ -7641,7 +7759,9 @@ bool nsContentUtils::IsCORSSafelistedRequestHeader(const nsACString& aName,
          (aName.LowerCaseEqualsLiteral("content-language") &&
           nsContentUtils::IsAllowedNonCorsLanguage(aValue)) ||
          (aName.LowerCaseEqualsLiteral("content-type") &&
-          nsContentUtils::IsAllowedNonCorsContentType(aValue));
+          nsContentUtils::IsAllowedNonCorsContentType(aValue)) ||
+         (aName.LowerCaseEqualsLiteral("range") &&
+          nsContentUtils::IsAllowedNonCorsRange(aValue));
 }
 
 mozilla::LogModule* nsContentUtils::ResistFingerprintingLog() {

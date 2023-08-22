@@ -8467,14 +8467,11 @@ class MInCache : public MBinaryInstruction,
 };
 
 // Test whether the index is in the array bounds or a hole.
-class MInArray : public MQuaternaryInstruction, public ObjectPolicy<3>::Data {
-  bool needsNegativeIntCheck_;
+class MInArray : public MTernaryInstruction, public NoTypePolicy::Data {
+  bool needsNegativeIntCheck_ = true;
 
-  MInArray(MDefinition* elements, MDefinition* index, MDefinition* initLength,
-           MDefinition* object)
-      : MQuaternaryInstruction(classOpcode, elements, index, initLength,
-                               object),
-        needsNegativeIntCheck_(true) {
+  MInArray(MDefinition* elements, MDefinition* index, MDefinition* initLength)
+      : MTernaryInstruction(classOpcode, elements, index, initLength) {
     setResultType(MIRType::Boolean);
     setMovable();
 
@@ -8491,7 +8488,7 @@ class MInArray : public MQuaternaryInstruction, public ObjectPolicy<3>::Data {
  public:
   INSTRUCTION_HEADER(InArray)
   TRIVIAL_NEW_WRAPPERS
-  NAMED_OPERANDS((0, elements), (1, index), (2, initLength), (3, object))
+  NAMED_OPERANDS((0, elements), (1, index), (2, initLength))
 
   bool needsNegativeIntCheck() const { return needsNegativeIntCheck_; }
   void collectRangeInfoPreTrunc() override;
@@ -9425,22 +9422,21 @@ class MWasmStoreInstance : public MBinaryInstruction,
   AliasSet getAliasSet() const override { return aliases_; }
 };
 
-class MWasmHeapBase : public MUnaryInstruction, public NoTypePolicy::Data {
+class MWasmHeapReg : public MNullaryInstruction {
   AliasSet aliases_;
 
-  explicit MWasmHeapBase(MDefinition* instance, AliasSet aliases)
-      : MUnaryInstruction(classOpcode, instance), aliases_(aliases) {
+  explicit MWasmHeapReg(AliasSet aliases)
+      : MNullaryInstruction(classOpcode), aliases_(aliases) {
     setMovable();
     setResultType(MIRType::Pointer);
   }
 
  public:
-  INSTRUCTION_HEADER(WasmHeapBase)
+  INSTRUCTION_HEADER(WasmHeapReg)
   TRIVIAL_NEW_WRAPPERS
-  NAMED_OPERANDS((0, instance))
 
   bool congruentTo(const MDefinition* ins) const override {
-    return ins->isWasmHeapBase();
+    return ins->isWasmHeapReg();
   }
 
   AliasSet getAliasSet() const override { return aliases_; }
@@ -9491,7 +9487,7 @@ class MWasmBoundsCheck : public MBinaryInstruction, public NoTypePolicy::Data {
 
   AliasSet getAliasSet() const override { return AliasSet::None(); }
 
-  bool isMemory() const { return target_ == MWasmBoundsCheck::Memory0; }
+  bool isMemory0() const { return target_ == MWasmBoundsCheck::Memory0; }
 
   bool isRedundant() const { return !isGuard(); }
 
@@ -9599,6 +9595,8 @@ class MWasmLoad
     return AliasSet::Load(AliasSet::WasmHeap);
   }
 
+  bool hasMemoryBase() const { return numOperands() > 1; }
+
 #ifdef JS_JITSPEW
   void getExtras(ExtrasCollector* extras) override {
     char buf[64];
@@ -9644,6 +9642,8 @@ class MWasmStore : public MVariadicInstruction, public NoTypePolicy::Data {
     return AliasSet::Store(AliasSet::WasmHeap);
   }
 
+  bool hasMemoryBase() const { return numOperands() > 2; }
+
 #ifdef JS_JITSPEW
   void getExtras(ExtrasCollector* extras) override {
     char buf[64];
@@ -9668,8 +9668,8 @@ class MAsmJSMemoryAccess {
   bool needsBoundsCheck() const { return needsBoundsCheck_; }
 
   wasm::MemoryAccessDesc access() const {
-    return wasm::MemoryAccessDesc(accessType_, Scalar::byteSize(accessType_), 0,
-                                  wasm::BytecodeOffset());
+    return wasm::MemoryAccessDesc(0, accessType_, Scalar::byteSize(accessType_),
+                                  0, wasm::BytecodeOffset(), false);
   }
 
   void removeBoundsCheck() { needsBoundsCheck_ = false; }
@@ -9823,6 +9823,8 @@ class MWasmCompareExchangeHeap : public MVariadicInstruction,
   AliasSet getAliasSet() const override {
     return AliasSet::Store(AliasSet::WasmHeap);
   }
+
+  bool hasMemoryBase() const { return numOperands() > 4; }
 };
 
 class MWasmAtomicExchangeHeap : public MVariadicInstruction,
@@ -9872,6 +9874,8 @@ class MWasmAtomicExchangeHeap : public MVariadicInstruction,
   AliasSet getAliasSet() const override {
     return AliasSet::Store(AliasSet::WasmHeap);
   }
+
+  bool hasMemoryBase() const { return numOperands() > 3; }
 };
 
 class MWasmAtomicBinopHeap : public MVariadicInstruction,
@@ -9924,6 +9928,8 @@ class MWasmAtomicBinopHeap : public MVariadicInstruction,
   AliasSet getAliasSet() const override {
     return AliasSet::Store(AliasSet::WasmHeap);
   }
+
+  bool hasMemoryBase() const { return numOperands() > 3; }
 };
 
 class MWasmLoadInstanceDataField : public MUnaryInstruction,
@@ -11393,15 +11399,14 @@ class MWasmStoreFieldRefKA : public MAryInstruction<4>,
 #endif
 };
 
-class MWasmGcObjectIsSubtypeOfAbstract : public MUnaryInstruction,
-                                         public NoTypePolicy::Data {
+class MWasmRefIsSubtypeOfAbstract : public MUnaryInstruction,
+                                    public NoTypePolicy::Data {
   wasm::RefType sourceType_;
   wasm::RefType destType_;
 
-  MWasmGcObjectIsSubtypeOfAbstract(MDefinition* object,
-                                   wasm::RefType sourceType,
-                                   wasm::RefType destType)
-      : MUnaryInstruction(classOpcode, object),
+  MWasmRefIsSubtypeOfAbstract(MDefinition* ref, wasm::RefType sourceType,
+                              wasm::RefType destType)
+      : MUnaryInstruction(classOpcode, ref),
         sourceType_(sourceType),
         destType_(destType) {
     MOZ_ASSERT(!destType.isTypeRef());
@@ -11410,18 +11415,17 @@ class MWasmGcObjectIsSubtypeOfAbstract : public MUnaryInstruction,
   }
 
  public:
-  INSTRUCTION_HEADER(WasmGcObjectIsSubtypeOfAbstract)
+  INSTRUCTION_HEADER(WasmRefIsSubtypeOfAbstract)
   TRIVIAL_NEW_WRAPPERS
-  NAMED_OPERANDS((0, object))
+  NAMED_OPERANDS((0, ref))
 
   wasm::RefType sourceType() const { return sourceType_; };
   wasm::RefType destType() const { return destType_; };
 
   bool congruentTo(const MDefinition* ins) const override {
     return congruentIfOperandsEqual(ins) &&
-           sourceType() ==
-               ins->toWasmGcObjectIsSubtypeOfAbstract()->sourceType() &&
-           destType() == ins->toWasmGcObjectIsSubtypeOfAbstract()->destType();
+           sourceType() == ins->toWasmRefIsSubtypeOfAbstract()->sourceType() &&
+           destType() == ins->toWasmRefIsSubtypeOfAbstract()->destType();
   }
 
   HashNumber valueHash() const override {
@@ -11434,19 +11438,18 @@ class MWasmGcObjectIsSubtypeOfAbstract : public MUnaryInstruction,
   MDefinition* foldsTo(TempAllocator& alloc) override;
 };
 
-// Tests if the WasmGcObject, `object`, is a subtype of `superSuperTypeVector`.
+// Tests if the wasm ref `ref` is a subtype of `superSuperTypeVector`.
 // The actual super type definition must be known at compile time, so that the
 // subtyping depth of super type depth can be used.
-class MWasmGcObjectIsSubtypeOfConcrete : public MBinaryInstruction,
-                                         public NoTypePolicy::Data {
+class MWasmRefIsSubtypeOfConcrete : public MBinaryInstruction,
+                                    public NoTypePolicy::Data {
   wasm::RefType sourceType_;
   wasm::RefType destType_;
 
-  MWasmGcObjectIsSubtypeOfConcrete(MDefinition* object,
-                                   MDefinition* superSuperTypeVector,
-                                   wasm::RefType sourceType,
-                                   wasm::RefType destType)
-      : MBinaryInstruction(classOpcode, object, superSuperTypeVector),
+  MWasmRefIsSubtypeOfConcrete(MDefinition* ref,
+                              MDefinition* superSuperTypeVector,
+                              wasm::RefType sourceType, wasm::RefType destType)
+      : MBinaryInstruction(classOpcode, ref, superSuperTypeVector),
         sourceType_(sourceType),
         destType_(destType) {
     MOZ_ASSERT(destType.isTypeRef());
@@ -11455,18 +11458,17 @@ class MWasmGcObjectIsSubtypeOfConcrete : public MBinaryInstruction,
   }
 
  public:
-  INSTRUCTION_HEADER(WasmGcObjectIsSubtypeOfConcrete)
+  INSTRUCTION_HEADER(WasmRefIsSubtypeOfConcrete)
   TRIVIAL_NEW_WRAPPERS
-  NAMED_OPERANDS((0, object), (1, superSuperTypeVector))
+  NAMED_OPERANDS((0, ref), (1, superSuperTypeVector))
 
   wasm::RefType sourceType() const { return sourceType_; };
   wasm::RefType destType() const { return destType_; };
 
   bool congruentTo(const MDefinition* ins) const override {
     return congruentIfOperandsEqual(ins) &&
-           sourceType() ==
-               ins->toWasmGcObjectIsSubtypeOfConcrete()->sourceType() &&
-           destType() == ins->toWasmGcObjectIsSubtypeOfConcrete()->destType();
+           sourceType() == ins->toWasmRefIsSubtypeOfConcrete()->sourceType() &&
+           destType() == ins->toWasmRefIsSubtypeOfConcrete()->destType();
   }
 
   HashNumber valueHash() const override {

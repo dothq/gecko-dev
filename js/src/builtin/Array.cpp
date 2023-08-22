@@ -55,7 +55,7 @@
 #include "vm/ArrayObject-inl.h"
 #include "vm/GeckoProfiler-inl.h"
 #include "vm/IsGivenTypeObject-inl.h"
-#include "vm/JSAtom-inl.h"
+#include "vm/JSAtomUtils-inl.h"  // PrimitiveValueToId, IndexToId
 #include "vm/NativeObject-inl.h"
 
 using namespace js;
@@ -72,7 +72,7 @@ using JS::AutoCheckCannotGC;
 using JS::IsArrayAnswer;
 using JS::ToUint32;
 
-static inline bool ObjectMayHaveExtraIndexedOwnProperties(JSObject* obj) {
+bool js::ObjectMayHaveExtraIndexedOwnProperties(JSObject* obj) {
   if (!obj->is<NativeObject>()) {
     return true;
   }
@@ -114,7 +114,7 @@ bool js::PrototypeMayHaveIndexedProperties(NativeObject* obj) {
  * elements. This includes other indexed properties in its shape hierarchy, and
  * indexed properties or elements along its prototype chain.
  */
-static bool ObjectMayHaveExtraIndexedProperties(JSObject* obj) {
+bool js::ObjectMayHaveExtraIndexedProperties(JSObject* obj) {
   MOZ_ASSERT_IF(obj->hasDynamicPrototype(), !obj->is<NativeObject>());
 
   if (ObjectMayHaveExtraIndexedOwnProperties(obj)) {
@@ -4864,10 +4864,6 @@ static const JSFunctionSpec array_methods[] = {
     JS_SELF_HOSTED_FN("forEach", "ArrayForEach", 1, 0),
     JS_SELF_HOSTED_FN("map", "ArrayMap", 1, 0),
     JS_SELF_HOSTED_FN("filter", "ArrayFilter", 1, 0),
-#ifdef NIGHTLY_BUILD
-    JS_SELF_HOSTED_FN("group", "ArrayGroup", 1, 0),
-    JS_SELF_HOSTED_FN("groupToMap", "ArrayGroupToMap", 1, 0),
-#endif
     JS_SELF_HOSTED_FN("reduce", "ArrayReduce", 1, 0),
     JS_SELF_HOSTED_FN("reduceRight", "ArrayReduceRight", 1, 0),
     JS_SELF_HOSTED_FN("some", "ArraySome", 1, 0),
@@ -5153,15 +5149,6 @@ static bool array_proto_finish(JSContext* cx, JS::HandleObject ctor,
       !DefineDataProperty(cx, unscopables, cx->names().values, value)) {
     return false;
   }
-
-#ifdef NIGHTLY_BUILD
-  if (cx->realm()->creationOptions().getArrayGroupingEnabled()) {
-    if (!DefineDataProperty(cx, unscopables, cx->names().group, value) ||
-        !DefineDataProperty(cx, unscopables, cx->names().groupToMap, value)) {
-      return false;
-    }
-  }
-#endif
 
   // FIXME: Once bug 1826643 is fixed, the names should be moved into the first
   // "or" clause in this method so that they will be alphabetized.

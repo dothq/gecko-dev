@@ -113,6 +113,7 @@
     --input-disabled-border-color: GrayText;
     --input-hover-border-color: Highlight;
     --link-outline: 1.5px solid LinkText;
+    --hcm-highligh-filter: invert(100%);
   }
   .annotationLayer .textWidgetAnnotation :is(input, textarea):required,
   .annotationLayer .choiceWidgetAnnotation select:required,
@@ -123,7 +124,30 @@
   }
 
   .annotationLayer .linkAnnotation:hover {
-    backdrop-filter: invert(100%);
+    backdrop-filter: var(--hcm-highligh-filter);
+  }
+
+  .annotationLayer .linkAnnotation > a:hover {
+    opacity: 0 !important;
+    background: none !important;
+    box-shadow: none;
+  }
+
+  .annotationLayer .popupAnnotation .popup {
+    outline: calc(1.5px * var(--scale-factor)) solid CanvasText !important;
+    background-color: ButtonFace !important;
+    color: ButtonText !important;
+  }
+
+  .annotationLayer .highlightArea:hover::after {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    backdrop-filter: var(--hcm-highligh-filter);
+    content: "";
+    pointer-events: none;
   }
 
   .annotationLayer .popupAnnotation.focused .popup {
@@ -179,11 +203,19 @@
 }
 
 .annotationLayer
-  :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton)
+  :is(.linkAnnotation, .buttonWidgetAnnotation.pushButton):not(.hasBorder)
   > a:hover {
   opacity: 0.2;
-  background: rgba(255, 255, 0, 1);
+  background-color: rgba(255, 255, 0, 1);
   box-shadow: 0 2px 10px rgba(255, 255, 0, 1);
+}
+
+.annotationLayer .linkAnnotation.hasBorder:hover {
+  background-color: rgba(255, 255, 0, 0.2);
+}
+
+.annotationLayer .hasBorder {
+  background-size: 100% 100%;
 }
 
 .annotationLayer .textAnnotation img {
@@ -427,6 +459,16 @@
 .annotationLayer .annotationTextContent span {
   width: 100%;
   display: inline-block;
+}
+
+.annotationLayer svg.quadrilateralsContainer {
+  contain: strict;
+  width: 0;
+  height: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
 }
 
 
@@ -746,10 +788,18 @@
 
 
 :root {
-  --focus-outline: solid 2px blue;
-  --hover-outline: dashed 2px blue;
+  --outline-width: 2px;
+  --outline-color: blue;
+  --focus-outline: solid var(--outline-width) var(--outline-color);
+  --hover-outline: dashed var(--outline-width) var(--outline-color);
   --freetext-line-height: 1.35;
   --freetext-padding: 2px;
+  --resizer-size: 8px;
+  --resizer-shift: calc(
+    0px - var(--outline-width) - var(--resizer-size) / 2 - var(--outline-width) /
+      2
+  );
+  --resizer-color: white;
   --editorFreeText-editing-cursor: text;
   --editorInk-editing-cursor: url(images/cursor-editorInk.svg) 0 16, pointer;
 }
@@ -763,8 +813,10 @@
 
 @media screen and (forced-colors: active) {
   :root {
-    --focus-outline: solid 3px ButtonText;
-    --hover-outline: dashed 3px ButtonText;
+    --outline-width: 3px;
+    --outline-color: ButtonText;
+    --resizer-size: 12px;
+    --resizer-color: ButtonFace;
   }
 }
 
@@ -781,8 +833,7 @@
 .annotationEditorLayer {
   background: transparent;
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   font-size: calc(100px * var(--scale-factor));
   transform-origin: 0 0;
   cursor: auto;
@@ -797,47 +848,49 @@
   cursor: var(--editorInk-editing-cursor);
 }
 
-.annotationEditorLayer :is(.freeTextEditor, .inkEditor)[draggable="true"] {
+.annotationEditorLayer
+  :is(.freeTextEditor, .inkEditor, .stampEditor)[draggable="true"] {
   cursor: move;
 }
 
 .annotationEditorLayer .selectedEditor {
   outline: var(--focus-outline);
-  resize: none;
 }
 
-.annotationEditorLayer .freeTextEditor {
+.annotationEditorLayer :is(.freeTextEditor, .inkEditor, .stampEditor) {
   position: absolute;
   background: transparent;
   border-radius: 3px;
-  padding: calc(var(--freetext-padding) * var(--scale-factor));
-  resize: none;
-  width: auto;
-  height: auto;
   z-index: 1;
   transform-origin: 0 0;
-  touch-action: none;
   cursor: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.annotationEditorLayer .freeTextEditor {
+  padding: calc(var(--freetext-padding) * var(--scale-factor));
+  width: auto;
+  height: auto;
+  touch-action: none;
 }
 
 .annotationEditorLayer .freeTextEditor .internal {
   background: transparent;
   border: none;
-  top: 0;
-  left: 0;
+  inset: 0;
   overflow: visible;
   white-space: nowrap;
-  resize: none;
   font: 10px sans-serif;
   line-height: var(--freetext-line-height);
+  user-select: none;
 }
 
 .annotationEditorLayer .freeTextEditor .overlay {
   position: absolute;
   display: none;
   background: transparent;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
 }
@@ -853,45 +906,152 @@
 
 .annotationEditorLayer .freeTextEditor .internal:focus {
   outline: none;
-}
-
-.annotationEditorLayer .inkEditor.disabled {
-  resize: none;
-}
-
-.annotationEditorLayer .inkEditor.disabled.selectedEditor {
-  resize: horizontal;
+  user-select: auto;
 }
 
 .annotationEditorLayer
-  :is(.freeTextEditor, .inkEditor):hover:not(.selectedEditor) {
+  :is(.freeTextEditor, .inkEditor, .stampEditor):hover:not(.selectedEditor) {
   outline: var(--hover-outline);
 }
 
 .annotationEditorLayer .inkEditor {
-  position: absolute;
-  background: transparent;
-  border-radius: 3px;
-  overflow: auto;
   width: 100%;
   height: 100%;
-  z-index: 1;
-  transform-origin: 0 0;
-  cursor: auto;
 }
 
 .annotationEditorLayer .inkEditor.editing {
-  resize: none;
   cursor: inherit;
 }
 
 .annotationEditorLayer .inkEditor .inkEditorCanvas {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
   touch-action: none;
+}
+
+.annotationEditorLayer .stampEditor {
+  width: auto;
+  height: auto;
+}
+
+.annotationEditorLayer .stampEditor.loading {
+  aspect-ratio: 1;
+  width: 10%;
+  height: auto;
+  background-color: rgba(128, 128, 128, 0.5);
+  background-image: var(--loading-icon);
+  background-repeat: no-repeat;
+  background-position: 50%;
+  background-size: 16px 16px;
+  transition-property: background-size;
+  transition-delay: var(--loading-icon-delay);
+}
+
+.annotationEditorLayer .stampEditor canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.annotationEditorLayer .resizers {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+.annotationEditorLayer .resizers.hidden {
+  display: none;
+}
+
+.annotationEditorLayer .resizer {
+  width: var(--resizer-size);
+  height: var(--resizer-size);
+  border-radius: 50%;
+  background: var(--resizer-color);
+  border: var(--focus-outline);
+  position: absolute;
+}
+
+.annotationEditorLayer .resizer.topLeft {
+  cursor: nw-resize;
+  top: var(--resizer-shift);
+  left: var(--resizer-shift);
+}
+
+.annotationEditorLayer .resizer.topMiddle {
+  cursor: n-resize;
+  top: var(--resizer-shift);
+  left: calc(50% + var(--resizer-shift));
+}
+
+.annotationEditorLayer .resizer.topRight {
+  cursor: ne-resize;
+  top: var(--resizer-shift);
+  right: var(--resizer-shift);
+}
+
+.annotationEditorLayer .resizer.middleRight {
+  cursor: e-resize;
+  top: calc(50% + var(--resizer-shift));
+  right: var(--resizer-shift);
+}
+
+.annotationEditorLayer .resizer.bottomRight {
+  cursor: se-resize;
+  bottom: var(--resizer-shift);
+  right: var(--resizer-shift);
+}
+
+.annotationEditorLayer .resizer.bottomMiddle {
+  cursor: s-resize;
+  bottom: var(--resizer-shift);
+  left: calc(50% + var(--resizer-shift));
+}
+
+.annotationEditorLayer .resizer.bottomLeft {
+  cursor: sw-resize;
+  bottom: var(--resizer-shift);
+  left: var(--resizer-shift);
+}
+
+.annotationEditorLayer .resizer.middleLeft {
+  cursor: w-resize;
+  top: calc(50% + var(--resizer-shift));
+  left: var(--resizer-shift);
+}
+
+.annotationEditorLayer.resizingTopLeft {
+  cursor: nw-resize;
+}
+
+.annotationEditorLayer.resizingTopMiddle {
+  cursor: n-resize;
+}
+
+.annotationEditorLayer.resizingTopRight {
+  cursor: ne-resize;
+}
+
+.annotationEditorLayer.resizingMiddleRight {
+  cursor: e-resize;
+}
+
+.annotationEditorLayer.resizingBottomRight {
+  cursor: se-resize;
+}
+
+.annotationEditorLayer.resizingBottomMiddle {
+  cursor: s-resize;
+}
+
+.annotationEditorLayer.resizingBottomLeft {
+  cursor: sw-resize;
+}
+
+.annotationEditorLayer.resizingMiddleLeft {
+  cursor: w-resize;
 }
 
 :root {

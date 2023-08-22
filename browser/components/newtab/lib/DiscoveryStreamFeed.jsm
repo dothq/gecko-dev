@@ -143,18 +143,12 @@ class DiscoveryStreamFeed {
       const pocketConfig =
         this.store.getState().Prefs.values?.pocketConfig || {};
 
-      const preffedLocaleListString = pocketConfig.localeListConfig || "";
-      const preffedLocales = preffedLocaleListString
-        .split(",")
-        .map(s => s.trim());
-      const localeEnabled = this.locale && preffedLocales.includes(this.locale);
-
       const preffedRegionBffConfigString = pocketConfig.regionBffConfig || "";
       const preffedRegionBffConfig = preffedRegionBffConfigString
         .split(",")
         .map(s => s.trim());
       const regionBff = preffedRegionBffConfig.includes(this.region);
-      this._isBff = !localeEnabled && regionBff;
+      this._isBff = regionBff;
     }
 
     return this._isBff;
@@ -1472,6 +1466,7 @@ class DiscoveryStreamFeed {
             title: item.title,
             excerpt: item.excerpt,
             publisher: item.publisher,
+            time_to_read: item.timeToRead,
             raw_image_src: item.imageUrl,
           }));
         }
@@ -2214,7 +2209,7 @@ getHardcodedLayout = ({
   spocPositions = [1, 5, 7, 11, 18, 20],
   spocTopsitesPositions = [1],
   spocPlacementData = { ad_types: [3617], zone_ids: [217758, 217995] },
-  spocTopsitesPlacementData,
+  spocTopsitesPlacementData = { ad_types: [3120], zone_ids: [280143] },
   widgetPositions = [],
   widgetData = [],
   sponsoredCollectionsEnabled = false,

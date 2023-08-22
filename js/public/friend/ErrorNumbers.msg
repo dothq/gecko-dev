@@ -81,8 +81,9 @@ MSG_DEF(JSMSG_BAD_WEAKMAP_KEY,         0, JSEXN_TYPEERR, "cannot use the given o
 MSG_DEF(JSMSG_BAD_GETTER_OR_SETTER,    1, JSEXN_TYPEERR, "invalid {0} usage")
 MSG_DEF(JSMSG_BAD_ARRAY_LENGTH,        0, JSEXN_RANGEERR, "invalid array length")
 MSG_DEF(JSMSG_SOURCE_ARRAY_TOO_LONG,   0, JSEXN_RANGEERR, "source array is too long")
-MSG_DEF(JSMSG_REDECLARED_PREV,         2, JSEXN_NOTE, "Previously declared at line {0}, column {1}")
+MSG_DEF(JSMSG_PREV_DECLARATION,        2, JSEXN_NOTE, "Previously declared at line {0}, column {1}")
 MSG_DEF(JSMSG_REDECLARED_VAR,          2, JSEXN_SYNTAXERR, "redeclaration of {0} {1}")
+MSG_DEF(JSMSG_MISMATCHED_PLACEMENT,    2, JSEXN_SYNTAXERR, "getter and setter for {0} {1} should either be both static or non-static")
 MSG_DEF(JSMSG_UNDECLARED_VAR,          1, JSEXN_REFERENCEERR, "assignment to undeclared variable {0}")
 MSG_DEF(JSMSG_GET_MISSING_PRIVATE,     0, JSEXN_TYPEERR, "can't access private field or method: object is not the right class")
 MSG_DEF(JSMSG_SET_MISSING_PRIVATE,     0, JSEXN_TYPEERR, "can't set private field: object is not the right class")
@@ -197,6 +198,7 @@ MSG_DEF(JSMSG_ALLOC_OVERFLOW,          0, JSEXN_INTERNALERR, "allocation size ov
 MSG_DEF(JSMSG_BAD_BYTECODE,            1, JSEXN_INTERNALERR, "unimplemented JavaScript bytecode {0}")
 MSG_DEF(JSMSG_BUFFER_TOO_SMALL,        0, JSEXN_INTERNALERR, "buffer too small")
 MSG_DEF(JSMSG_BYTECODE_TOO_BIG,        2, JSEXN_INTERNALERR, "bytecode {0} too large (limit {1})")
+MSG_DEF(JSMSG_DECODE_FAILURE,          0, JSEXN_INTERNALERR, "failed to decode cache")
 MSG_DEF(JSMSG_NEED_DIET,               1, JSEXN_INTERNALERR, "{0} too large")
 MSG_DEF(JSMSG_OUT_OF_MEMORY,           0, JSEXN_INTERNALERR, "out of memory")
 MSG_DEF(JSMSG_OVER_RECURSED,           0, JSEXN_INTERNALERR, "too much recursion")
@@ -737,7 +739,6 @@ MSG_DEF(JSMSG_UNHANDLABLE_PROMISE_REJECTION_WARNING, 0, JSEXN_WARN, "unhandlable
 // Async Iteration
 MSG_DEF(JSMSG_FOR_AWAIT_NOT_OF,        0, JSEXN_SYNTAXERR, "'for await' loop should be used with 'of'")
 MSG_DEF(JSMSG_NOT_AN_ASYNC_GENERATOR,  0, JSEXN_TYPEERR, "Not an async generator")
-MSG_DEF(JSMSG_NOT_AN_ASYNC_ITERATOR,   0, JSEXN_TYPEERR, "Not an async from sync iterator")
 MSG_DEF(JSMSG_GET_ASYNC_ITER_RETURNED_PRIMITIVE, 0, JSEXN_TYPEERR, "[Symbol.asyncIterator]() returned a non-object value")
 MSG_DEF(JSMSG_SUSPENDED_QUEUE_NOT_EMPTY, 0, JSEXN_INTERNALERR, "Async generator is in invalid state due to debugger interaction")
 
@@ -818,14 +819,14 @@ MSG_DEF(JSMSG_SHADOW_REALM_IMPORTVALUE_FAILED,    0, JSEXN_TYPEERR, "import valu
 MSG_DEF(JSMSG_SHADOW_REALM_VALUE_NOT_EXPORTED,    0, JSEXN_TYPEERR, "value not exported")
 
 // Decorators
-MSG_DEF(JSMSG_DECORATOR_INVALID_RETURN_TYPE, 0, JSEXN_TYPEERR, "Invalid value returned from decorator: decorators can only return undefined or a callable")
+MSG_DEF(JSMSG_DECORATOR_INVALID_RETURN_TYPE, 0, JSEXN_TYPEERR, "Invalid value returned from decorator")
 
 // Temporal
 MSG_DEF(JSMSG_TEMPORAL_INVALID_UNIT_RANGE,          0, JSEXN_RANGEERR, "smallestUnit must not be larger than largestUnit")
 MSG_DEF(JSMSG_TEMPORAL_INVALID_UNIT_OPTION,         2, JSEXN_RANGEERR, "{0} is not a valid {1} option in this context")
 MSG_DEF(JSMSG_TEMPORAL_INVALID_NUMBER,              1, JSEXN_RANGEERR, "{0} must be larger than zero")
 MSG_DEF(JSMSG_TEMPORAL_INVALID_INTEGER,             1, JSEXN_RANGEERR, "{0} must be an integer")
-MSG_DEF(JSMSG_TEMPORAL_INVALID_OBJECT,              2, JSEXN_RANGEERR, "{0} mustn't be a {1} object")
+MSG_DEF(JSMSG_TEMPORAL_INVALID_OBJECT,              2, JSEXN_TYPEERR, "{0} mustn't be a {1} object")
 MSG_DEF(JSMSG_TEMPORAL_MISSING_OPTION,              1, JSEXN_RANGEERR, "undefined {0} option")
 MSG_DEF(JSMSG_TEMPORAL_MISSING_PROPERTY,            1, JSEXN_TYPEERR, "{0} property is undefined")
 MSG_DEF(JSMSG_TEMPORAL_UNEXPECTED_PROPERTY,         1, JSEXN_TYPEERR, "{0} property is not undefined")

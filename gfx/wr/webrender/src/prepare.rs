@@ -33,7 +33,8 @@ use crate::render_task_cache::{RenderTaskCacheKey, to_cache_size, RenderTaskPare
 use crate::render_task::{RenderTaskKind, RenderTask};
 use crate::renderer::{GpuBufferBuilder, GpuBufferAddress};
 use crate::segment::{EdgeAaSegmentMask, SegmentBuilder};
-use crate::util::{clamp_to_scale_factor, pack_as_float};
+use crate::space::SpaceMapper;
+use crate::util::{clamp_to_scale_factor, pack_as_float, MaxRect};
 use crate::visibility::{compute_conservative_visible_rect, PrimitiveVisibility, VisibilityState};
 
 
@@ -109,7 +110,6 @@ pub fn prepare_primitives(
 
 fn can_use_clip_chain_for_quad_path(
     clip_chain: &ClipChainInstance,
-    prim_spatial_node_index: SpatialNodeIndex,
     clip_store: &ClipStore,
     data_stores: &DataStores,
 ) -> bool {
@@ -120,11 +120,6 @@ fn can_use_clip_chain_for_quad_path(
     for i in 0 .. clip_chain.clips_range.count {
         let clip_instance = clip_store.get_instance_from_range(&clip_chain.clips_range, i);
         let clip_node = &data_stores.clip[clip_instance.handle];
-
-        // Temporary hack only for landing next stage...
-        if prim_spatial_node_index != clip_node.item.spatial_node_index {
-            return false;
-        }
 
         match clip_node.item.kind {
             ClipItemKind::Rectangle { mode: ClipMode::ClipOut, .. } |
@@ -160,10 +155,12 @@ pub enum QuadRenderStrategy {
 }
 
 fn get_prim_render_strategy(
+    prim_spatial_node_index: SpatialNodeIndex,
     clip_chain: &ClipChainInstance,
     clip_store: &ClipStore,
     data_stores: &DataStores,
     can_use_nine_patch: bool,
+    spatial_tree: &SpatialTree,
 ) -> QuadRenderStrategy {
     if clip_chain.needs_mask {
         fn tile_count_for_size(size: f32) -> u16 {
@@ -194,10 +191,26 @@ fn get_prim_render_strategy(
                         if max_corner_width <= 0.5 * rect.size().width &&
                            max_corner_height <= 0.5 * rect.size().height {
 
-                            return QuadRenderStrategy::NinePatch {
-                                radius: LayoutVector2D::new(max_corner_width, max_corner_height),
-                                clip_rect: rect,
-                            };
+                            let clip_prim_coords_match = spatial_tree.is_matching_coord_system(
+                                prim_spatial_node_index,
+                                clip_node.item.spatial_node_index,
+                            );
+
+                            if clip_prim_coords_match {
+                                let map_clip_to_prim = SpaceMapper::new_with_target(
+                                    prim_spatial_node_index,
+                                    clip_node.item.spatial_node_index,
+                                    LayoutRect::max_rect(),
+                                    spatial_tree,
+                                );
+
+                                if let Some(rect) = map_clip_to_prim.map(&rect) {
+                                    return QuadRenderStrategy::NinePatch {
+                                        radius: LayoutVector2D::new(max_corner_width, max_corner_height),
+                                        clip_rect: rect,
+                                    };
+                                }
+                            }
                         }
                     }
                 }
@@ -298,7 +311,6 @@ fn prepare_prim_for_render(
             PrimitiveInstanceKind::Rectangle { ref mut use_legacy_path, .. } => {
                 *use_legacy_path = !can_use_clip_chain_for_quad_path(
                     &prim_instance.vis.clip_chain,
-                    cluster.spatial_node_index,
                     frame_state.clip_store,
                     data_stores,
                 );
@@ -687,10 +699,12 @@ fn prepare_interned_prim_for_render(
                 let prim_is_2d_axis_aligned = map_prim_to_surface.is_2d_axis_aligned();
 
                 let strategy = get_prim_render_strategy(
+                    prim_spatial_node_index,
                     &prim_instance.vis.clip_chain,
                     frame_state.clip_store,
                     data_stores,
                     prim_is_2d_scale_translation,
+                    frame_context.spatial_tree,
                 );
 
                 let prim_data = &data_stores.prim[*data_handle];
@@ -789,6 +803,7 @@ fn prepare_interned_prim_for_render(
                             true,
                             prim_instance,
                             prim_spatial_node_index,
+                            pic_context.raster_spatial_node_index,
                             main_prim_address,
                             transform_id,
                             aa_flags,
@@ -872,6 +887,7 @@ fn prepare_interned_prim_for_render(
                                     create_task,
                                     prim_instance,
                                     prim_spatial_node_index,
+                                    pic_context.raster_spatial_node_index,
                                     main_prim_address,
                                     transform_id,
                                     aa_flags,
@@ -986,6 +1002,7 @@ fn prepare_interned_prim_for_render(
                                     create_task,
                                     prim_instance,
                                     prim_spatial_node_index,
+                                    pic_context.raster_spatial_node_index,
                                     main_prim_address,
                                     transform_id,
                                     aa_flags,
@@ -1972,7 +1989,7 @@ fn adjust_mask_scale_for_max_size(device_rect: DeviceRect, device_pixel_scale: D
     }
 }
 
-fn write_prim_blocks(
+pub fn write_prim_blocks(
     builder: &mut GpuBufferBuilder,
     prim_rect: LayoutRect,
     clip_rect: LayoutRect,
@@ -2008,6 +2025,7 @@ fn add_segment(
     create_task: bool,
     prim_instance: &PrimitiveInstance,
     prim_spatial_node_index: SpatialNodeIndex,
+    raster_spatial_node_index: SpatialNodeIndex,
     main_prim_address: GpuBufferAddress,
     transform_id: TransformPaletteId,
     aa_flags: EdgeAaSegmentMask,
@@ -2029,6 +2047,7 @@ fn add_segment(
             task_size,
             RenderTaskKind::new_prim(
                 prim_spatial_node_index,
+                raster_spatial_node_index,
                 device_pixel_scale,
                 content_origin,
                 main_prim_address,
@@ -2078,7 +2097,7 @@ fn add_composite_prim(
         targets,
     );
 
-    let mut composite_quad_flags = QuadFlags::IGNORE_DEVICE_PIXEL_SCALE;
+    let mut composite_quad_flags = QuadFlags::IGNORE_DEVICE_PIXEL_SCALE | QuadFlags::APPLY_DEVICE_CLIP;
     if quad_flags.contains(QuadFlags::IS_OPAQUE) {
         composite_quad_flags |= QuadFlags::IS_OPAQUE;
     }

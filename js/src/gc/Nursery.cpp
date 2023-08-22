@@ -810,6 +810,7 @@ inline double js::Nursery::calcPromotionRate(bool* validForTenuring) const {
   // 90% full.
   *validForTenuring = used > capacity * 0.9;
 
+  MOZ_ASSERT(tenured <= used);
   return tenured / used;
 }
 
@@ -1162,8 +1163,11 @@ void js::Nursery::collect(JS::GCOptions options, JS::GCReason reason) {
 
   AutoGCSession session(gc, JS::HeapState::MinorCollecting);
 
-  stats().beginNurseryCollection(reason);
+  stats().beginNurseryCollection();
   gcprobes::MinorGCStart();
+
+  gc->callNurseryCollectionCallbacks(
+      JS::GCNurseryProgress::GC_NURSERY_COLLECTION_START, reason);
 
   maybeClearProfileDurations();
   startProfile(ProfileKey::Total);
@@ -1237,7 +1241,10 @@ void js::Nursery::collect(JS::GCOptions options, JS::GCReason reason) {
   TimeDuration totalTime = profileDurations_[ProfileKey::Total];
   sendTelemetry(reason, totalTime, wasEmpty, promotionRate, sitesPretenured);
 
-  stats().endNurseryCollection(reason);  // Calls GCNurseryCollectionCallback.
+  gc->callNurseryCollectionCallbacks(
+      JS::GCNurseryProgress::GC_NURSERY_COLLECTION_END, reason);
+
+  stats().endNurseryCollection();
   gcprobes::MinorGCEnd();
 
   timeInChunkAlloc_ = mozilla::TimeDuration::Zero();
@@ -1741,6 +1748,9 @@ MOZ_ALWAYS_INLINE void js::Nursery::setCurrentChunk(unsigned chunkno) {
   currentChunk_ = chunkno;
   position_ = chunk(chunkno).start();
   setCurrentEnd();
+
+  MOZ_ASSERT(position_ != 0);
+  MOZ_ASSERT(currentEnd_ > position_);  // Check this cannot wrap.
 }
 
 void js::Nursery::poisonAndInitCurrentChunk(size_t extent) {

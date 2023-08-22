@@ -9,10 +9,8 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 
 // eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/shopping/highlight-item.mjs";
-
-const { ShoppingUtils } = ChromeUtils.importESModule(
-  "chrome://browser/content/shopping/ShoppingUtils.sys.mjs"
-);
+// eslint-disable-next-line import/no-unassigned-import
+import "chrome://browser/content/shopping/shopping-card.mjs";
 
 const VALID_HIGHLIGHT_L10N_IDs = new Map([
   ["price", "shopping-highlight-price"],
@@ -33,32 +31,29 @@ class ReviewHighlights extends MozLitElement {
    */
   #highlightsMap;
 
+  static properties = {
+    highlights: { type: Object },
+  };
+
   static get queries() {
     return {
       reviewHighlightsListEl: "#review-highlights-list",
     };
   }
 
-  connectedCallback() {
-    super.connectedCallback();
-
-    let highlights;
+  updateHighlightsMap() {
     let availableKeys;
+    this.#highlightsMap = null;
 
     try {
-      highlights = ShoppingUtils.getHighlights();
-      if (!highlights) {
+      if (!this.highlights) {
         return;
-      } else if (highlights.error) {
-        throw new Error(
-          "Unable to fetch highlights due to error: " + highlights.error
-        );
       }
 
       // Filter highlights that have data.
-      let keys = Object.keys(highlights);
+      let keys = Object.keys(this.highlights);
       availableKeys = keys.filter(
-        key => Object.values(highlights[key]).flat().length !== 0
+        key => Object.values(this.highlights[key]).flat().length !== 0
       );
 
       // Filter valid highlight category types. Valid types are guaranteed to have data-l10n-ids.
@@ -74,19 +69,18 @@ class ReviewHighlights extends MozLitElement {
       return;
     }
 
-    this.hidden = false;
     this.#highlightsMap = new Map();
 
     for (let key of availableKeys) {
       // Ignore negative,neutral,positive sentiments and simply append review strings into one array.
-      let reviews = Object.values(highlights[key]).flat();
+      let reviews = Object.values(this.highlights[key]).flat();
       this.#highlightsMap.set(key, reviews);
     }
   }
 
   createHighlightElement(type, reviews) {
     let highlightEl = document.createElement("highlight-item");
-    // We already verify highlight type and its l10n id in connectedCallback.
+    // We already verify highlight type and its l10n id in updateHighlightsMap.
     let l10nId = VALID_HIGHLIGHT_L10N_IDs.get(type);
     highlightEl.id = type;
     highlightEl.l10nId = l10nId;
@@ -98,9 +92,14 @@ class ReviewHighlights extends MozLitElement {
   }
 
   render() {
+    this.updateHighlightsMap();
+
     if (!this.#highlightsMap) {
+      this.hidden = true;
       return null;
     }
+
+    this.hidden = false;
 
     let highlightsTemplate = [];
     for (let [key, value] of this.#highlightsMap) {
@@ -108,17 +107,14 @@ class ReviewHighlights extends MozLitElement {
       highlightsTemplate.push(highlightEl);
     }
     return html`
-      <link
-        rel="stylesheet"
-        href="chrome://browser/content/shopping/highlights.css"
-      />
-      <div id="review-highlights-wrapper">
-        <h2
-          id="review-highlights-heading"
-          data-l10n-id="shopping-highlights-heading"
-        ></h2>
-        <dl id="review-highlights-list">${highlightsTemplate}</dl>
-      </div>
+      <shopping-card
+        data-l10n-id="shopping-highlights-label"
+        data-l10n-attrs="label"
+      >
+        <div slot="content" id="review-highlights-wrapper">
+          <dl id="review-highlights-list">${highlightsTemplate}</dl>
+        </div>
+      </shopping-card>
     `;
   }
 }

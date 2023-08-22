@@ -149,10 +149,9 @@ nsresult ModuleLoader::CompileFetchedModule(
     JSContext* aCx, JS::Handle<JSObject*> aGlobal, JS::CompileOptions& aOptions,
     ModuleLoadRequest* aRequest, JS::MutableHandle<JSObject*> aModuleOut) {
   if (aRequest->GetScriptLoadContext()->mWasCompiledOMT) {
-    JS::Rooted<JS::InstantiationStorage> storage(aCx);
+    JS::InstantiationStorage storage;
     RefPtr<JS::Stencil> stencil = JS::FinishOffThreadStencil(
-        aCx, aRequest->GetScriptLoadContext()->mOffThreadToken,
-        storage.address());
+        aCx, aRequest->GetScriptLoadContext()->mOffThreadToken, &storage);
 
     aRequest->GetScriptLoadContext()->mOffThreadToken = nullptr;
 
@@ -162,7 +161,7 @@ nsresult ModuleLoader::CompileFetchedModule(
 
     JS::InstantiateOptions instantiateOptions(aOptions);
     aModuleOut.set(JS::InstantiateModuleStencil(aCx, instantiateOptions,
-                                                stencil, storage.address()));
+                                                stencil, &storage));
     if (!aModuleOut) {
       return NS_ERROR_FAILURE;
     }
@@ -272,6 +271,9 @@ already_AddRefed<ModuleLoadRequest> ModuleLoader::CreateDynamicImport(
   RefPtr<ScriptLoadContext> context = new ScriptLoadContext();
 
   if (aMaybeActiveScript) {
+    // https://html.spec.whatwg.org/multipage/webappapis.html#hostloadimportedmodule
+    // Step 6.3. Set fetchOptions to the new descendant script fetch options for
+    // referencingScript's fetch options.
     options = aMaybeActiveScript->GetFetchOptions();
     baseURL = aMaybeActiveScript->BaseURL();
   } else {
@@ -286,8 +288,19 @@ already_AddRefed<ModuleLoadRequest> ModuleLoader::CreateDynamicImport(
                   BasePrincipal::Cast(principal)->ContentScriptAddonPolicy());
     MOZ_ASSERT_IF(GetKind() == Normal, principal == document->NodePrincipal());
 
+    // https://html.spec.whatwg.org/multipage/webappapis.html#hostloadimportedmodule
+    // Step 4. Let fetchOptions be the default classic script fetch options.
+    //
+    // https://html.spec.whatwg.org/multipage/webappapis.html#default-classic-script-fetch-options
+    // The default classic script fetch options are a script fetch options whose
+    // cryptographic nonce is the empty string, integrity metadata is the empty
+    // string, parser metadata is "not-parser-inserted", credentials mode is
+    // "same-origin", referrer policy is the empty string, and fetch priority is
+    // "auto".
     options = new ScriptFetchOptions(
-        mozilla::CORS_NONE, document->GetReferrerPolicy(), principal, nullptr);
+        mozilla::CORS_NONE, document->GetReferrerPolicy(),
+        /* aNonce = */ u""_ns, ParserMetadata::NotParserInserted, principal,
+        nullptr);
     baseURL = document->GetDocBaseURI();
   }
 

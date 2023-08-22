@@ -14,17 +14,12 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.sys.mjs",
   DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
+  ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
 });
 
-ChromeUtils.defineModuleGetter(
-  lazy,
-  "ObjectUtils",
-  "resource://gre/modules/ObjectUtils.jsm"
-);
-
-XPCOMUtils.defineLazyGetter(lazy, "logger", function () {
+ChromeUtils.defineLazyGetter(lazy, "logger", function () {
   return lazy.PlacesUtils.getLogger({ prefix: "FrecencyRecalculator" });
 });
 

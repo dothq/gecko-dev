@@ -203,6 +203,8 @@ Preferences.addAll([
   // HTTPS-Only
   { id: "dom.security.https_only_mode", type: "bool" },
   { id: "dom.security.https_only_mode_pbm", type: "bool" },
+  { id: "dom.security.https_first", type: "bool" },
+  { id: "dom.security.https_first_pbm", type: "bool" },
 
   // Windows SSO
   { id: "network.http.windows-sso.enabled", type: "bool" },
@@ -445,6 +447,12 @@ var gPrivacyPane = {
     let httpsOnlyOnPBMPref = Services.prefs.getBoolPref(
       "dom.security.https_only_mode_pbm"
     );
+    let httpsFirstOnPref = Services.prefs.getBoolPref(
+      "dom.security.https_first"
+    );
+    let httpsFirstOnPBMPref = Services.prefs.getBoolPref(
+      "dom.security.https_first_pbm"
+    );
     let httpsOnlyRadioGroup = document.getElementById("httpsOnlyRadioGroup");
     let httpsOnlyExceptionButton = document.getElementById(
       "httpsOnlyExceptionButton"
@@ -452,14 +460,17 @@ var gPrivacyPane = {
 
     if (httpsOnlyOnPref) {
       httpsOnlyRadioGroup.value = "enabled";
-      httpsOnlyExceptionButton.disabled = false;
     } else if (httpsOnlyOnPBMPref) {
       httpsOnlyRadioGroup.value = "privateOnly";
-      httpsOnlyExceptionButton.disabled = true;
     } else {
       httpsOnlyRadioGroup.value = "disabled";
-      httpsOnlyExceptionButton.disabled = true;
     }
+
+    httpsOnlyExceptionButton.disabled =
+      !httpsOnlyOnPref &&
+      !httpsFirstOnPref &&
+      !httpsOnlyOnPBMPref &&
+      !httpsFirstOnPBMPref;
 
     if (
       Services.prefs.prefIsLocked("dom.security.https_only_mode") ||
@@ -500,6 +511,12 @@ var gPrivacyPane = {
       this.syncFromHttpsOnlyPref()
     );
     Preferences.get("dom.security.https_only_mode_pbm").on("change", () =>
+      this.syncFromHttpsOnlyPref()
+    );
+    Preferences.get("dom.security.https_first").on("change", () =>
+      this.syncFromHttpsOnlyPref()
+    );
+    Preferences.get("dom.security.https_first_pbm").on("change", () =>
       this.syncFromHttpsOnlyPref()
     );
   },
@@ -2266,6 +2283,7 @@ var gPrivacyPane = {
       allowVisible: false,
       prefilledHost: "",
       permissionType: "https-only-load-insecure",
+      forcedHTTP: true,
     };
     gSubDialog.open(
       "chrome://browser/content/preferences/dialogs/permissions.xhtml",

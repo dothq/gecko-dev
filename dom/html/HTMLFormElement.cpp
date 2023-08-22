@@ -327,10 +327,6 @@ bool HTMLFormElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
                                      nsAttrValue& aResult) {
   if (aNamespaceID == kNameSpaceID_None) {
     if (aAttribute == nsGkAtoms::method) {
-      if (StaticPrefs::dom_dialog_element_enabled() || IsInChromeDocument()) {
-        return aResult.ParseEnumValue(aValue, kFormMethodTableDialogEnabled,
-                                      false);
-      }
       return aResult.ParseEnumValue(aValue, kFormMethodTable, false);
     }
     if (aAttribute == nsGkAtoms::enctype) {
@@ -570,7 +566,8 @@ nsresult HTMLFormElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
             OwnerDoc()->WarnOnceAbout(
                 DeprecatedOperations::eFormSubmissionUntrustedEvent);
           }
-          DoSubmit(aVisitor.mDOMEvent);
+          RefPtr<Event> event = aVisitor.mDOMEvent;
+          DoSubmit(event);
           break;
         }
         default:
@@ -766,7 +763,8 @@ nsresult HTMLFormElement::SubmitSubmission(
 
   // If there is no link handler, then we won't actually be able to submit.
   Document* doc = GetComposedDoc();
-  nsCOMPtr<nsIDocShell> container = doc ? doc->GetDocShell() : nullptr;
+  RefPtr<nsDocShell> container =
+      doc ? nsDocShell::Cast(doc->GetDocShell()) : nullptr;
   if (!container || IsEditable()) {
     return NS_OK;
   }
@@ -811,7 +809,6 @@ nsresult HTMLFormElement::SubmitSubmission(
   //
   // Submit
   //
-  nsCOMPtr<nsIDocShell> docShell;
   uint64_t currentLoadId = 0;
 
   {
@@ -838,8 +835,8 @@ nsresult HTMLFormElement::SubmitSubmission(
     loadState->SetCsp(GetCsp());
     loadState->SetAllowFocusMove(UserActivation::IsHandlingUserInput());
 
-    rv = nsDocShell::Cast(container)->OnLinkClickSync(this, loadState, false,
-                                                      NodePrincipal());
+    nsCOMPtr<nsIPrincipal> nodePrincipal = NodePrincipal();
+    rv = container->OnLinkClickSync(this, loadState, false, nodePrincipal);
     NS_ENSURE_SUBMIT_SUCCESS(rv);
 
     mTargetContext = loadState->TargetBrowsingContext().GetMaybeDiscarded();
@@ -858,7 +855,7 @@ nsresult HTMLFormElement::SubmitSubmission(
   return rv;
 }
 
-// https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#submit-dialog
+// https://html.spec.whatwg.org/#concept-form-submit step 11
 nsresult HTMLFormElement::SubmitDialog(DialogFormSubmission* aFormSubmission) {
   // Close the dialog subject. If there is a result, let that be the return
   // value.

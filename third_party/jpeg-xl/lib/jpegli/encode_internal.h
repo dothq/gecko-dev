@@ -6,13 +6,10 @@
 #ifndef LIB_JPEGLI_ENCODE_INTERNAL_H_
 #define LIB_JPEGLI_ENCODE_INTERNAL_H_
 
-/* clang-format off */
 #include <stdint.h>
-#include <stdio.h>
-#include <jpeglib.h>
-/* clang-format on */
 
 #include "lib/jpegli/bit_writer.h"
+#include "lib/jpegli/common.h"
 #include "lib/jpegli/common_internal.h"
 #include "lib/jpegli/encode.h"
 
@@ -135,6 +132,10 @@ struct jpeg_comp_master {
   size_t total_num_tokens;
   jpegli::RefToken* next_refinement_token;
   uint8_t* next_refinement_bit;
+  float psnr_target;
+  float psnr_tolerance;
+  float min_distance;
+  float max_distance;
 };
 
 #endif  // LIB_JPEGLI_ENCODE_INTERNAL_H_

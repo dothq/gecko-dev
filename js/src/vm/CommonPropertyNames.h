@@ -28,6 +28,8 @@
   IF_DECORATORS(MACRO_(addInitializer, addInitializer, "addInitializer"))      \
   MACRO_(allowContentIter, allowContentIter, "allowContentIter")               \
   MACRO_(allowContentIterWith, allowContentIterWith, "allowContentIterWith")   \
+  MACRO_(allowContentIterWithNext, allowContentIterWithNext,                   \
+         "allowContentIterWithNext")                                           \
   MACRO_(ambiguous, ambiguous, "ambiguous")                                    \
   MACRO_(anonymous, anonymous, "anonymous")                                    \
   MACRO_(Any, Any, "Any")                                                      \
@@ -140,6 +142,7 @@
   MACRO_(defineSetter, defineSetter, "__defineSetter__")                       \
   MACRO_(delete, delete_, "delete")                                            \
   MACRO_(deleteProperty, deleteProperty, "deleteProperty")                     \
+  MACRO_(detached, detached, "detached")                                       \
   MACRO_(difference, difference, "difference")                                 \
   MACRO_(disambiguation, disambiguation, "disambiguation")                     \
   MACRO_(displayURL, displayURL, "displayURL")                                 \
@@ -237,6 +240,7 @@
   MACRO_(GetBuiltinSymbol, GetBuiltinSymbol, "GetBuiltinSymbol")               \
   MACRO_(GetInternalError, GetInternalError, "GetInternalError")               \
   MACRO_(getInternals, getInternals, "getInternals")                           \
+  MACRO_(GetIterator, GetIterator, "GetIterator")                              \
   MACRO_(GetModuleNamespace, GetModuleNamespace, "GetModuleNamespace")         \
   MACRO_(getOffsetNanosecondsFor, getOffsetNanosecondsFor,                     \
          "getOffsetNanosecondsFor")                                            \
@@ -251,8 +255,8 @@
   MACRO_(global, global, "global")                                             \
   MACRO_(globalThis, globalThis, "globalThis")                                 \
   MACRO_(group, group, "group")                                                \
+  MACRO_(groupBy, groupBy, "groupBy")                                          \
   MACRO_(groups, groups, "groups")                                             \
-  MACRO_(groupToMap, groupToMap, "groupToMap")                                 \
   MACRO_(h11, h11, "h11")                                                      \
   MACRO_(h12, h12, "h12")                                                      \
   MACRO_(h23, h23, "h23")                                                      \
@@ -268,6 +272,7 @@
   MACRO_(hour12, hour12, "hour12")                                             \
   MACRO_(hourCycle, hourCycle, "hourCycle")                                    \
   MACRO_(hours, hours, "hours")                                                \
+  MACRO2(id, id, "id")                                                         \
   MACRO2(if, if_, "if")                                                        \
   MACRO_(ignoreCase, ignoreCase, "ignoreCase")                                 \
   MACRO_(ignorePunctuation, ignorePunctuation, "ignorePunctuation")            \
@@ -281,6 +286,7 @@
   MACRO_(infinity, infinity, "infinity")                                       \
   MACRO_(intersection, intersection, "intersection")                           \
   MACRO_(Infinity, Infinity, "Infinity")                                       \
+  IF_DECORATORS(MACRO_(init, init, "init"))                                    \
   MACRO_(initial, initial, "initial")                                          \
   MACRO_(InitializeCollator, InitializeCollator, "InitializeCollator")         \
   MACRO_(InitializeDateTimeFormat, InitializeDateTimeFormat,                   \
@@ -331,6 +337,9 @@
   MACRO_(isSubsetOf, isSubsetOf, "isSubsetOf")                                 \
   MACRO_(isSupersetOf, isSupersetOf, "isSupersetOf")                           \
   MACRO_(IterableToList, IterableToList, "IterableToList")                     \
+  MACRO_(IteratorClose, IteratorClose, "IteratorClose")                        \
+  MACRO_(IteratorHelper, IteratorHelper, "Iterator Helper")                    \
+  MACRO_(IteratorNext, IteratorNext, "IteratorNext")                           \
   MACRO_(iterate, iterate, "iterate")                                          \
   MACRO_(join, join, "join")                                                   \
   MACRO2(js, js, "js")                                                         \
@@ -402,6 +411,7 @@
   MACRO_(NegativeInfinity, NegativeInfinity, "-Infinity")                      \
   MACRO_(new, new_, "new")                                                     \
   MACRO_(next, next, "next")                                                   \
+  MACRO_(nextMethod, nextMethod, "nextMethod")                                 \
   MACRO_(NFC, NFC, "NFC")                                                      \
   MACRO_(NFD, NFD, "NFD")                                                      \
   MACRO_(NFKC, NFKC, "NFKC")                                                   \
@@ -557,6 +567,9 @@
   MACRO_(ToString, ToString, "ToString")                                       \
   MACRO_(toUTCString, toUTCString, "toUTCString")                              \
   MACRO_(trailingZeroDisplay, trailingZeroDisplay, "trailingZeroDisplay")      \
+  MACRO_(transfer, transfer, "transfer")                                       \
+  MACRO_(transferToFixedLength, transferToFixedLength,                         \
+         "transferToFixedLength")                                              \
   MACRO_(trimEnd, trimEnd, "trimEnd")                                          \
   MACRO_(trimLeft, trimLeft, "trimLeft")                                       \
   MACRO_(trimRight, trimRight, "trimRight")                                    \

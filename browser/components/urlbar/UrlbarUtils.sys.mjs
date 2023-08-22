@@ -7,8 +7,6 @@
  * helper functions that are useful to all components of the urlbar.
  */
 
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
@@ -64,6 +62,9 @@ export var UrlbarUtils = {
   PROVIDER_TYPE: {
     // Should be executed immediately, because it returns heuristic results
     // that must be handed to the user asap.
+    // WARNING: these providers must be extremely fast, because the urlbar will
+    // await for them before returning results to the user. In particular it is
+    // critical to reply quickly to isActive and startQuery.
     HEURISTIC: 1,
     // Can be delayed, contains results coming from the session or the profile.
     PROFILE: 2,
@@ -1469,11 +1470,11 @@ export var UrlbarUtils = {
   },
 };
 
-XPCOMUtils.defineLazyGetter(UrlbarUtils.ICON, "DEFAULT", () => {
+ChromeUtils.defineLazyGetter(UrlbarUtils.ICON, "DEFAULT", () => {
   return lazy.PlacesUtils.favicons.defaultFavicon.spec;
 });
 
-XPCOMUtils.defineLazyGetter(UrlbarUtils, "strings", () => {
+ChromeUtils.defineLazyGetter(UrlbarUtils, "strings", () => {
   return Services.strings.createBundle(
     "chrome://global/locale/autocomplete.properties"
   );
@@ -2148,7 +2149,7 @@ export class UrlbarMuxer {
  */
 export class UrlbarProvider {
   constructor() {
-    XPCOMUtils.defineLazyGetter(this, "logger", () =>
+    ChromeUtils.defineLazyGetter(this, "logger", () =>
       UrlbarUtils.getLogger({ prefix: `Provider.${this.name}` })
     );
   }
@@ -2249,8 +2250,6 @@ export class UrlbarProvider {
   /**
    * Called when the user starts and ends an engagement with the urlbar.
    *
-   * @param {boolean} isPrivate
-   *   True if the engagement is in a private context.
    * @param {string} state
    *   The state of the engagement, one of the following strings:
    *
@@ -2299,8 +2298,10 @@ export class UrlbarProvider {
    *       The name of the provider that produced the picked result.
    *
    *   For "abandonment", only `searchString` is defined.
+   * @param {UrlbarController} controller
+   *  The associated controller.
    */
-  onEngagement(isPrivate, state, queryContext, details) {}
+  onEngagement(state, queryContext, details, controller) {}
 
   /**
    * Called when a result from the provider is selected. "Selected" refers to
@@ -2446,6 +2447,11 @@ export class UrlbarProvider {
  */
 export class SkippableTimer {
   /**
+   * This can be used to track whether the timer completed.
+   */
+  done = false;
+
+  /**
    * Creates a skippable timer for the given callback and time.
    *
    * @param {object} options An object that configures the timer
@@ -2471,6 +2477,7 @@ export class SkippableTimer {
       this._timer.initWithCallback(
         () => {
           this._log(`Timed out!`, reportErrorOnTimeout);
+          this.done = true;
           this._timer = null;
           resolve();
         },
@@ -2482,6 +2489,7 @@ export class SkippableTimer {
 
     let firePromise = new Promise(resolve => {
       this.fire = async () => {
+        this.done = true;
         if (this._timer) {
           if (!this._canceled) {
             this._log(`Skipped`);

@@ -35,10 +35,6 @@
 #define JXL_DEBUG_DOT_DETECT 0
 #endif
 
-#if JXL_DEBUG_DOT_DETECT
-#include "lib/jxl/enc_aux_out.h"
-#endif
-
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -163,13 +159,6 @@ ImageF ComputeEnergyImage(const Image3F& orig, Image3F* smooth,
     Separable5(orig.Plane(c), rect, weights1, pool, &forig.Plane(c));
   }
 
-#if JXL_DEBUG_DOT_DETECT
-  AuxOut aux;
-  aux.debug_prefix = "/tmp/sebastian/";
-  aux.DumpImage("filtered", forig);
-  aux.DumpImage("sm", *smooth);
-#endif
-
   return HWY_DYNAMIC_DISPATCH(SumOfSquareDifferences)(forig, *smooth, pool);
 }
 
@@ -293,7 +282,8 @@ std::vector<ConnectedComponent> FindCC(const ImageF& energy, double t_low,
                                        double t_high, uint32_t maxWindow,
                                        double minScore) {
   const int kExtraRect = 4;
-  ImageF img = CopyImage(energy);
+  ImageF img(energy.xsize(), energy.ysize());
+  CopyImageTo(energy, &img);
   std::vector<ConnectedComponent> ans;
   for (size_t y = 0; y < img.ysize(); y++) {
     float* JXL_RESTRICT row = img.Row(y);
@@ -538,12 +528,6 @@ std::vector<PatchInfo> DetectGaussianEllipses(
   std::vector<PatchInfo> dots;
   Image3F smooth(opsin.xsize(), opsin.ysize());
   ImageF energy = ComputeEnergyImage(opsin, &smooth, pool);
-#if JXL_DEBUG_DOT_DETECT
-  AuxOut aux;
-  aux.debug_prefix = "/tmp/sebastian/";
-  aux.DumpXybImage("smooth", smooth);
-  aux.DumpPlaneNormalized("energy", energy);
-#endif  // JXL_DEBUG_DOT_DETECT
   std::vector<ConnectedComponent> components = FindCC(
       energy, params.t_low, params.t_high, params.maxWinSize, params.minScore);
   size_t numCC =
@@ -596,19 +580,6 @@ std::vector<PatchInfo> DetectGaussianEllipses(
       }
     }
   }
-#if JXL_DEBUG_DOT_DETECT
-  JXL_DEBUG(JXL_DEBUG_DOT_DETECT, "Candidates: %" PRIuS ", Dots: %" PRIuS "\n",
-            components.size(), dots.size());
-  ApplyGaussianEllipses(&smooth, dots, 1.0);
-  aux.DumpXybImage("draw", smooth);
-  ApplyGaussianEllipses(&smooth, dots, -1.0);
-
-  auto qdots = QuantizeGaussianEllipses(dots, qParams);
-  auto deq = DequantizeGaussianEllipses(qdots, qParams);
-  ApplyGaussianEllipses(&smooth, deq, 1.0);
-  aux.DumpXybImage("qdraw", smooth);
-  ApplyGaussianEllipses(&smooth, deq, -1.0);
-#endif  // JXL_DEBUG_DOT_DETECT
   return dots;
 }
 

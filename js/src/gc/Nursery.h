@@ -68,7 +68,7 @@ class GCSchedulingTunables;
 class TenuringTracer;
 }  // namespace gc
 
-class alignas(TypicalCacheLineSize) Nursery {
+class Nursery {
  public:
   explicit Nursery(gc::GCRuntime* gc);
   ~Nursery();
@@ -141,11 +141,15 @@ class alignas(TypicalCacheLineSize) Nursery {
 
     void* cell =
         reinterpret_cast<void*>(uintptr_t(ptr) + sizeof(gc::NurseryCellHeader));
+    if (!cell) {
+      MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE(
+          "Successful allocation cannot result in nullptr");
+    }
 
     // Update the allocation site. This code is also inlined in
     // MacroAssembler::updateAllocSite.
     uint32_t allocCount = site->incAllocCount();
-    if (MOZ_UNLIKELY(allocCount == 1)) {
+    if (allocCount == 1) {
       pretenuringNursery.insertIntoAllocatedList(site);
     }
     MOZ_ASSERT_IF(site->isNormal(), site->isInAllocatedList());
@@ -274,8 +278,8 @@ class alignas(TypicalCacheLineSize) Nursery {
   // At the end of a minor collection, all blocks in the set `trailersAdded_ -
   // trailersRemoved_[0 .. trailersRemovedUsed_ - 1]` are handed back to the
   // `mallocedBlockCache_`.
-  [[nodiscard]] bool registerTrailer(PointerAndUint7 blockAndListID,
-                                     size_t nBytes) {
+  [[nodiscard]] inline bool registerTrailer(PointerAndUint7 blockAndListID,
+                                            size_t nBytes) {
     MOZ_ASSERT(trailersAdded_.length() == trailersRemoved_.length());
     MOZ_ASSERT(nBytes > 0);
     if (MOZ_UNLIKELY(!trailersAdded_.append(blockAndListID))) {
@@ -296,7 +300,7 @@ class alignas(TypicalCacheLineSize) Nursery {
     return true;
   }
 
-  void unregisterTrailer(void* block) {
+  void inline unregisterTrailer(void* block) {
     MOZ_ASSERT(trailersRemovedUsed_ < trailersRemoved_.length());
     trailersRemoved_[trailersRemovedUsed_] = block;
     trailersRemovedUsed_++;
@@ -619,6 +623,11 @@ class alignas(TypicalCacheLineSize) Nursery {
     }
 
     void* ptr = reinterpret_cast<void*>(position());
+    if (!ptr) {
+      MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE(
+          "Successful allocation cannot result in nullptr");
+    }
+
     position_ = position() + size;
 
     DebugOnlyPoison(ptr, JS_ALLOCATED_NURSERY_PATTERN, size,

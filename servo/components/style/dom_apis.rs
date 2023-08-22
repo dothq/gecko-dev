@@ -15,7 +15,9 @@ use crate::values::AtomIdent;
 use selectors::attr::CaseSensitivity;
 use selectors::matching::{
     self, IgnoreNthChildForInvalidation, MatchingContext, MatchingMode, NeedsSelectorFlags,
+    SelectorCaches,
 };
+use selectors::attr::{AttrSelectorOperation, NamespaceConstraint};
 use selectors::parser::{Combinator, Component, LocalName};
 use selectors::{Element, SelectorList};
 use smallvec::SmallVec;
@@ -29,12 +31,12 @@ pub fn element_matches<E>(
 where
     E: Element,
 {
-    let mut nth_index_cache = Default::default();
+    let mut selector_caches = SelectorCaches::default();
 
     let mut context = MatchingContext::new(
         MatchingMode::Normal,
         None,
-        &mut nth_index_cache,
+        &mut selector_caches,
         quirks_mode,
         NeedsSelectorFlags::No,
         IgnoreNthChildForInvalidation::No,
@@ -53,12 +55,12 @@ pub fn element_closest<E>(
 where
     E: Element,
 {
-    let mut nth_index_cache = Default::default();
+    let mut selector_caches = SelectorCaches::default();
 
     let mut context = MatchingContext::new(
         MatchingMode::Normal,
         None,
-        &mut nth_index_cache,
+        &mut selector_caches,
         quirks_mode,
         NeedsSelectorFlags::No,
         IgnoreNthChildForInvalidation::No,
@@ -437,7 +439,6 @@ where
     E: TElement,
     Q: SelectorQuery<E>,
 {
-    // TODO: Maybe we could implement a fast path for [name=""]?
     match *component {
         Component::ExplicitUniversalType => {
             collect_all_elements::<E, Q, _>(root, results, |_| true)
@@ -448,6 +449,34 @@ where
         Component::LocalName(ref local_name) => {
             collect_all_elements::<E, Q, _>(root, results, |element| {
                 local_name_matches(element, local_name)
+            })
+        },
+        Component::AttributeInNoNamespaceExists {
+            ref local_name,
+            ref local_name_lower,
+        } => {
+            collect_all_elements::<E, Q, _>(root, results, |element| {
+                element.has_attr_in_no_namespace(matching::select_name(&element, local_name, local_name_lower))
+            })
+        },
+        Component::AttributeInNoNamespace {
+            ref local_name,
+            ref value,
+            operator,
+            case_sensitivity,
+        } => {
+            let empty_namespace = selectors::parser::namespace_empty_string::<E::Impl>();
+            let namespace_constraint = NamespaceConstraint::Specific(&empty_namespace);
+            collect_all_elements::<E, Q, _>(root, results, |element| {
+                element.attr_matches(
+                    &namespace_constraint,
+                    local_name,
+                    &AttrSelectorOperation::WithValue {
+                        operator,
+                        case_sensitivity: matching::to_unconditional_case_sensitivity(case_sensitivity, &element),
+                        value,
+                    },
+                )
             })
         },
         ref other => {
@@ -708,13 +737,13 @@ pub fn query_selector<E, Q>(
 {
     use crate::invalidation::element::invalidator::TreeStyleInvalidator;
 
-    let mut nth_index_cache = Default::default();
+    let mut selector_caches = SelectorCaches::default();
     let quirks_mode = root.owner_doc().quirks_mode();
 
     let mut matching_context = MatchingContext::new(
         MatchingMode::Normal,
         None,
-        &mut nth_index_cache,
+        &mut selector_caches,
         quirks_mode,
         NeedsSelectorFlags::No,
         IgnoreNthChildForInvalidation::No,

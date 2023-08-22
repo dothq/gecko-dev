@@ -4735,10 +4735,10 @@ void nsTextFrame::GetTextDecorations(
     // If we're on a ruby frame other than ruby text container, we
     // should continue.
     mozilla::StyleDisplay display = f->GetDisplay();
-    if (!nsStyleDisplay::IsInlineFlow(display) &&
-        (!nsStyleDisplay::IsRubyDisplayType(display) ||
+    if (!display.IsInlineFlow() &&
+        (!display.IsRuby() ||
          display == mozilla::StyleDisplay::RubyTextContainer) &&
-        nsStyleDisplay::IsDisplayTypeInlineOutside(display)) {
+        display.IsInlineOutside()) {
       break;
     }
 
@@ -6836,6 +6836,9 @@ void nsTextFrame::DrawTextRunAndDecorations(
       scaledRestorer.SetContext(aParams.context);
       gfxMatrix unscaled = aParams.context->CurrentMatrixDouble();
       gfxPoint pt(x / app, y / app);
+      if (GetTextRun(nsTextFrame::eInflated)->IsRightToLeft()) {
+        pt.x += gfxFloat(frameSize.width) / app;
+      }
       unscaled.PreTranslate(pt)
           .PreScale(1.0f / scaleFactor, 1.0f)
           .PreTranslate(-pt);
@@ -7383,13 +7386,13 @@ nsPoint nsTextFrame::GetPointFromIterator(const gfxSkipCharsIterator& aIter,
     }
   } else {
     point.y = 0;
+    if (Style()->IsTextCombined()) {
+      iSize *= GetTextCombineScaleFactor(this);
+    }
     if (mTextRun->IsInlineReversed()) {
       point.x = mRect.width - iSize;
     } else {
       point.x = iSize;
-    }
-    if (Style()->IsTextCombined()) {
-      point.x *= GetTextCombineScaleFactor(this);
     }
   }
   return point;
@@ -7450,27 +7453,34 @@ nsresult nsTextFrame::GetCharacterRectsInRange(int32_t aInOffset,
   // place if it's positioned there
   properties.InitializeForDisplay(false);
 
+  // Initialize iter; this will call FindClusterStart if necessary to align
+  // iter to a cluster boundary.
   UpdateIteratorFromOffset(properties, aInOffset, iter);
+  nsPoint point = GetPointFromIterator(iter, properties);
 
   const int32_t kContentEnd = GetContentEnd();
   const int32_t kEndOffset = std::min(aInOffset + aLength, kContentEnd);
-  while (aInOffset < kEndOffset) {
-    if (!iter.IsOriginalCharSkipped() &&
-        !mTextRun->IsClusterStart(iter.GetSkippedOffset())) {
-      FindClusterStart(mTextRun,
-                       properties.GetStart().GetOriginalOffset() +
-                           properties.GetOriginalLength(),
-                       &iter);
-    }
 
-    nsPoint point = GetPointFromIterator(iter, properties);
-    nsRect rect;
-    rect.x = point.x;
-    rect.y = point.y;
+  if (aInOffset >= kEndOffset) {
+    return NS_OK;
+  }
 
+  if (!aRects.SetCapacity(aRects.Length() + kEndOffset - aInOffset,
+                          mozilla::fallible)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  do {
+    // We'd like to assert here that |point| matches
+    // |GetPointFromIterator(iter, properties)|, which in principle should be
+    // true; however, testcases with vast dimensions can lead to coordinate
+    // overflow and disrupt the calculations. So we've dropped the assertion
+    // to avoid tripping the fuzzer unnecessarily.
+
+    // Measure to the end of the cluster.
     nscoord iSize = 0;
+    gfxSkipCharsIterator nextIter(iter);
     if (aInOffset < kContentEnd) {
-      gfxSkipCharsIterator nextIter(iter);
       nextIter.AdvanceOriginal(1);
       if (!nextIter.IsOriginalCharSkipped() &&
           !mTextRun->IsClusterStart(nextIter.GetSkippedOffset()) &&
@@ -7484,6 +7494,12 @@ nsresult nsTextFrame::GetCharacterRectsInRange(int32_t aInOffset,
       iSize = NSToCoordCeilClamped(advance);
     }
 
+    // Compute the cluster rect, depending on directionality, and update
+    // point to the origin we'll need for the next cluster.
+    nsRect rect;
+    rect.x = point.x;
+    rect.y = point.y;
+
     if (mTextRun->IsVertical()) {
       rect.width = mRect.width;
       rect.height = iSize;
@@ -7492,28 +7508,39 @@ nsresult nsTextFrame::GetCharacterRectsInRange(int32_t aInOffset,
         // bottom left instead of the top left. Move the origin to the top left
         // by subtracting the character's height.
         rect.y -= rect.height;
+        point.y -= iSize;
+      } else {
+        point.y += iSize;
       }
     } else {
+      if (Style()->IsTextCombined()) {
+        // The scale factor applies to the inline advance of the glyphs, so it
+        // affects both the rect width and the origin point for the next glyph.
+        iSize *= GetTextCombineScaleFactor(this);
+      }
       rect.width = iSize;
       rect.height = mRect.height;
-      if (Style()->IsTextCombined()) {
-        rect.width *= GetTextCombineScaleFactor(this);
-      }
       if (mTextRun->IsInlineReversed()) {
         // The iterator above returns a point with the origin at the
         // top right instead of the top left. Move the origin to the top left by
-        // subtracting the character's width. This is intentionally done after
-        // GetTextCombineScaleFactor() so we use the final, scaled width.
-        rect.x -= rect.width;
+        // subtracting the character's width.
+        rect.x -= iSize;
+        point.x -= iSize;
+      } else {
+        point.x += iSize;
       }
     }
-    aRects.AppendElement(rect);
-    aInOffset++;
-    // Don't advance iter if we've reached the end
-    if (aInOffset < kEndOffset) {
-      iter.AdvanceOriginal(1);
+
+    // Set the rect for all characters in the cluster.
+    int32_t end = std::min(kEndOffset, nextIter.GetOriginalOffset());
+    while (aInOffset < end) {
+      aRects.AppendElement(rect);
+      aInOffset++;
     }
-  }
+
+    // Advance iter for the next cluster.
+    iter = nextIter;
+  } while (aInOffset < kEndOffset);
 
   return NS_OK;
 }

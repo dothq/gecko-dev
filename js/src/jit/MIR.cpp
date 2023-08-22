@@ -37,8 +37,9 @@
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/Uint8Clamped.h"
 #include "wasm/WasmCode.h"
+#include "wasm/WasmFeatures.h"  // for wasm::ReportSimdAnalysis
 
-#include "vm/JSAtom-inl.h"
+#include "vm/JSAtomUtils-inl.h"  // TypeName
 #include "wasm/WasmInstance-inl.h"
 
 using namespace js;
@@ -7188,16 +7189,25 @@ MDefinition* MNormalizeSliceTerm::foldsTo(TempAllocator& alloc) {
 }
 
 bool MWasmShiftSimd128::congruentTo(const MDefinition* ins) const {
+  if (!ins->isWasmShiftSimd128()) {
+    return false;
+  }
   return ins->toWasmShiftSimd128()->simdOp() == simdOp_ &&
          congruentIfOperandsEqual(ins);
 }
 
 bool MWasmShuffleSimd128::congruentTo(const MDefinition* ins) const {
+  if (!ins->isWasmShuffleSimd128()) {
+    return false;
+  }
   return ins->toWasmShuffleSimd128()->shuffle().equals(&shuffle_) &&
          congruentIfOperandsEqual(ins);
 }
 
 bool MWasmUnarySimd128::congruentTo(const MDefinition* ins) const {
+  if (!ins->isWasmUnarySimd128()) {
+    return false;
+  }
   return ins->toWasmUnarySimd128()->simdOp() == simdOp_ &&
          congruentIfOperandsEqual(ins);
 }
@@ -7244,7 +7254,7 @@ static MDefinition* FoldTrivialWasmCasts(TempAllocator& alloc,
   return nullptr;
 }
 
-MDefinition* MWasmGcObjectIsSubtypeOfAbstract::foldsTo(TempAllocator& alloc) {
+MDefinition* MWasmRefIsSubtypeOfAbstract::foldsTo(TempAllocator& alloc) {
   MDefinition* folded = FoldTrivialWasmCasts(alloc, sourceType(), destType());
   if (folded) {
     return folded;
@@ -7252,7 +7262,7 @@ MDefinition* MWasmGcObjectIsSubtypeOfAbstract::foldsTo(TempAllocator& alloc) {
   return this;
 }
 
-MDefinition* MWasmGcObjectIsSubtypeOfConcrete::foldsTo(TempAllocator& alloc) {
+MDefinition* MWasmRefIsSubtypeOfConcrete::foldsTo(TempAllocator& alloc) {
   MDefinition* folded = FoldTrivialWasmCasts(alloc, sourceType(), destType());
   if (folded) {
     return folded;

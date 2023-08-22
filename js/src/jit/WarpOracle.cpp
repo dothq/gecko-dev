@@ -898,6 +898,10 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
     }
   }
 
+  // Check GC is not possible between updating stub pointers and creating the
+  // snapshot.
+  JS::AutoAssertNoGC nogc;
+
   // Copy the ICStub data to protect against the stub being unlinked or mutated.
   // We don't need to copy the CacheIRStubInfo: because we store and trace the
   // stub's JitCode*, the baselineCacheIRStubCodes_ map in JitZone will keep it
@@ -910,8 +914,8 @@ AbortReasonOr<Ok> WarpScriptOracle::maybeInlineIC(WarpOpSnapshotList& snapshots,
       return abort(AbortReason::Alloc);
     }
 
-    // Note: nursery pointers are handled below so we don't need to trigger any
-    // GC barriers and can do a bitwise copy.
+    // Note: nursery pointers are handled below and the read barrier for weak
+    // pointers is handled above so we can do a bitwise copy here.
     std::copy_n(stubData, bytesNeeded, stubDataCopy);
 
     if (!replaceNurseryAndAllocSitePointers(stub, stubInfo, stubDataCopy)) {
@@ -1016,6 +1020,12 @@ AbortReasonOr<bool> WarpScriptOracle::maybeInlineCall(
     return abort(AbortReason::Alloc);
   }
 
+  // Read barrier for weak stub data copied into the snapshot.
+  Zone* zone = jitCode->zone();
+  if (zone->needsIncrementalBarrier()) {
+    TraceWeakCacheIRStub(zone->barrierTracer(), stub, stub->stubInfo());
+  }
+
   // Take a snapshot of the inlined script (which may do more
   // inlining recursively).
   WarpScriptOracle scriptOracle(cx_, oracle_, targetScript, info, icScript);
@@ -1032,7 +1042,9 @@ AbortReasonOr<bool> WarpScriptOracle::maybeInlineCall(
         // If the target script can't be warp-compiled, mark it as
         // uninlineable, clean up, and fall through to the non-inlined path.
         ICEntry* entry = icScript_->icEntryForStub(fallbackStub);
-        fallbackStub->unlinkStub(cx_->zone(), entry, /*prev=*/nullptr, stub);
+        if (entry->firstStub() == stub) {
+          fallbackStub->unlinkStub(cx_->zone(), entry, /*prev=*/nullptr, stub);
+        }
         targetScript->setUninlineable();
         info_->inlineScriptTree()->removeCallee(inlineScriptTree);
         if (isTrialInlined) {
@@ -1130,6 +1142,9 @@ bool WarpScriptOracle::replaceNurseryAndAllocSitePointers(
   // initial heap to use, because the site's state may be mutated by the main
   // thread while we are compiling.
   //
+  // If the stub data contains weak pointers expose them to active JS. This is
+  // necessary as these will now be strong references in the snapshot.
+  //
   // Also asserts non-object fields don't contain nursery pointers.
 
   uint32_t field = 0;
@@ -1146,6 +1161,14 @@ bool WarpScriptOracle::replaceNurseryAndAllocSitePointers(
         static_assert(std::is_convertible_v<Shape*, gc::TenuredCell*>,
                       "Code assumes shapes are tenured");
         break;
+      case StubField::Type::WeakShape: {
+        static_assert(std::is_convertible_v<Shape*, gc::TenuredCell*>,
+                      "Code assumes shapes are tenured");
+        Shape* shape =
+            stubInfo->getStubField<ICCacheIRStub, Shape*>(stub, offset);
+        gc::ExposeGCThingToActiveJS(JS::GCCellPtr(shape));
+        break;
+      }
       case StubField::Type::GetterSetter:
         static_assert(std::is_convertible_v<GetterSetter*, gc::TenuredCell*>,
                       "Code assumes GetterSetters are tenured");
@@ -1162,9 +1185,13 @@ bool WarpScriptOracle::replaceNurseryAndAllocSitePointers(
         static_assert(std::is_convertible_v<JitCode*, gc::TenuredCell*>,
                       "Code assumes JitCodes are tenured");
         break;
-      case StubField::Type::JSObject: {
+      case StubField::Type::JSObject:
+      case StubField::Type::WeakObject: {
         JSObject* obj =
             stubInfo->getStubField<ICCacheIRStub, JSObject*>(stub, offset);
+        if (fieldType == StubField::Type::WeakObject) {
+          gc::ExposeGCThingToActiveJS(JS::GCCellPtr(obj));
+        }
         if (IsInsideNursery(obj)) {
           uint32_t nurseryIndex;
           if (!oracle_->registerNurseryObject(obj, &nurseryIndex)) {

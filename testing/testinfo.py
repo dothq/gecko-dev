@@ -487,7 +487,11 @@ class TestInfoReport(TestInfo):
         bug_data = []
         fields = ["id", "product", "component", "summary"]
         for bug_index in range(0, len(buglist), max_bugs):
-            bugs = [str(x) for x in buglist[bug_index:max_bugs]]
+            bugs = [str(x) for x in buglist[bug_index : bug_index + max_bugs]]
+            if not bugs:
+                print(f"warning: found no bugs in range {bug_index}, +{max_bugs}")
+                continue
+
             url = "https://bugzilla.mozilla.org/rest/bug?include_fields=%s&id=%s" % (
                 ",".join(fields),
                 ",".join(bugs),
@@ -764,7 +768,8 @@ class TestInfoReport(TestInfo):
                             if show_testruns:
                                 total_runs = 0
                                 for m in test_info["manifest"]:
-                                    total_runs += sum([x[3] for x in runcount[m]])
+                                    if m in runcount:
+                                        total_runs += sum([x[3] for x in runcount[m]])
                                 if total_runs > 0:
                                     test_info["total_runs"] = total_runs
 

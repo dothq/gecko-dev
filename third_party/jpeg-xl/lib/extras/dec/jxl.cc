@@ -146,7 +146,9 @@ bool DecodeImageJXL(const uint8_t* bytes, size_t bytes_size,
   bool can_reconstruct_jpeg = false;
   std::vector<uint8_t> jpeg_data_chunk;
   if (jpeg_bytes != nullptr) {
-    jpeg_data_chunk.resize(16384);
+    // This bound is very likely to be enough to hold the entire
+    // reconstructed JPEG, to avoid having to do expensive retries.
+    jpeg_data_chunk.resize(bytes_size * 3 / 2 + 1024);
     jpeg_bytes->resize(0);
   }
 
@@ -345,34 +347,35 @@ bool DecodeImageJXL(const uint8_t* bytes, size_t bytes_size,
       }
       size_t icc_size = 0;
       JxlColorProfileTarget target = JXL_COLOR_PROFILE_TARGET_DATA;
-      if (JXL_DEC_SUCCESS !=
-          JxlDecoderGetICCProfileSize(dec, nullptr, target, &icc_size)) {
-        fprintf(stderr, "JxlDecoderGetICCProfileSize failed\n");
-      }
-      if (icc_size != 0) {
-        ppf->icc.resize(icc_size);
-        if (JXL_DEC_SUCCESS !=
-            JxlDecoderGetColorAsICCProfile(dec, nullptr, target,
-                                           ppf->icc.data(), icc_size)) {
-          fprintf(stderr, "JxlDecoderGetColorAsICCProfile failed\n");
-          return false;
-        }
-      }
+      ppf->color_encoding.color_space = JXL_COLOR_SPACE_UNKNOWN;
       if (JXL_DEC_SUCCESS != JxlDecoderGetColorAsEncodedProfile(
-                                 dec, nullptr, target, &ppf->color_encoding)) {
-        ppf->color_encoding.color_space = JXL_COLOR_SPACE_UNKNOWN;
+                                 dec, target, &ppf->color_encoding) ||
+          dparams.need_icc) {
+        // only get ICC if it is not an Enum color encoding
+        if (JXL_DEC_SUCCESS !=
+            JxlDecoderGetICCProfileSize(dec, target, &icc_size)) {
+          fprintf(stderr, "JxlDecoderGetICCProfileSize failed\n");
+        }
+        if (icc_size != 0) {
+          ppf->icc.resize(icc_size);
+          if (JXL_DEC_SUCCESS != JxlDecoderGetColorAsICCProfile(
+                                     dec, target, ppf->icc.data(), icc_size)) {
+            fprintf(stderr, "JxlDecoderGetColorAsICCProfile failed\n");
+            return false;
+          }
+        }
       }
       icc_size = 0;
       target = JXL_COLOR_PROFILE_TARGET_ORIGINAL;
       if (JXL_DEC_SUCCESS !=
-          JxlDecoderGetICCProfileSize(dec, nullptr, target, &icc_size)) {
+          JxlDecoderGetICCProfileSize(dec, target, &icc_size)) {
         fprintf(stderr, "JxlDecoderGetICCProfileSize failed\n");
       }
       if (icc_size != 0) {
         ppf->orig_icc.resize(icc_size);
         if (JXL_DEC_SUCCESS !=
-            JxlDecoderGetColorAsICCProfile(dec, nullptr, target,
-                                           ppf->orig_icc.data(), icc_size)) {
+            JxlDecoderGetColorAsICCProfile(dec, target, ppf->orig_icc.data(),
+                                           icc_size)) {
           fprintf(stderr, "JxlDecoderGetColorAsICCProfile failed\n");
           return false;
         }

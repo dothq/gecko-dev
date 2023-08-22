@@ -6,7 +6,6 @@ const SplitBox = require("devtools/client/shared/components/splitter/SplitBox");
 
 import React, { Component } from "react";
 import PropTypes from "prop-types";
-import { isGeneratedId } from "devtools/client/shared/source-map-loader/index";
 import { connect } from "../../utils/connect";
 
 import actions from "../../actions";
@@ -20,7 +19,6 @@ import {
   getShouldPauseOnCaughtExceptions,
   getThreads,
   getCurrentThread,
-  getThreadContext,
   getPauseReason,
   getShouldBreakpointsPaneOpenOnPause,
   getSkipPausing,
@@ -75,8 +73,7 @@ class SecondaryPanes extends Component {
 
   static get propTypes() {
     return {
-      cx: PropTypes.object.isRequired,
-      evaluateExpressions: PropTypes.func.isRequired,
+      evaluateExpressionsForCurrentContext: PropTypes.func.isRequired,
       expressions: PropTypes.array.isRequired,
       hasFrames: PropTypes.bool.isRequired,
       horizontal: PropTypes.bool.isRequired,
@@ -118,7 +115,7 @@ class SecondaryPanes extends Component {
         debugBtn(
           evt => {
             evt.stopPropagation();
-            this.props.evaluateExpressions(this.props.cx);
+            this.props.evaluateExpressionsForCurrentContext();
           },
           "refresh",
           "active",
@@ -173,7 +170,7 @@ class SecondaryPanes extends Component {
       debugBtn(
         evt => {
           evt.stopPropagation();
-          this.props.removeAllBreakpoints(this.props.cx);
+          this.props.removeAllBreakpoints();
         },
         "removeAll",
         "active",
@@ -200,7 +197,7 @@ class SecondaryPanes extends Component {
 
     if (
       !selectedFrame ||
-      isGeneratedId(selectedFrame.location.source.id) ||
+      !selectedFrame.location.source.isOriginal ||
       source?.isPrettyPrinted
     ) {
       return null;
@@ -507,7 +504,6 @@ const mapStateToProps = state => {
   );
 
   return {
-    cx: getThreadContext(state),
     expressions: getExpressions(state),
     hasFrames: !!getTopFrame(state, thread),
     renderWhyPauseDelay: getRenderWhyPauseDelay(state, thread),
@@ -526,7 +522,8 @@ const mapStateToProps = state => {
 };
 
 export default connect(mapStateToProps, {
-  evaluateExpressions: actions.evaluateExpressions,
+  evaluateExpressionsForCurrentContext:
+    actions.evaluateExpressionsForCurrentContext,
   pauseOnExceptions: actions.pauseOnExceptions,
   toggleMapScopes: actions.toggleMapScopes,
   breakOnNext: actions.breakOnNext,

@@ -1433,20 +1433,6 @@ bool ContentParent::ValidatePrincipal(
   return remoteTypeSiteOriginNoSuffix.Equals(siteOriginNoSuffix);
 }
 
-mozilla::ipc::IPCResult ContentParent::RecvRemovePermission(
-    nsIPrincipal* aPrincipal, const nsACString& aPermissionType,
-    nsresult* aRv) {
-  if (!aPrincipal) {
-    return IPC_FAIL(this, "No principal");
-  }
-
-  if (!ValidatePrincipal(aPrincipal)) {
-    LogAndAssertFailedPrincipalValidationInfo(aPrincipal, __func__);
-  }
-  *aRv = Permissions::RemovePermission(aPrincipal, aPermissionType);
-  return IPC_OK();
-}
-
 /*static*/
 already_AddRefed<RemoteBrowser> ContentParent::CreateBrowser(
     const TabContext& aContext, Element* aFrameElement,
@@ -6347,6 +6333,15 @@ void ContentParent::CancelContentJSExecutionIfRunning(
       aCancelContentJSOptions);
 }
 
+void ContentParent::SetMainThreadQoSPriority(
+    nsIThread::QoSPriority aQoSPriority) {
+  if (!mHangMonitorActor) {
+    return;
+  }
+
+  ProcessHangMonitor::SetMainThreadQoSPriority(mHangMonitorActor, aQoSPriority);
+}
+
 void ContentParent::UpdateCookieStatus(nsIChannel* aChannel) {
   PNeckoParent* neckoParent = LoneManagedOrNullAsserts(ManagedPNeckoParent());
   PCookieServiceParent* csParent =
@@ -7830,9 +7825,10 @@ mozilla::ipc::IPCResult ContentParent::RecvHistoryGo(
     uint64_t aHistoryEpoch, bool aRequireUserInteraction, bool aUserActivation,
     HistoryGoResolver&& aResolveRequestedIndex) {
   if (!aContext.IsDiscarded()) {
-    aResolveRequestedIndex(aContext.get_canonical()->HistoryGo(
-        aOffset, aHistoryEpoch, aRequireUserInteraction, aUserActivation,
-        Some(ChildID())));
+    RefPtr<CanonicalBrowsingContext> canonical = aContext.get_canonical();
+    aResolveRequestedIndex(
+        canonical->HistoryGo(aOffset, aHistoryEpoch, aRequireUserInteraction,
+                             aUserActivation, Some(ChildID())));
   }
   return IPC_OK();
 }
@@ -8055,7 +8051,8 @@ mozilla::ipc::IPCResult ContentParent::RecvHistoryReload(
     const MaybeDiscarded<BrowsingContext>& aContext,
     const uint32_t aReloadFlags) {
   if (!aContext.IsDiscarded()) {
-    nsISHistory* shistory = aContext.get_canonical()->GetSessionHistory();
+    nsCOMPtr<nsISHistory> shistory =
+        aContext.get_canonical()->GetSessionHistory();
     if (shistory) {
       shistory->Reload(aReloadFlags);
     }

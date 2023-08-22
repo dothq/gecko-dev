@@ -5,11 +5,10 @@
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
 import { MigrationUtils } from "resource:///modules/MigrationUtils.sys.mjs";
 import { E10SUtils } from "resource://gre/modules/E10SUtils.sys.mjs";
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const lazy = {};
 
-XPCOMUtils.defineLazyGetter(lazy, "gFluentStrings", function () {
+ChromeUtils.defineLazyGetter(lazy, "gFluentStrings", function () {
   return new Localization([
     "branding/brand.ftl",
     "browser/migrationWizard.ftl",
@@ -20,6 +19,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   FirefoxProfileMigrator: "resource:///modules/FirefoxProfileMigrator.sys.mjs",
   InternalTestingProfileMigrator:
     "resource:///modules/InternalTestingProfileMigrator.sys.mjs",
+  LoginCSVImport: "resource://gre/modules/LoginCSVImport.sys.mjs",
   MigrationWizardConstants:
     "chrome://browser/content/migration/migration-wizard-constants.mjs",
   PasswordFileMigrator: "resource:///modules/FileMigrators.sys.mjs",
@@ -31,9 +31,11 @@ if (AppConstants.platform == "macosx") {
   });
 }
 
-XPCOMUtils.defineLazyModuleGetters(lazy, {
-  LoginCSVImport: "resource://gre/modules/LoginCSVImport.jsm",
-});
+/**
+ * Set to true once the first instance of MigrationWizardParent has received
+ * a "GetAvailableMigrators" message.
+ */
+let gHasOpenedBefore = false;
 
 /**
  * This class is responsible for communicating with MigrationUtils to do the
@@ -76,6 +78,8 @@ export class MigrationWizardParent extends JSWindowActorParent {
 
     switch (message.name) {
       case "GetAvailableMigrators": {
+        let start = Cu.now();
+
         let availableMigrators = [];
         for (const key of MigrationUtils.availableMigratorKeys) {
           availableMigrators.push(this.#getMigratorAndProfiles(key));
@@ -98,6 +102,15 @@ export class MigrationWizardParent extends JSWindowActorParent {
           .sort((a, b) => {
             return b.lastModifiedDate - a.lastModifiedDate;
           });
+
+        let elapsed = Cu.now() - start;
+        if (!gHasOpenedBefore) {
+          gHasOpenedBefore = true;
+          Services.telemetry.scalarSet(
+            "migration.time_to_produce_migrator_list",
+            elapsed
+          );
+        }
 
         return filteredResults;
       }
@@ -361,22 +374,33 @@ export class MigrationWizardParent extends JSWindowActorParent {
         progress,
       });
 
-      let summary = await lazy.LoginCSVImport.importFromCSV(
-        migrationDetails.safariPasswordFilePath
-      );
-      let quantity = summary.filter(entry => entry.result == "added").length;
+      try {
+        let summary = await lazy.LoginCSVImport.importFromCSV(
+          migrationDetails.safariPasswordFilePath
+        );
+        let quantity = summary.filter(entry => entry.result == "added").length;
 
-      progress[
-        lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PASSWORDS
-      ] = {
-        value: lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS,
-        message: await lazy.gFluentStrings.formatValue(
-          "migration-wizard-progress-success-passwords",
-          {
-            quantity,
-          }
-        ),
-      };
+        progress[
+          lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PASSWORDS
+        ] = {
+          value: lazy.MigrationWizardConstants.PROGRESS_VALUE.SUCCESS,
+          message: await lazy.gFluentStrings.formatValue(
+            "migration-wizard-progress-success-passwords",
+            {
+              quantity,
+            }
+          ),
+        };
+      } catch (e) {
+        progress[
+          lazy.MigrationWizardConstants.DISPLAYED_RESOURCE_TYPES.PASSWORDS
+        ] = {
+          value: lazy.MigrationWizardConstants.PROGRESS_VALUE.WARNING,
+          message: await lazy.gFluentStrings.formatValue(
+            "migration-passwords-from-file-no-valid-data"
+          ),
+        };
+      }
     }
 
     this.sendAsyncMessage("UpdateProgress", {

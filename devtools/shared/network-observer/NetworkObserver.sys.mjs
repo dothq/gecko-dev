@@ -75,6 +75,7 @@ const HTTP_TRANSACTION_CODES = {
 const HTTP_DOWNLOAD_ACTIVITIES = [
   gActivityDistributor.ACTIVITY_SUBTYPE_RESPONSE_START,
   gActivityDistributor.ACTIVITY_SUBTYPE_RESPONSE_HEADER,
+  gActivityDistributor.ACTIVITY_SUBTYPE_PROXY_RESPONSE_HEADER,
   gActivityDistributor.ACTIVITY_SUBTYPE_RESPONSE_COMPLETE,
   gActivityDistributor.ACTIVITY_SUBTYPE_TRANSACTION_CLOSE,
 ];
@@ -199,6 +200,8 @@ export class NetworkObserver {
     // Start all platform observers.
     if (Services.appinfo.processType != Ci.nsIXULRuntime.PROCESS_TYPE_CONTENT) {
       gActivityDistributor.addObserver(this);
+      gActivityDistributor.observeProxyResponse = true;
+
       Services.obs.addObserver(
         this.#httpResponseExaminer,
         "http-on-examine-response"
@@ -335,7 +338,7 @@ export class NetworkObserver {
       } else {
         // Handles any early blockings e.g by Web Extensions or by CORS
         const { blockingExtension, blockedReason } =
-          lazy.NetworkUtils.getBlockedReason(channel);
+          lazy.NetworkUtils.getBlockedReason(channel, httpActivity.fromCache);
         this.#createNetworkEvent(subject, { blockedReason, blockingExtension });
       }
     }
@@ -440,7 +443,10 @@ export class NetworkObserver {
           serverTimings
         );
       } else if (topic === "http-on-failed-opening-request") {
-        const { blockedReason } = lazy.NetworkUtils.getBlockedReason(channel);
+        const { blockedReason } = lazy.NetworkUtils.getBlockedReason(
+          channel,
+          httpActivity.fromCache
+        );
         this.#createNetworkEvent(channel, { blockedReason });
       }
 
@@ -449,6 +455,7 @@ export class NetworkObserver {
           channel: httpActivity.channel,
           fromCache: httpActivity.fromCache || httpActivity.fromServiceWorker,
           rawHeaders: httpActivity.responseRawHeaders,
+          proxyResponseRawHeaders: httpActivity.proxyResponseRawHeaders,
         });
       }
     }
@@ -513,6 +520,9 @@ export class NetworkObserver {
       case gActivityDistributor.ACTIVITY_SUBTYPE_RESPONSE_HEADER:
         httpActivity.responseRawHeaders = extraStringData;
         httpActivity.headersSize = extraStringData.length;
+        break;
+      case gActivityDistributor.ACTIVITY_SUBTYPE_PROXY_RESPONSE_HEADER:
+        httpActivity.proxyResponseRawHeaders = extraStringData;
         break;
       case gActivityDistributor.ACTIVITY_SUBTYPE_TRANSACTION_CLOSE:
         this.#onTransactionClose(httpActivity);

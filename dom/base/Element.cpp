@@ -833,10 +833,12 @@ void Element::Scroll(const ScrollToOptions& aOptions) {
   if (sf) {
     CSSIntPoint scrollPos = sf->GetScrollPositionCSSPixels();
     if (aOptions.mLeft.WasPassed()) {
-      scrollPos.x = mozilla::ToZeroIfNonfinite(aOptions.mLeft.Value());
+      scrollPos.x = static_cast<int32_t>(
+          mozilla::ToZeroIfNonfinite(aOptions.mLeft.Value()));
     }
     if (aOptions.mTop.WasPassed()) {
-      scrollPos.y = mozilla::ToZeroIfNonfinite(aOptions.mTop.Value());
+      scrollPos.y = static_cast<int32_t>(
+          mozilla::ToZeroIfNonfinite(aOptions.mTop.Value()));
     }
     Scroll(scrollPos, aOptions);
   }
@@ -863,10 +865,12 @@ void Element::ScrollBy(const ScrollToOptions& aOptions) {
   if (sf) {
     CSSIntPoint scrollDelta;
     if (aOptions.mLeft.WasPassed()) {
-      scrollDelta.x = mozilla::ToZeroIfNonfinite(aOptions.mLeft.Value());
+      scrollDelta.x = static_cast<int32_t>(
+          mozilla::ToZeroIfNonfinite(aOptions.mLeft.Value()));
     }
     if (aOptions.mTop.WasPassed()) {
-      scrollDelta.y = mozilla::ToZeroIfNonfinite(aOptions.mTop.Value());
+      scrollDelta.y = static_cast<int32_t>(
+          mozilla::ToZeroIfNonfinite(aOptions.mTop.Value()));
     }
 
     ScrollMode scrollMode = sf->IsSmoothScroll(aOptions.mBehavior)
@@ -2839,18 +2843,24 @@ EventListenerManager* Element::GetEventListenerManagerForAttr(nsAtom* aAttrName,
 }
 
 bool Element::GetAttr(const nsAtom* aName, nsAString& aResult) const {
-  DOMString str;
-  bool haveAttr = GetAttr(aName, str);
-  str.ToString(aResult);
-  return haveAttr;
+  const nsAttrValue* val = mAttrs.GetAttr(aName);
+  if (!val) {
+    aResult.Truncate();
+    return false;
+  }
+  val->ToString(aResult);
+  return true;
 }
 
 bool Element::GetAttr(int32_t aNameSpaceID, const nsAtom* aName,
                       nsAString& aResult) const {
-  DOMString str;
-  bool haveAttr = GetAttr(aNameSpaceID, aName, str);
-  str.ToString(aResult);
-  return haveAttr;
+  const nsAttrValue* val = mAttrs.GetAttr(aName, aNameSpaceID);
+  if (!val) {
+    aResult.Truncate();
+    return false;
+  }
+  val->ToString(aResult);
+  return true;
 }
 
 int32_t Element::FindAttrValueIn(int32_t aNameSpaceID, const nsAtom* aName,
@@ -3199,7 +3209,7 @@ void Element::DispatchChromeOnlyLinkClickEvent(
       /* Cancelable */ true, nsGlobalWindowInner::Cast(doc->GetInnerWindow()),
       0, mouseEvent->CtrlKey(), mouseEvent->AltKey(), mouseEvent->ShiftKey(),
       mouseEvent->MetaKey(), mouseEvent->Button(), mouseDOMEvent,
-      mouseEvent->MozInputSource(), IgnoreErrors());
+      mouseEvent->InputSource(), IgnoreErrors());
   // Note: we're always trusted, but the event we pass as the `sourceEvent`
   // might not be. Frontend code will check that event's trusted property to
   // make that determination; doing it this way means we don't also start
@@ -4272,7 +4282,7 @@ bool Element::IsPopoverOpen() const {
   return htmlElement && htmlElement->PopoverOpen();
 }
 
-Element* Element::GetTopmostPopoverAncestor() const {
+Element* Element::GetTopmostPopoverAncestor(const Element* aInvoker) const {
   const Element* newPopover = this;
 
   nsTHashMap<nsPtrHashKey<const Element>, size_t> popoverPositions;
@@ -4304,10 +4314,7 @@ Element* Element::GetTopmostPopoverAncestor() const {
   };
 
   checkAncestor(newPopover->GetFlattenedTreeParentElement());
-
-  // https://github.com/whatwg/html/issues/9160
-  RefPtr<Element> invoker = newPopover->GetPopoverData()->GetInvoker();
-  checkAncestor(invoker);
+  checkAncestor(aInvoker);
 
   return topmostPopoverAncestor;
 }

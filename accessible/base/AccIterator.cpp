@@ -6,8 +6,8 @@
 
 #include "AccGroupInfo.h"
 #include "DocAccessible-inl.h"
+#include "LocalAccessible-inl.h"
 #include "XULTreeAccessible.h"
-#include "nsAccUtils.h"
 
 #include "mozilla/a11y/DocAccessibleParent.h"
 #include "mozilla/dom/DocumentOrShadowRoot.h"

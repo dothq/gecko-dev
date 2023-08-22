@@ -112,6 +112,11 @@ void MFMediaEngineParent::DestroyEngineIfExists(
   if (aError) {
     Unused << SendNotifyError(*aError);
   }
+#ifdef MOZ_WMF_CDM
+  if (mContentProtectionManager) {
+    mContentProtectionManager = nullptr;
+  }
+#endif
 }
 
 void MFMediaEngineParent::CreateMediaEngine() {
@@ -156,9 +161,7 @@ void MFMediaEngineParent::CreateMediaEngine() {
   RETURN_VOID_IF_FAILED(CoCreateInstance(CLSID_MFMediaEngineClassFactory,
                                          nullptr, CLSCTX_INPROC_SERVER,
                                          IID_PPV_ARGS(&factory)));
-  const bool isLowLatency =
-      StaticPrefs::media_wmf_low_latency_enabled() &&
-      !StaticPrefs::media_wmf_low_latency_force_disabled();
+  const bool isLowLatency = StaticPrefs::media_wmf_low_latency_enabled();
   static const DWORD MF_MEDIA_ENGINE_DEFAULT = 0;
   RETURN_VOID_IF_FAILED(factory->CreateInstance(
       isLowLatency ? MF_MEDIA_ENGINE_REAL_TIME_MODE : MF_MEDIA_ENGINE_DEFAULT,
@@ -206,6 +209,7 @@ void MFMediaEngineParent::InitializeDXGIDeviceManager() {
 void MFMediaEngineParent::HandleMediaEngineEvent(
     MFMediaEngineEventWrapper aEvent) {
   AssertOnManagerThread();
+  LOG("Received media engine event %s", MediaEngineEventToStr(aEvent.mEvent));
   ENGINE_MARKER_TEXT(
       "MFMediaEngineParent::HandleMediaEngineEvent",
       nsPrintfCString("%s", MediaEngineEventToStr(aEvent.mEvent)));
@@ -591,16 +595,17 @@ void MFMediaEngineParent::EnsureDcompSurfaceHandle() {
     // Update stream size before asking for a handle. If we don't update the
     // size, media engine will create the dcomp surface in a wrong size. If
     // the size isn't changed, then we don't need to recreate the surface.
-    mDisplayWidth = width;
-    mDisplayHeight = height;
-    RECT rect = {0, 0, (LONG)mDisplayWidth, (LONG)mDisplayHeight};
+    LOG("Update video size [%lux%lu] -> [%lux%lu] ", mDisplayWidth,
+        mDisplayHeight, width, height);
+    ENGINE_MARKER_TEXT("MFMediaEngineParent,UpdateVideoSize",
+                       nsPrintfCString("%lux%lu", width, height));
+    RECT rect = {0, 0, (LONG)width, (LONG)height};
     RETURN_VOID_IF_FAILED(mediaEngineEx->UpdateVideoStream(
         nullptr /* pSrc */, &rect, nullptr /* pBorderClr */));
-    LOG("Updated video size for engine=[%lux%lu]", mDisplayWidth,
+    mDisplayWidth = width;
+    mDisplayHeight = height;
+    LOG("Updated video size [%lux%lu] correctly", mDisplayWidth,
         mDisplayHeight);
-    ENGINE_MARKER_TEXT(
-        "MFMediaEngineParent,UpdateVideoSize",
-        nsPrintfCString("%lux%lu", mDisplayWidth, mDisplayHeight));
   }
 
   HANDLE surfaceHandle = INVALID_HANDLE_VALUE;

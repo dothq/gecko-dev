@@ -19,7 +19,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   false
 );
 
-XPCOMUtils.defineLazyGetter(lazy, "logger", () => lazy.Log.get());
+ChromeUtils.defineLazyGetter(lazy, "logger", () => lazy.Log.get());
 
 // Ensure we are in the parent process.
 if (Services.appinfo.processType != Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT) {
@@ -104,6 +104,9 @@ const COMMON_PREFERENCES = new Map([
   // whichever download test runs first doesn't show the popup
   // inconsistently.
   ["browser.download.panel.shown", true],
+
+  // Make sure Topsites doesn't hit the network to retrieve sponsored tiles.
+  ["browser.newtabpage.activity-stream.showSponsoredTopSites", false],
 
   // Always display a blank page
   ["browser.newtabpage.enabled", false],

@@ -56,6 +56,7 @@
 #include "xpcpublic.h"
 #include "nsIFrame.h"
 #include "nsDisplayList.h"
+#include "nsPIWindowRoot.h"
 
 namespace mozilla {
 
@@ -816,7 +817,7 @@ bool EventListenerManager::Listener::MatchesEventMessage(
 
 static bool IsDefaultPassiveWhenOnRoot(EventMessage aMessage) {
   if (aMessage == eTouchStart || aMessage == eTouchMove) {
-    return StaticPrefs::dom_event_default_to_passive_touch_listeners();
+    return true;
   }
   if (aMessage == eWheel || aMessage == eLegacyMouseLineOrPageScroll ||
       aMessage == eLegacyMousePixelScroll) {
@@ -1173,6 +1174,7 @@ nsresult EventListenerManager::CompileEventHandlerInternal(
   RefPtr<JS::loader::ScriptFetchOptions> fetchOptions =
       new JS::loader::ScriptFetchOptions(
           CORS_NONE, aElement->OwnerDoc()->GetReferrerPolicy(),
+          /* aNonce = */ u""_ns, JS::loader::ParserMetadata::NotParserInserted,
           aElement->OwnerDoc()->NodePrincipal());
 
   RefPtr<JS::loader::EventScript> eventScript =
@@ -1319,11 +1321,21 @@ already_AddRefed<nsPIDOMWindowInner> EventListenerManager::WindowFromListener(
         innerWindow = global->AsInnerWindow();  // Can be nullptr
       }
     } else {
-      // Can't get the global from
-      // listener->mListener.GetXPCOMCallback().
-      // In most cases, it would be the same as for
-      // the target, so let's do that.
-      innerWindow = GetInnerWindowForTarget();  // Can be nullptr
+      // This ensures `window.event` can be set properly for
+      // nsWindowRoot to handle KeyPress event.
+      if (aListener && aListener->mEventMessage == eKeyPress && mTarget &&
+          mTarget->IsRootWindow()) {
+        nsPIWindowRoot* root = mTarget->AsWindowRoot();
+        if (nsPIDOMWindowOuter* outerWindow = root->GetWindow()) {
+          innerWindow = outerWindow->GetCurrentInnerWindow();
+        }
+      } else {
+        // Can't get the global from
+        // listener->mListener.GetXPCOMCallback().
+        // In most cases, it would be the same as for
+        // the target, so let's do that.
+        innerWindow = GetInnerWindowForTarget();  // Can be nullptr
+      }
     }
   }
   return innerWindow.forget();

@@ -38,9 +38,6 @@ pref("network.http.max-persistent-connections-per-proxy", 20);
 pref("network.http.http2.push-allowance", 32768);
 pref("network.http.http2.default-hpack-buffer", 4096); // 4k
 
-// http3
-pref("network.http.http3.default-qpack-table-size", 0);
-
 // See bug 545869 for details on why these are set the way they are
 pref("network.buffer.cache.size",  16384);
 
@@ -191,9 +188,6 @@ pref("app.support.baseURL", "https://support.mozilla.org/1/mobile/%VERSION%/%OS%
   pref("app.releaseNotesURL", "https://www.mozilla.com/%LOCALE%/mobile/%VERSION%/releasenotes/");
 #endif
 
-// Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
-pref("security.alternate_certificate_error_page", "certerror");
-
 // Enable pinning
 pref("security.cert_pinning.enforcement_level", 1);
 
@@ -286,20 +280,12 @@ pref("urlclassifier.malwareTable", "goog-harmful-proto,goog-unwanted-proto,mozte
 pref("browser.dom.window.dump.enabled", true);
 pref("devtools.console.stdout.chrome", true);
 
-pref("full-screen-api.enabled", true);
-
 // Transmit UDP busy-work to the LAN when anticipating low latency
 // network reads and on wifi to mitigate 802.11 Power Save Polling delays
 pref("network.tickle-wifi.enabled", true);
 
 // Hide common parts of URLs like "www." or "http://"
 pref("browser.urlbar.trimURLs", true);
-
-// Shortnumber matching needed for e.g. Brazil:
-// 01187654321 can be found with 87654321
-pref("dom.phonenumber.substringmatching.BR", 8);
-pref("dom.phonenumber.substringmatching.CO", 10);
-pref("dom.phonenumber.substringmatching.VE", 7);
 
 // The mode of home provider syncing.
 // 0: Sync always
@@ -354,8 +340,6 @@ pref("layout.accessiblecaret.hapticfeedback", true);
 // Initial text selection on long-press is enhanced to provide
 // a smarter phone-number selection for direct-dial ActionBar action.
 pref("layout.accessiblecaret.extend_selection_for_phone_number", true);
-
-pref("dom.serviceWorkers.enabled", true);
 
 // Allow service workers to open windows for a longer period after a notification
 // click on mobile.  This is to account for some devices being quite slow.

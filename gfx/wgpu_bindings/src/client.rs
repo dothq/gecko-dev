@@ -3,11 +3,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::{
-    cow_label, wgpu_string, AdapterInformation, ByteBuf, CommandEncoderAction, DeviceAction,
-    DropAction, ImageDataLayout, ImplicitLayout, QueueWriteAction, RawString, TextureAction,
+    cow_label, error::HasErrorBufferType, wgpu_string, AdapterInformation, ByteBuf,
+    CommandEncoderAction, DeviceAction, DropAction, ImageDataLayout, ImplicitLayout,
+    QueueWriteAction, RawString, TextureAction,
 };
 
-use wgc::{hub::IdentityManager, id};
+use wgc::{id, identity::IdentityManager};
 use wgt::{Backend, TextureFormat};
 
 pub use wgc::command::{compute_ffi::*, render_ffi::*};
@@ -659,8 +660,11 @@ pub extern "C" fn wgpu_device_create_render_bundle_encoder(
     match wgc::command::RenderBundleEncoder::new(&descriptor, device_id, None) {
         Ok(encoder) => Box::into_raw(Box::new(encoder)),
         Err(e) => {
-            let message = format!("Error in Device::create_render_bundle_encoder: {}", e);
-            let action = DeviceAction::Error(message);
+            let message = format!("Error in `Device::create_render_bundle_encoder`: {}", e);
+            let action = DeviceAction::Error {
+                message,
+                r#type: e.error_type(),
+            };
             *bb = make_byte_buf(&action);
             ptr::null_mut()
         }

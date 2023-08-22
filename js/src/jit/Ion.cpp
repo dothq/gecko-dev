@@ -238,6 +238,14 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
   generateExceptionTailStub(masm, &profilerExitTail, &bailoutTail);
   rangeRecorder.recordOffset("Trampoline: ExceptionTailStub");
 
+  JitSpew(JitSpew_Codegen, "# Emitting Ion generic call stub");
+  generateIonGenericCallStub(masm, IonGenericCallKind::Call);
+  rangeRecorder.recordOffset("Trampoline: IonGenericCall");
+
+  JitSpew(JitSpew_Codegen, "# Emitting Ion generic construct stub");
+  generateIonGenericCallStub(masm, IonGenericCallKind::Construct);
+  rangeRecorder.recordOffset("Trampoline: IonGenericConstruct");
+
   Linker linker(masm);
   trampolineCode_ = linker.newCode(cx, CodeKind::Other);
   if (!trampolineCode_) {
@@ -521,7 +529,9 @@ bool RecompileInfo::traceWeak(JSTracer* trc) {
   return maybeIonScriptToInvalidate() != nullptr;
 }
 
-void JitZone::traceWeak(JSTracer* trc) {
+void JitZone::traceWeak(JSTracer* trc, Zone* zone) {
+  MOZ_ASSERT(this == zone->jitZone());
+
   baselineCacheIRStubCodes_.traceWeak(trc);
   inlinedCompilations_.traceWeak(trc);
 }
@@ -779,6 +789,11 @@ void IonScript::trace(JSTracer* trc) {
   for (size_t i = 0; i < numICs(); i++) {
     getICFromIndex(i).trace(trc, this);
   }
+}
+
+void IonScript::traceWeak(JSTracer* trc) {
+  // IonICs do not currently contain weak pointers. If this is added then they
+  // should be traced here.
 }
 
 /* static */
@@ -1843,7 +1858,7 @@ static MethodStatus Compile(JSContext* cx, HandleScript script,
   }
 
   OptimizationLevel optimizationLevel =
-      IonOptimizations.levelForScript(script, osrPc);
+      IonOptimizations.levelForScript(cx, script, osrPc);
   if (optimizationLevel == OptimizationLevel::DontCompile) {
     return Method_Skipped;
   }

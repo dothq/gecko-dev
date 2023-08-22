@@ -10,11 +10,10 @@
 #include "AccAttributes.h"
 #include "nsAccUtils.h"
 #include "nsCoreUtils.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #include "States.h"
 
 #include "nsAttrName.h"
-#include "nsGenericHTMLElement.h"
 #include "nsWhitespaceTokenizer.h"
 
 #include "mozilla/BinarySearch.h"

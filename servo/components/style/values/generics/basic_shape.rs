@@ -172,13 +172,10 @@ pub use self::GenericShapeOutside as ShapeOutside;
     ToShmem,
 )]
 #[repr(C, u8)]
-pub enum GenericBasicShape<Position, LengthPercentage, NonNegativeLengthPercentage> {
-    /// Defines an inset rectangle via insets from each edge of the reference box.
-    Inset(
-        #[css(field_bound)]
-        #[shmem(field_bound)]
-        InsetRect<LengthPercentage, NonNegativeLengthPercentage>,
-    ),
+pub enum GenericBasicShape<Position, LengthPercentage, NonNegativeLengthPercentage, BasicShapeRect>
+{
+    /// The <basic-shape-rect>.
+    Rect(BasicShapeRect),
     /// Defines a circle with a center and a radius.
     Circle(
         #[css(field_bound)]
@@ -195,8 +192,6 @@ pub enum GenericBasicShape<Position, LengthPercentage, NonNegativeLengthPercenta
     Polygon(GenericPolygon<LengthPercentage>),
     /// Defines a path with SVG path syntax.
     Path(Path),
-    // TODO: Bug 1786160. Add xywh().
-    // TODO: Bug 1786161. Add rect().
     // TODO: Bug 1823463. Add shape().
     // https://drafts.csswg.org/css-shapes-2/#shape-function
 }
@@ -222,11 +217,13 @@ pub use self::GenericBasicShape as BasicShape;
 )]
 #[css(function = "inset")]
 #[repr(C)]
-pub struct InsetRect<LengthPercentage, NonNegativeLengthPercentage> {
+pub struct GenericInsetRect<LengthPercentage, NonNegativeLengthPercentage> {
     pub rect: Rect<LengthPercentage>,
     #[shmem(field_bound)]
     pub round: GenericBorderRadius<NonNegativeLengthPercentage>,
 }
+
+pub use self::GenericInsetRect as InsetRect;
 
 /// <https://drafts.csswg.org/css-shapes/#funcdef-circle>
 #[allow(missing_docs)]

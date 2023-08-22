@@ -51,7 +51,6 @@ class Label;
 class MacroAssembler;
 struct VMFunctionData;
 
-enum class TailCallVMFunctionId;
 enum class VMFunctionId;
 
 enum class BaselineICFallbackKind : uint8_t {
@@ -112,6 +111,8 @@ enum class ArgumentsRectifierKind { Normal, TrialInlining };
 
 enum class DebugTrapHandlerKind { Interpreter, Compiler, Count };
 
+enum class IonGenericCallKind { Call, Construct, Count };
+
 using EnterJitCode = void (*)(void*, unsigned int, Value*, InterpreterFrame*,
                               CalleeToken, JSObject*, size_t, Value*);
 
@@ -170,6 +171,11 @@ class JitRuntime {
   // Note: this stub treats -0 as +0 and may clobber R1.scratchReg().
   WriteOnceData<uint32_t> doubleToInt32ValueStubOffset_{0};
 
+  // Thunk to do a generic call from Ion.
+  mozilla::EnumeratedArray<IonGenericCallKind, IonGenericCallKind::Count,
+                           WriteOnceData<uint32_t>>
+      ionGenericCallStubOffset_;
+
   // Thunk used by the debugger for breakpoint and step mode.
   mozilla::EnumeratedArray<DebugTrapHandlerKind, DebugTrapHandlerKind::Count,
                            WriteOnceData<JitCode*>>
@@ -188,10 +194,6 @@ class JitRuntime {
   // Maps VMFunctionId to the offset of the wrapper code in trampolineCode_.
   using VMWrapperOffsets = Vector<uint32_t, 0, SystemAllocPolicy>;
   VMWrapperOffsets functionWrapperOffsets_;
-
-  // Maps TailCallVMFunctionId to the offset of the wrapper code in
-  // trampolineCode_.
-  VMWrapperOffsets tailCallFunctionWrapperOffsets_;
 
   MainThreadData<BaselineICFallbackCode> baselineICFallbackCode_;
 
@@ -254,16 +256,26 @@ class JitRuntime {
   uint32_t generatePreBarrier(JSContext* cx, MacroAssembler& masm,
                               MIRType type);
   void generateFreeStub(MacroAssembler& masm);
+  void generateIonGenericCallStub(MacroAssembler& masm,
+                                  IonGenericCallKind kind);
+
+  // Helper functions for generateIonGenericCallStub
+  void generateIonGenericCallBoundFunction(MacroAssembler& masm, Label* entry,
+                                           Label* vmCall);
+  void generateIonGenericCallNativeFunction(MacroAssembler& masm,
+                                            bool isConstructing);
+  void generateIonGenericCallFunCall(MacroAssembler& masm, Label* entry,
+                                     Label* vmCall);
+  void generateIonGenericCallArgumentsShift(MacroAssembler& masm, Register argc,
+                                            Register curr, Register end,
+                                            Register scratch, Label* done);
+
   JitCode* generateDebugTrapHandler(JSContext* cx, DebugTrapHandlerKind kind);
 
   bool generateVMWrapper(JSContext* cx, MacroAssembler& masm,
                          const VMFunctionData& f, DynFn nativeFun,
                          uint32_t* wrapperOffset);
 
-  template <typename IdT>
-  bool generateVMWrappers(JSContext* cx, MacroAssembler& masm,
-                          VMWrapperOffsets& offsets,
-                          PerfSpewerRangeRecorder& rangeRecorder);
   bool generateVMWrappers(JSContext* cx, MacroAssembler& masm,
                           PerfSpewerRangeRecorder& rangeRecorder);
 
@@ -277,6 +289,11 @@ class JitRuntime {
 
   void generateBaselineInterpreterEntryTrampoline(MacroAssembler& masm);
   void generateInterpreterEntryTrampoline(MacroAssembler& masm);
+
+  void bindLabelToOffset(Label* label, uint32_t offset) {
+    MOZ_ASSERT(!trampolineCode_);
+    label->bind(offset);
+  }
 
  public:
   JitCode* generateEntryTrampolineForScript(JSContext* cx, JSScript* script);
@@ -311,10 +328,6 @@ class JitRuntime {
   TrampolinePtr getVMWrapper(VMFunctionId funId) const {
     MOZ_ASSERT(trampolineCode_);
     return trampolineCode(functionWrapperOffsets_[size_t(funId)]);
-  }
-  TrampolinePtr getVMWrapper(TailCallVMFunctionId funId) const {
-    MOZ_ASSERT(trampolineCode_);
-    return trampolineCode(tailCallFunctionWrapperOffsets_[size_t(funId)]);
   }
 
   JitCode* debugTrapHandler(JSContext* cx, DebugTrapHandlerKind kind);
@@ -389,6 +402,10 @@ class JitRuntime {
 
   TrampolinePtr getDoubleToInt32ValueStub() const {
     return trampolineCode(doubleToInt32ValueStubOffset_);
+  }
+
+  TrampolinePtr getIonGenericCallStub(IonGenericCallKind kind) const {
+    return trampolineCode(ionGenericCallStubOffset_[kind]);
   }
 
   bool hasJitcodeGlobalTable() const { return jitcodeGlobalTable_ != nullptr; }

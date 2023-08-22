@@ -6,25 +6,21 @@
 #include "HTMLTableAccessible.h"
 
 #include <stdint.h>
-#include "mozilla/DebugOnly.h"
 
 #include "nsAccessibilityService.h"
 #include "AccAttributes.h"
 #include "ARIAMap.h"
 #include "CacheConstants.h"
-#include "DocAccessible.h"
 #include "LocalAccessible-inl.h"
 #include "nsTextEquivUtils.h"
 #include "Relation.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #include "States.h"
 
-#include "mozilla/PresShell.h"
 #include "mozilla/a11y/TableAccessible.h"
 #include "mozilla/a11y/TableCellAccessible.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/dom/Element.h"
-#include "mozilla/dom/HTMLTableElement.h"
 #include "mozilla/dom/NameSpaceConstants.h"
 #include "nsCaseTreatment.h"
 #include "nsColor.h"
@@ -32,8 +28,6 @@
 #include "nsCoreUtils.h"
 #include "nsDebug.h"
 #include "nsIHTMLCollection.h"
-#include "nsITableCellLayout.h"
-#include "nsFrameSelection.h"
 #include "nsError.h"
 #include "nsGkAtoms.h"
 #include "nsLiteralString.h"
@@ -189,54 +183,27 @@ HTMLTableAccessible* HTMLTableCellAccessible::Table() const {
 }
 
 uint32_t HTMLTableCellAccessible::ColExtent() const {
-  int32_t rowIdx = -1, colIdx = -1;
-  if (NS_FAILED(GetCellIndexes(rowIdx, colIdx))) {
+  nsTableCellFrame* cell = do_QueryFrame(GetFrame());
+  if (!cell) {
     // This probably isn't a table according to the layout engine; e.g. it has
     // display: block.
     return 1;
   }
-
-  HTMLTableAccessible* table = Table();
-  if (NS_WARN_IF(!table)) {
-    // This can happen where there is a <tr> inside a <div role="table"> such as
-    // in Monorail.
-    return 1;
-  }
-
-  return table->ColExtentAt(rowIdx, colIdx);
+  nsTableFrame* table = cell->GetTableFrame();
+  MOZ_ASSERT(table);
+  return table->GetEffectiveColSpan(*cell);
 }
 
 uint32_t HTMLTableCellAccessible::RowExtent() const {
-  int32_t rowIdx = -1, colIdx = -1;
-  if (NS_FAILED(GetCellIndexes(rowIdx, colIdx))) {
+  nsTableCellFrame* cell = do_QueryFrame(GetFrame());
+  if (!cell) {
     // This probably isn't a table according to the layout engine; e.g. it has
     // display: block.
     return 1;
   }
-
-  HTMLTableAccessible* table = Table();
-  if (NS_WARN_IF(!table)) {
-    // This can happen where there is a <tr> inside a <div role="table"> such as
-    // in Monorail.
-    return 1;
-  }
-
-  return table->RowExtentAt(rowIdx, colIdx);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// HTMLTableCellAccessible: protected implementation
-
-nsITableCellLayout* HTMLTableCellAccessible::GetCellLayout() const {
-  return do_QueryFrame(mContent->GetPrimaryFrame());
-}
-
-nsresult HTMLTableCellAccessible::GetCellIndexes(int32_t& aRowIdx,
-                                                 int32_t& aColIdx) const {
-  nsITableCellLayout* cellLayout = GetCellLayout();
-  NS_ENSURE_STATE(cellLayout);
-
-  return cellLayout->GetCellIndexes(aRowIdx, aColIdx);
+  nsTableFrame* table = cell->GetTableFrame();
+  MOZ_ASSERT(table);
+  return table->GetEffectiveRowSpan(*cell);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -450,24 +417,6 @@ uint32_t HTMLTableAccessible::ColCount() const {
 uint32_t HTMLTableAccessible::RowCount() {
   nsTableWrapperFrame* tableFrame = GetTableWrapperFrame();
   return tableFrame ? tableFrame->GetRowCount() : 0;
-}
-
-uint32_t HTMLTableAccessible::ColExtentAt(uint32_t aRowIdx, uint32_t aColIdx) {
-  nsTableWrapperFrame* tableFrame = GetTableWrapperFrame();
-  if (!tableFrame) {
-    return 1;
-  }
-
-  return tableFrame->GetEffectiveColSpanAt(aRowIdx, aColIdx);
-}
-
-uint32_t HTMLTableAccessible::RowExtentAt(uint32_t aRowIdx, uint32_t aColIdx) {
-  nsTableWrapperFrame* tableFrame = GetTableWrapperFrame();
-  if (!tableFrame) {
-    return 1;
-  }
-
-  return tableFrame->GetEffectiveRowSpanAt(aRowIdx, aColIdx);
 }
 
 bool HTMLTableAccessible::IsProbablyLayoutTable() {

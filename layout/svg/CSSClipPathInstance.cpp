@@ -127,7 +127,7 @@ already_AddRefed<Path> CSSClipPathInstance::CreateClipPath(
       return CreateClipPathEllipse(aDrawTarget, r);
     case StyleBasicShape::Tag::Polygon:
       return CreateClipPathPolygon(aDrawTarget, r);
-    case StyleBasicShape::Tag::Inset:
+    case StyleBasicShape::Tag::Rect:
       return CreateClipPathInset(aDrawTarget, r);
     default:
       MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Unexpected shape type");

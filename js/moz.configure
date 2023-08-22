@@ -666,20 +666,14 @@ option(
 # ===========================
 
 
-@depends(milestone.is_nightly)
-def default_wasm_function_references(is_nightly):
-    if is_nightly:
-        return True
-
-
 option(
-    "--enable-wasm-function-references",
-    default=default_wasm_function_references,
+    "--disable-wasm-function-references",
+    default=True,
     help="{Enable|Disable} WebAssembly function-references",
 )
 
 
-@depends("--enable-wasm-function-references", "--wasm-no-experimental")
+@depends("--disable-wasm-function-references", "--wasm-no-experimental")
 def wasm_function_references(value, no_experimental):
     if no_experimental:
         return
@@ -695,19 +689,19 @@ set_define("ENABLE_WASM_FUNCTION_REFERENCES", wasm_function_references)
 # ===========================
 
 
-@depends(milestone.is_nightly, "--enable-wasm-function-references")
-def default_wasm_gc(is_nightly, function_references):
-    if is_nightly and function_references:
+@depends("--disable-wasm-function-references")
+def default_wasm_gc(function_references):
+    if function_references:
         return True
 
 
 option(
-    "--enable-wasm-gc", default=default_wasm_gc, help="{Enable|Disable} WebAssembly GC"
+    "--disable-wasm-gc", default=default_wasm_gc, help="{Enable|Disable} WebAssembly GC"
 )
 
 
 @depends(
-    "--enable-wasm-gc", "--enable-wasm-function-references", "--wasm-no-experimental"
+    "--disable-wasm-gc", "--disable-wasm-function-references", "--wasm-no-experimental"
 )
 def wasm_gc(value, function_references, no_experimental):
     if no_experimental or not value:
@@ -716,7 +710,7 @@ def wasm_gc(value, function_references, no_experimental):
     if function_references:
         return True
 
-    die("--enable-wasm-gc only possible with --enable-wasm-function-references")
+    die("--disable-wasm-gc only possible with --disable-wasm-function-references")
 
 
 set_config("ENABLE_WASM_GC", wasm_gc)
@@ -1027,6 +1021,34 @@ def wasm_memory_control(value, no_experimental):
 set_config("ENABLE_WASM_MEMORY_CONTROL", wasm_memory_control)
 set_define("ENABLE_WASM_MEMORY_CONTROL", wasm_memory_control)
 
+
+# Support for WebAssembly Multi Memory.
+# =====================================
+
+
+@depends(milestone.is_nightly)
+def default_wasm_multi_memory(is_nightly):
+    if is_nightly:
+        return True
+
+
+option(
+    "--enable-wasm-multi-memory",
+    default=default_wasm_multi_memory,
+    help="{Enable|Disable} WebAssembly multi-memory",
+)
+
+
+@depends("--enable-wasm-multi-memory", "--wasm-no-experimental")
+def wasm_multi_memory(value, no_experimental):
+    if no_experimental or not value:
+        return
+
+    return True
+
+
+set_config("ENABLE_WASM_MULTI_MEMORY", wasm_multi_memory)
+set_define("ENABLE_WASM_MULTI_MEMORY", wasm_multi_memory)
 
 # Options for generating the shell as a script
 # ============================================

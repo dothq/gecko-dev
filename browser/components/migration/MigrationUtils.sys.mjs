@@ -24,6 +24,7 @@ var gFileMigrators = null;
 var gProfileStartup = null;
 var gL10n = null;
 var gPreviousDefaultBrowserKey = "";
+var gHasOpenedLegacyWizard = false;
 
 let gForceExitSpinResolve = false;
 let gKeepUndoData = false;
@@ -157,6 +158,7 @@ class MigrationUtils {
         "about:preferences",
         "chrome://browser/content/migration/migration-dialog-window.html",
         "chrome://browser/content/spotlight.html",
+        "about:firefoxview-next",
       ],
     });
   }
@@ -692,6 +694,11 @@ class MigrationUtils {
       return Promise.resolve();
     }
     // Legacy migration dialog
+    if (!gHasOpenedLegacyWizard) {
+      gHasOpenedLegacyWizard = true;
+      aOptions.openedTime = Cu.now();
+    }
+
     const DIALOG_URL = "chrome://browser/content/migration/migration.xhtml";
     let features = "chrome,dialog,modal,centerscreen,titlebar,resizable=no";
     if (AppConstants.platform == "macosx" && !this.isStartupMigration) {
@@ -1155,6 +1162,9 @@ class MigrationUtils {
 
     /** Migration is being started from about:preferences */
     PREFERENCES: "preferences",
+
+    /** Migration is being started from about:firefoxview-next */
+    FIREFOX_VIEW: "firefox_view",
   });
 
   /**

@@ -47,11 +47,11 @@ var _util = __w_pdfjs_require__(2);
 var _core_utils = __w_pdfjs_require__(3);
 var _primitives = __w_pdfjs_require__(4);
 var _pdf_manager = __w_pdfjs_require__(6);
+var _annotation = __w_pdfjs_require__(10);
 var _cleanup_helper = __w_pdfjs_require__(72);
 var _writer = __w_pdfjs_require__(66);
-var _is_node = __w_pdfjs_require__(104);
-var _message_handler = __w_pdfjs_require__(105);
-var _worker_stream = __w_pdfjs_require__(106);
+var _message_handler = __w_pdfjs_require__(104);
+var _worker_stream = __w_pdfjs_require__(105);
 class WorkerTask {
   constructor(name) {
     this.name = name;
@@ -101,7 +101,7 @@ class WorkerMessageHandler {
       docId,
       apiVersion
     } = docParams;
-    const workerVersion = '3.8.110';
+    const workerVersion = '3.9.146';
     if (apiVersion !== workerVersion) {
       throw new Error(`The API version "${apiVersion}" does not match ` + `the Worker version "${workerVersion}".`);
     }
@@ -410,19 +410,21 @@ class WorkerMessageHandler {
     handler.on("GetCalculationOrderIds", function (data) {
       return pdfManager.ensureDoc("calculationOrderIds");
     });
-    handler.on("SaveDocument", function ({
+    handler.on("SaveDocument", async function ({
       isPureXfa,
       numPages,
       annotationStorage,
       filename
     }) {
-      const promises = [pdfManager.requestLoadedStream(), pdfManager.ensureCatalog("acroForm"), pdfManager.ensureCatalog("acroFormRef"), pdfManager.ensureDoc("xref"), pdfManager.ensureDoc("startXRef"), pdfManager.ensureDoc("linearization")];
+      const promises = [pdfManager.requestLoadedStream(), pdfManager.ensureCatalog("acroForm"), pdfManager.ensureCatalog("acroFormRef"), pdfManager.ensureDoc("startXRef"), pdfManager.ensureDoc("linearization")];
       const newAnnotationsByPage = !isPureXfa ? (0, _core_utils.getNewAnnotationsMap)(annotationStorage) : null;
+      const xref = await pdfManager.ensureDoc("xref");
       if (newAnnotationsByPage) {
+        const imagePromises = _annotation.AnnotationFactory.generateImages(annotationStorage.values(), xref, pdfManager.evaluatorOptions.isOffscreenCanvasSupported);
         for (const [pageIndex, annotations] of newAnnotationsByPage) {
           promises.push(pdfManager.getPage(pageIndex).then(page => {
             const task = new WorkerTask(`Save (editor): page ${pageIndex}`);
-            return page.saveNewAnnotations(handler, task, annotations).finally(function () {
+            return page.saveNewAnnotations(handler, task, annotations, imagePromises).finally(function () {
               finishWorkerTask(task);
             });
           }));
@@ -440,7 +442,7 @@ class WorkerMessageHandler {
           }));
         }
       }
-      return Promise.all(promises).then(function ([stream, acroForm, acroFormRef, xref, startXRef, linearization, ...refs]) {
+      return Promise.all(promises).then(function ([stream, acroForm, acroFormRef, startXRef, linearization, ...refs]) {
         let newRefs = [];
         let xfaData = null;
         if (isPureXfa) {
@@ -493,23 +495,21 @@ class WorkerMessageHandler {
             filename
           };
         }
-        try {
-          return (0, _writer.incrementalUpdate)({
-            originalData: stream.bytes,
-            xrefInfo: newXrefInfo,
-            newRefs,
-            xref,
-            hasXfa: !!xfa,
-            xfaDatasetsRef,
-            hasXfaDatasetsEntry,
-            needAppearances,
-            acroFormRef,
-            acroForm,
-            xfaData
-          });
-        } finally {
+        return (0, _writer.incrementalUpdate)({
+          originalData: stream.bytes,
+          xrefInfo: newXrefInfo,
+          newRefs,
+          xref,
+          hasXfa: !!xfa,
+          xfaDatasetsRef,
+          hasXfaDatasetsEntry,
+          needAppearances,
+          acroFormRef,
+          acroForm,
+          xfaData
+        }).finally(() => {
           xref.resetNewTemporaryRef();
-        }
+        });
       });
     });
     handler.on("GetOperatorList", function (data, sink) {
@@ -621,7 +621,7 @@ exports.WorkerMessageHandler = WorkerMessageHandler;
 function isMessagePort(maybePort) {
   return typeof maybePort.postMessage === "function" && "onmessage" in maybePort;
 }
-if (typeof window === "undefined" && !_is_node.isNodeJS && typeof self !== "undefined" && isMessagePort(self)) {
+if (typeof window === "undefined" && !_util.isNodeJS && typeof self !== "undefined" && isMessagePort(self)) {
   WorkerMessageHandler.initializeFromPort(self);
 }
 
@@ -634,15 +634,17 @@ if (typeof window === "undefined" && !_is_node.isNodeJS && typeof self !== "unde
 Object.defineProperty(exports, "__esModule", ({
   value: true
 }));
-exports.VerbosityLevel = exports.Util = exports.UnknownErrorException = exports.UnexpectedResponseException = exports.TextRenderingMode = exports.RenderingIntentFlag = exports.PromiseCapability = exports.PermissionFlag = exports.PasswordResponses = exports.PasswordException = exports.PageActionEventType = exports.OPS = exports.MissingPDFException = exports.MAX_IMAGE_SIZE_TO_CACHE = exports.LINE_FACTOR = exports.LINE_DESCENT_FACTOR = exports.InvalidPDFException = exports.ImageKind = exports.IDENTITY_MATRIX = exports.FormatError = exports.FeatureTest = exports.FONT_IDENTITY_MATRIX = exports.DocumentActionEventType = exports.CMapCompressionType = exports.BaseException = exports.BASELINE_FACTOR = exports.AnnotationType = exports.AnnotationStateModelType = exports.AnnotationReviewState = exports.AnnotationReplyType = exports.AnnotationMode = exports.AnnotationMarkedState = exports.AnnotationFlag = exports.AnnotationFieldFlag = exports.AnnotationEditorType = exports.AnnotationEditorPrefix = exports.AnnotationEditorParamsType = exports.AnnotationBorderStyleType = exports.AnnotationActionEventType = exports.AbortException = void 0;
+exports.VerbosityLevel = exports.Util = exports.UnknownErrorException = exports.UnexpectedResponseException = exports.TextRenderingMode = exports.RenderingIntentFlag = exports.PromiseCapability = exports.PermissionFlag = exports.PasswordResponses = exports.PasswordException = exports.PageActionEventType = exports.OPS = exports.MissingPDFException = exports.MAX_IMAGE_SIZE_TO_CACHE = exports.LINE_FACTOR = exports.LINE_DESCENT_FACTOR = exports.InvalidPDFException = exports.ImageKind = exports.IDENTITY_MATRIX = exports.FormatError = exports.FeatureTest = exports.FONT_IDENTITY_MATRIX = exports.DocumentActionEventType = exports.CMapCompressionType = exports.BaseException = exports.BASELINE_FACTOR = exports.AnnotationType = exports.AnnotationReplyType = exports.AnnotationMode = exports.AnnotationFlag = exports.AnnotationFieldFlag = exports.AnnotationEditorType = exports.AnnotationEditorPrefix = exports.AnnotationEditorParamsType = exports.AnnotationBorderStyleType = exports.AnnotationActionEventType = exports.AbortException = void 0;
 exports.assert = assert;
 exports.bytesToString = bytesToString;
 exports.createValidAbsoluteUrl = createValidAbsoluteUrl;
 exports.getModificationDate = getModificationDate;
+exports.getUuid = getUuid;
 exports.getVerbosityLevel = getVerbosityLevel;
 exports.info = info;
 exports.isArrayBuffer = isArrayBuffer;
 exports.isArrayEqual = isArrayEqual;
+exports.isNodeJS = void 0;
 exports.normalizeUnicode = normalizeUnicode;
 exports.objectFromMap = objectFromMap;
 exports.objectSize = objectSize;
@@ -655,7 +657,8 @@ exports.stringToUTF8String = stringToUTF8String;
 exports.unreachable = unreachable;
 exports.utf8StringToString = utf8StringToString;
 exports.warn = warn;
-;
+const isNodeJS = false;
+exports.isNodeJS = isNodeJS;
 const IDENTITY_MATRIX = [1, 0, 0, 1, 0, 0];
 exports.IDENTITY_MATRIX = IDENTITY_MATRIX;
 const FONT_IDENTITY_MATRIX = [0.001, 0, 0, 0.001, 0, 0];
@@ -692,6 +695,7 @@ const AnnotationEditorType = {
   DISABLE: -1,
   NONE: 0,
   FREETEXT: 3,
+  STAMP: 13,
   INK: 15
 };
 exports.AnnotationEditorType = AnnotationEditorType;
@@ -701,7 +705,9 @@ const AnnotationEditorParamsType = {
   FREETEXT_OPACITY: 3,
   INK_COLOR: 11,
   INK_THICKNESS: 12,
-  INK_OPACITY: 13
+  INK_OPACITY: 13,
+  INK_DIMS: 14,
+  STAMP_DIMS: 21
 };
 exports.AnnotationEditorParamsType = AnnotationEditorParamsType;
 const PermissionFlag = {
@@ -763,24 +769,6 @@ const AnnotationType = {
   REDACT: 26
 };
 exports.AnnotationType = AnnotationType;
-const AnnotationStateModelType = {
-  MARKED: "Marked",
-  REVIEW: "Review"
-};
-exports.AnnotationStateModelType = AnnotationStateModelType;
-const AnnotationMarkedState = {
-  MARKED: "Marked",
-  UNMARKED: "Unmarked"
-};
-exports.AnnotationMarkedState = AnnotationMarkedState;
-const AnnotationReviewState = {
-  ACCEPTED: "Accepted",
-  REJECTED: "Rejected",
-  CANCELLED: "Cancelled",
-  COMPLETED: "Completed",
-  NONE: "None"
-};
-exports.AnnotationReviewState = AnnotationReviewState;
 const AnnotationReplyType = {
   GROUP: "Group",
   REPLY: "R"
@@ -1420,6 +1408,9 @@ function normalizeUnicode(str) {
   return str.replaceAll(NormalizeRegex, (_, p1, p2) => {
     return p1 ? p1.normalize("NFKC") : NormalizationMap.get(p2);
   });
+}
+function getUuid() {
+  return crypto.randomUUID();
 }
 
 /***/ }),
@@ -2535,10 +2526,8 @@ class ChunkedStream extends _stream.Stream {
       if (start + length > this.progressiveDataLength) {
         this.ensureRange(start, start + length);
       }
-    } else {
-      if (start >= this.progressiveDataLength) {
-        this.ensureByte(start);
-      }
+    } else if (start >= this.progressiveDataLength) {
+      this.ensureByte(start);
     }
     function ChunkedStreamSubstream() {}
     ChunkedStreamSubstream.prototype = Object.create(this);
@@ -2908,8 +2897,8 @@ Object.defineProperty(exports, "__esModule", ({
   value: true
 }));
 exports.Page = exports.PDFDocument = void 0;
-var _annotation = __w_pdfjs_require__(10);
 var _util = __w_pdfjs_require__(2);
+var _annotation = __w_pdfjs_require__(10);
 var _core_utils = __w_pdfjs_require__(3);
 var _primitives = __w_pdfjs_require__(4);
 var _xfa_fonts = __w_pdfjs_require__(51);
@@ -3090,7 +3079,7 @@ class Page {
       }
     }
   }
-  async saveNewAnnotations(handler, task, annotations) {
+  async saveNewAnnotations(handler, task, annotations, imagePromises) {
     if (this.xfaFactory) {
       throw new Error("XFA: Cannot save new annotations.");
     }
@@ -3111,7 +3100,7 @@ class Page {
     this.#replaceIdByRef(annotations, deletedAnnotations, existingAnnotations);
     const pageDict = this.pageDict;
     const annotationsArray = this.annotations.filter(a => !(a instanceof _primitives.Ref && deletedAnnotations.has(a)));
-    const newData = await _annotation.AnnotationFactory.saveNewAnnotations(partialEvaluator, task, annotations);
+    const newData = await _annotation.AnnotationFactory.saveNewAnnotations(partialEvaluator, task, annotations, imagePromises);
     for (const {
       ref
     } of newData.annotations) {
@@ -3201,11 +3190,38 @@ class Page {
     let deletedAnnotations = null;
     let newAnnotationsPromise = Promise.resolve(null);
     if (newAnnotationsByPage) {
+      let imagePromises;
       const newAnnotations = newAnnotationsByPage.get(this.pageIndex);
       if (newAnnotations) {
+        const missingBitmaps = new Set();
+        for (const {
+          bitmapId,
+          bitmap
+        } of newAnnotations) {
+          if (bitmapId && !bitmap && !missingBitmaps.has(bitmapId)) {
+            missingBitmaps.add(bitmapId);
+          }
+        }
+        const {
+          isOffscreenCanvasSupported
+        } = this.evaluatorOptions;
+        if (missingBitmaps.size > 0) {
+          const annotationWithBitmaps = newAnnotations.slice();
+          for (const [key, annotation] of annotationStorage) {
+            if (!key.startsWith(_util.AnnotationEditorPrefix)) {
+              continue;
+            }
+            if (annotation.bitmap && missingBitmaps.has(annotation.bitmapId)) {
+              annotationWithBitmaps.push(annotation);
+            }
+          }
+          imagePromises = _annotation.AnnotationFactory.generateImages(annotationWithBitmaps, this.xref, isOffscreenCanvasSupported);
+        } else {
+          imagePromises = _annotation.AnnotationFactory.generateImages(newAnnotations, this.xref, isOffscreenCanvasSupported);
+        }
         deletedAnnotations = new _primitives.RefSet();
         this.#replaceIdByRef(newAnnotations, deletedAnnotations, null);
-        newAnnotationsPromise = _annotation.AnnotationFactory.printNewAnnotations(partialEvaluator, task, newAnnotations);
+        newAnnotationsPromise = _annotation.AnnotationFactory.printNewAnnotations(partialEvaluator, task, newAnnotations, imagePromises);
       }
     }
     const dataPromises = Promise.all([contentStreamPromise, resourcesPromise]);
@@ -4220,15 +4236,16 @@ var _util = __w_pdfjs_require__(2);
 var _core_utils = __w_pdfjs_require__(3);
 var _default_appearance = __w_pdfjs_require__(11);
 var _primitives = __w_pdfjs_require__(4);
+var _stream = __w_pdfjs_require__(8);
 var _writer = __w_pdfjs_require__(66);
 var _base_stream = __w_pdfjs_require__(5);
 var _bidi = __w_pdfjs_require__(60);
 var _catalog = __w_pdfjs_require__(70);
 var _colorspace = __w_pdfjs_require__(12);
 var _file_spec = __w_pdfjs_require__(73);
+var _jpeg_stream = __w_pdfjs_require__(26);
 var _object_loader = __w_pdfjs_require__(76);
 var _operator_list = __w_pdfjs_require__(64);
-var _stream = __w_pdfjs_require__(8);
 var _factory = __w_pdfjs_require__(77);
 class AnnotationFactory {
   static create(xref, ref, pdfManager, idFactory, collectFields) {
@@ -4256,7 +4273,7 @@ class AnnotationFactory {
       collectFields,
       needAppearances: !collectFields && acroFormDict.get("NeedAppearances") === true,
       pageIndex,
-      isOffscreenCanvasSupported: pdfManager.evaluatorOptions.isOffscreenCanvasSupported
+      evaluatorOptions: pdfManager.evaluatorOptions
     };
     switch (subtype) {
       case "Link":
@@ -4339,11 +4356,32 @@ class AnnotationFactory {
       return -1;
     }
   }
-  static async saveNewAnnotations(evaluator, task, annotations) {
+  static generateImages(annotations, xref, isOffscreenCanvasSupported) {
+    if (!isOffscreenCanvasSupported) {
+      (0, _util.warn)("generateImages: OffscreenCanvas is not supported, cannot save or print some annotations with images.");
+      return null;
+    }
+    let imagePromises;
+    for (const {
+      bitmapId,
+      bitmap
+    } of annotations) {
+      if (!bitmap) {
+        continue;
+      }
+      imagePromises ||= new Map();
+      imagePromises.set(bitmapId, StampAnnotation.createImage(bitmap, xref));
+    }
+    return imagePromises;
+  }
+  static async saveNewAnnotations(evaluator, task, annotations, imagePromises) {
     const xref = evaluator.xref;
     let baseFontRef;
     const dependencies = [];
     const promises = [];
+    const {
+      isOffscreenCanvasSupported
+    } = evaluator.options;
     for (const annotation of annotations) {
       if (annotation.deleted) {
         continue;
@@ -4372,6 +4410,40 @@ class AnnotationFactory {
           break;
         case _util.AnnotationEditorType.INK:
           promises.push(InkAnnotation.createNewAnnotation(xref, annotation, dependencies));
+          break;
+        case _util.AnnotationEditorType.STAMP:
+          if (!isOffscreenCanvasSupported) {
+            break;
+          }
+          const image = await imagePromises.get(annotation.bitmapId);
+          if (image.imageStream) {
+            const {
+              imageStream,
+              smaskStream
+            } = image;
+            const buffer = [];
+            if (smaskStream) {
+              const smaskRef = xref.getNewTemporaryRef();
+              await (0, _writer.writeObject)(smaskRef, smaskStream, buffer, null);
+              dependencies.push({
+                ref: smaskRef,
+                data: buffer.join("")
+              });
+              imageStream.dict.set("SMask", smaskRef);
+              buffer.length = 0;
+            }
+            const imageRef = image.imageRef = xref.getNewTemporaryRef();
+            await (0, _writer.writeObject)(imageRef, imageStream, buffer, null);
+            dependencies.push({
+              ref: imageRef,
+              data: buffer.join("")
+            });
+            image.imageStream = image.smaskStream = null;
+          }
+          promises.push(StampAnnotation.createNewAnnotation(xref, annotation, dependencies, {
+            image
+          }));
+          break;
       }
     }
     return {
@@ -4379,14 +4451,14 @@ class AnnotationFactory {
       dependencies
     };
   }
-  static async printNewAnnotations(evaluator, task, annotations) {
+  static async printNewAnnotations(evaluator, task, annotations, imagePromises) {
     if (!annotations) {
       return null;
     }
-    const xref = evaluator.xref;
     const {
-      isOffscreenCanvasSupported
-    } = evaluator.options;
+      options,
+      xref
+    } = evaluator;
     const promises = [];
     for (const annotation of annotations) {
       if (annotation.deleted) {
@@ -4397,12 +4469,33 @@ class AnnotationFactory {
           promises.push(FreeTextAnnotation.createNewPrintAnnotation(xref, annotation, {
             evaluator,
             task,
-            isOffscreenCanvasSupported
+            evaluatorOptions: options
           }));
           break;
         case _util.AnnotationEditorType.INK:
           promises.push(InkAnnotation.createNewPrintAnnotation(xref, annotation, {
-            isOffscreenCanvasSupported
+            evaluatorOptions: options
+          }));
+          break;
+        case _util.AnnotationEditorType.STAMP:
+          if (!options.isOffscreenCanvasSupported) {
+            break;
+          }
+          const image = await imagePromises.get(annotation.bitmapId);
+          if (image.imageStream) {
+            const {
+              imageStream,
+              smaskStream
+            } = image;
+            if (smaskStream) {
+              imageStream.dict.set("SMask", smaskStream);
+            }
+            image.imageRef = new _jpeg_stream.JpegStream(imageStream, imageStream.length);
+            image.imageStream = image.smaskStream = null;
+          }
+          promises.push(StampAnnotation.createNewPrintAnnotation(xref, annotation, {
+            image,
+            evaluatorOptions: options
           }));
           break;
       }
@@ -4499,7 +4592,7 @@ class Annotation {
     this.setOptionalContent(dict);
     const MK = dict.get("MK");
     this.setBorderAndBackgroundColors(MK);
-    this.setRotation(MK);
+    this.setRotation(MK, dict);
     this.ref = params.ref instanceof _primitives.Ref ? params.ref : null;
     this._streams = [];
     if (this.appearance) {
@@ -4541,7 +4634,7 @@ class Annotation {
       this.data.fieldName = this._constructFieldName(dict);
       this.data.pageIndex = params.pageIndex;
     }
-    this._isOffscreenCanvasSupported = params.isOffscreenCanvasSupported;
+    this._isOffscreenCanvasSupported = params.evaluatorOptions.isOffscreenCanvasSupported;
     this._fallbackFontDict = null;
     this._needAppearances = false;
   }
@@ -4653,18 +4746,21 @@ class Annotation {
       }
     }
   }
-  setRotation(mk) {
+  setRotation(mk, dict) {
     this.rotation = 0;
+    let angle;
     if (mk instanceof _primitives.Dict) {
-      let angle = mk.get("R") || 0;
-      if (Number.isInteger(angle) && angle !== 0) {
-        angle %= 360;
-        if (angle < 0) {
-          angle += 360;
-        }
-        if (angle % 90 === 0) {
-          this.rotation = angle;
-        }
+      angle = mk.get("R") || 0;
+    } else {
+      angle = dict.get("Rotate") || 0;
+    }
+    if (Number.isInteger(angle) && angle !== 0) {
+      angle %= 360;
+      if (angle < 0) {
+        angle += 360;
+      }
+      if (angle % 90 === 0) {
+        this.rotation = angle;
       }
     }
   }
@@ -4806,6 +4902,7 @@ class Annotation {
     const resources = await this.loadResources(["ExtGState", "Font", "Properties", "XObject"], this.appearance);
     const text = [];
     const buffer = [];
+    let firstPosition = null;
     const sink = {
       desiredSize: Math.Infinity,
       ready: true,
@@ -4814,6 +4911,7 @@ class Annotation {
           if (item.str === undefined) {
             continue;
           }
+          firstPosition ||= item.transform.slice(-2);
           buffer.push(item.str);
           if (item.hasEOL) {
             text.push(buffer.join(""));
@@ -4835,6 +4933,16 @@ class Annotation {
       text.push(buffer.join(""));
     }
     if (text.length > 1 || text[0]) {
+      const appearanceDict = this.appearance.dict;
+      const bbox = appearanceDict.getArray("BBox") || [0, 0, 1, 1];
+      const matrix = appearanceDict.getArray("Matrix") || [1, 0, 0, 1, 0, 0];
+      const rect = this.data.rect;
+      const transform = getTransformMatrix(rect, bbox, matrix);
+      transform[4] -= rect[0];
+      transform[5] -= rect[1];
+      firstPosition = _util.Util.applyTransform(firstPosition, transform);
+      firstPosition = _util.Util.applyTransform(firstPosition, matrix);
+      this.data.textPosition = firstPosition;
       this.data.textContent = text;
     }
   }
@@ -5148,7 +5256,7 @@ class MarkupAnnotation extends Annotation {
     const newAnnotation = new this.prototype.constructor({
       dict: annotationDict,
       xref,
-      isOffscreenCanvasSupported: params.isOffscreenCanvasSupported
+      evaluatorOptions: params.evaluatorOptions
     });
     if (annotation.ref) {
       newAnnotation.ref = newAnnotation.refToReplace = annotation.ref;
@@ -5795,22 +5903,20 @@ class TextWidgetAnnotation extends WidgetAnnotation {
           lastSpacePosInStringEnd = end;
           lastSpacePos = i;
         }
-      } else {
-        if (currentWidth + glyphWidth > width) {
-          if (lastSpacePosInStringStart !== -1) {
-            chunks.push(line.substring(startChunk, lastSpacePosInStringEnd));
-            startChunk = lastSpacePosInStringEnd;
-            i = lastSpacePos + 1;
-            lastSpacePosInStringStart = -1;
-            currentWidth = 0;
-          } else {
-            chunks.push(line.substring(startChunk, start));
-            startChunk = start;
-            currentWidth = glyphWidth;
-          }
+      } else if (currentWidth + glyphWidth > width) {
+        if (lastSpacePosInStringStart !== -1) {
+          chunks.push(line.substring(startChunk, lastSpacePosInStringEnd));
+          startChunk = lastSpacePosInStringEnd;
+          i = lastSpacePos + 1;
+          lastSpacePosInStringStart = -1;
+          currentWidth = 0;
         } else {
-          currentWidth += glyphWidth;
+          chunks.push(line.substring(startChunk, start));
+          startChunk = start;
+          currentWidth = glyphWidth;
         }
+      } else {
+        currentWidth += glyphWidth;
       }
     }
     if (startChunk < line.length) {
@@ -6512,6 +6618,7 @@ class FreeTextAnnotation extends MarkupAnnotation {
     super(params);
     this.data.hasOwnCanvas = true;
     const {
+      evaluatorOptions,
       xref
     } = params;
     this.data.annotationType = _util.AnnotationType.FREETEXT;
@@ -6520,7 +6627,7 @@ class FreeTextAnnotation extends MarkupAnnotation {
       const {
         fontColor,
         fontSize
-      } = (0, _default_appearance.parseAppearanceStream)(this.appearance);
+      } = (0, _default_appearance.parseAppearanceStream)(this.appearance, evaluatorOptions, xref);
       this.data.defaultAppearanceData.fontColor = fontColor;
       this.data.defaultAppearanceData.fontSize = fontSize || 10;
     } else if (this._isOffscreenCanvasSupported) {
@@ -6604,7 +6711,7 @@ class FreeTextAnnotation extends MarkupAnnotation {
     }
     resources.set("Font", font);
     const helv = await WidgetAnnotation._getFontData(evaluator, task, {
-      fontName: "Helvetica",
+      fontName: "Helv",
       fontSize
     }, resources);
     const [x1, y1, x2, y2] = rect;
@@ -6637,16 +6744,41 @@ class FreeTextAnnotation extends MarkupAnnotation {
     }
     let vscale = 1;
     const lineHeight = _util.LINE_FACTOR * fontSize;
-    const lineDescent = _util.LINE_DESCENT_FACTOR * fontSize;
+    const lineAscent = (_util.LINE_FACTOR - _util.LINE_DESCENT_FACTOR) * fontSize;
     const totalHeight = lineHeight * lines.length;
     if (totalHeight > h) {
       vscale = h / totalHeight;
     }
     const fscale = Math.min(hscale, vscale);
     const newFontSize = fontSize * fscale;
-    const buffer = ["q", `0 0 ${(0, _core_utils.numberToString)(w)} ${(0, _core_utils.numberToString)(h)} re W n`, `BT`, `1 0 0 1 0 ${(0, _core_utils.numberToString)(h + lineDescent)} Tm 0 Tc ${(0, _default_appearance.getPdfColor)(color, true)}`, `/Helv ${(0, _core_utils.numberToString)(newFontSize)} Tf`];
+    let firstPoint, clipBox, matrix;
+    switch (rotation) {
+      case 0:
+        matrix = [1, 0, 0, 1];
+        clipBox = [rect[0], rect[1], w, h];
+        firstPoint = [rect[0], rect[3] - lineAscent];
+        break;
+      case 90:
+        matrix = [0, 1, -1, 0];
+        clipBox = [rect[1], -rect[2], w, h];
+        firstPoint = [rect[1], -rect[0] - lineAscent];
+        break;
+      case 180:
+        matrix = [-1, 0, 0, -1];
+        clipBox = [-rect[2], -rect[3], w, h];
+        firstPoint = [-rect[2], -rect[1] - lineAscent];
+        break;
+      case 270:
+        matrix = [0, -1, 1, 0];
+        clipBox = [-rect[3], rect[0], w, h];
+        firstPoint = [-rect[3], rect[2] - lineAscent];
+        break;
+    }
+    const buffer = ["q", `${matrix.join(" ")} 0 0 cm`, `${clipBox.join(" ")} re W n`, `BT`, `${(0, _default_appearance.getPdfColor)(color, true)}`, `0 Tc /Helv ${(0, _core_utils.numberToString)(newFontSize)} Tf`];
+    buffer.push(`${firstPoint.join(" ")} Td (${(0, _core_utils.escapeString)(encodedLines[0])}) Tj`);
     const vShift = (0, _core_utils.numberToString)(lineHeight);
-    for (const line of encodedLines) {
+    for (let i = 1, ii = encodedLines.length; i < ii; i++) {
+      const line = encodedLines[i];
       buffer.push(`0 -${vShift} Td (${(0, _core_utils.escapeString)(line)}) Tj`);
     }
     buffer.push("ET", "Q");
@@ -6655,12 +6787,9 @@ class FreeTextAnnotation extends MarkupAnnotation {
     appearanceStreamDict.set("FormType", 1);
     appearanceStreamDict.set("Subtype", _primitives.Name.get("Form"));
     appearanceStreamDict.set("Type", _primitives.Name.get("XObject"));
-    appearanceStreamDict.set("BBox", [0, 0, w, h]);
+    appearanceStreamDict.set("BBox", rect);
     appearanceStreamDict.set("Resources", resources);
-    if (rotation) {
-      const matrix = (0, _core_utils.getRotationMatrix)(rotation, w, h);
-      appearanceStreamDict.set("Matrix", matrix);
-    }
+    appearanceStreamDict.set("Matrix", [1, 0, 0, 1, -rect[0], -rect[1]]);
     const ap = new _stream.StringStream(appearance);
     ap.dict = appearanceStreamDict;
     return ap;
@@ -7137,6 +7266,129 @@ class StampAnnotation extends MarkupAnnotation {
     this.data.annotationType = _util.AnnotationType.STAMP;
     this.data.hasOwnCanvas = this.data.noRotate;
   }
+  static async createImage(bitmap, xref) {
+    const {
+      width,
+      height
+    } = bitmap;
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d", {
+      alpha: true
+    });
+    ctx.drawImage(bitmap, 0, 0);
+    const data = ctx.getImageData(0, 0, width, height).data;
+    const buf32 = new Uint32Array(data.buffer);
+    const hasAlpha = buf32.some(_util.FeatureTest.isLittleEndian ? x => x >>> 24 !== 0xff : x => (x & 0xff) !== 0xff);
+    if (hasAlpha) {
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(bitmap, 0, 0);
+    }
+    const jpegBufferPromise = canvas.convertToBlob({
+      type: "image/jpeg",
+      quality: 1
+    }).then(blob => {
+      return blob.arrayBuffer();
+    });
+    const xobjectName = _primitives.Name.get("XObject");
+    const imageName = _primitives.Name.get("Image");
+    const image = new _primitives.Dict(xref);
+    image.set("Type", xobjectName);
+    image.set("Subtype", imageName);
+    image.set("BitsPerComponent", 8);
+    image.set("ColorSpace", _primitives.Name.get("DeviceRGB"));
+    image.set("Filter", _primitives.Name.get("DCTDecode"));
+    image.set("BBox", [0, 0, width, height]);
+    image.set("Width", width);
+    image.set("Height", height);
+    let smaskStream = null;
+    if (hasAlpha) {
+      const alphaBuffer = new Uint8Array(buf32.length);
+      if (_util.FeatureTest.isLittleEndian) {
+        for (let i = 0, ii = buf32.length; i < ii; i++) {
+          alphaBuffer[i] = buf32[i] >>> 24;
+        }
+      } else {
+        for (let i = 0, ii = buf32.length; i < ii; i++) {
+          alphaBuffer[i] = buf32[i] & 0xff;
+        }
+      }
+      const smask = new _primitives.Dict(xref);
+      smask.set("Type", xobjectName);
+      smask.set("Subtype", imageName);
+      smask.set("BitsPerComponent", 8);
+      smask.set("ColorSpace", _primitives.Name.get("DeviceGray"));
+      smask.set("Width", width);
+      smask.set("Height", height);
+      smaskStream = new _stream.Stream(alphaBuffer, 0, 0, smask);
+    }
+    const imageStream = new _stream.Stream(await jpegBufferPromise, 0, 0, image);
+    return {
+      imageStream,
+      smaskStream,
+      width,
+      height
+    };
+  }
+  static createNewDict(annotation, xref, {
+    apRef,
+    ap
+  }) {
+    const {
+      rect,
+      rotation,
+      user
+    } = annotation;
+    const stamp = new _primitives.Dict(xref);
+    stamp.set("Type", _primitives.Name.get("Annot"));
+    stamp.set("Subtype", _primitives.Name.get("Stamp"));
+    stamp.set("CreationDate", `D:${(0, _util.getModificationDate)()}`);
+    stamp.set("Rect", rect);
+    stamp.set("F", 4);
+    stamp.set("Border", [0, 0, 0]);
+    stamp.set("Rotate", rotation);
+    if (user) {
+      stamp.set("T", (0, _core_utils.isAscii)(user) ? user : (0, _core_utils.stringToUTF16String)(user, true));
+    }
+    if (apRef || ap) {
+      const n = new _primitives.Dict(xref);
+      stamp.set("AP", n);
+      if (apRef) {
+        n.set("N", apRef);
+      } else {
+        n.set("N", ap);
+      }
+    }
+    return stamp;
+  }
+  static async createNewAppearanceStream(annotation, xref, params) {
+    const {
+      rotation
+    } = annotation;
+    const {
+      imageRef,
+      width,
+      height
+    } = params.image;
+    const resources = new _primitives.Dict(xref);
+    const xobject = new _primitives.Dict(xref);
+    resources.set("XObject", xobject);
+    xobject.set("Im0", imageRef);
+    const appearance = `q ${width} 0 0 ${height} 0 0 cm /Im0 Do Q`;
+    const appearanceStreamDict = new _primitives.Dict(xref);
+    appearanceStreamDict.set("FormType", 1);
+    appearanceStreamDict.set("Subtype", _primitives.Name.get("Form"));
+    appearanceStreamDict.set("Type", _primitives.Name.get("XObject"));
+    appearanceStreamDict.set("BBox", [0, 0, width, height]);
+    appearanceStreamDict.set("Resources", resources);
+    if (rotation) {
+      const matrix = (0, _core_utils.getRotationMatrix)(rotation, width, height);
+      appearanceStreamDict.set("Matrix", matrix);
+    }
+    const ap = new _stream.StringStream(appearance);
+    ap.dict = appearanceStreamDict;
+    return ap;
+  }
 }
 class FileAttachmentAnnotation extends MarkupAnnotation {
   constructor(params) {
@@ -7173,6 +7425,8 @@ var _core_utils = __w_pdfjs_require__(3);
 var _util = __w_pdfjs_require__(2);
 var _colorspace = __w_pdfjs_require__(12);
 var _evaluator = __w_pdfjs_require__(13);
+var _image_utils = __w_pdfjs_require__(59);
+var _function = __w_pdfjs_require__(57);
 var _stream = __w_pdfjs_require__(8);
 class DefaultAppearanceEvaluator extends _evaluator.EvaluatorPreprocessor {
   constructor(str) {
@@ -7217,7 +7471,7 @@ class DefaultAppearanceEvaluator extends _evaluator.EvaluatorPreprocessor {
           case _util.OPS.setFillGray:
             _colorspace.ColorSpace.singletons.gray.getRgbItem(args, 0, result.fontColor, 0);
             break;
-          case _util.OPS.setFillColorSpace:
+          case _util.OPS.setFillCMYKColor:
             _colorspace.ColorSpace.singletons.cmyk.getRgbItem(args, 0, result.fontColor, 0);
             break;
         }
@@ -7232,9 +7486,12 @@ function parseDefaultAppearance(str) {
   return new DefaultAppearanceEvaluator(str).parse();
 }
 class AppearanceStreamEvaluator extends _evaluator.EvaluatorPreprocessor {
-  constructor(stream) {
+  constructor(stream, evaluatorOptions, xref) {
     super(stream);
     this.stream = stream;
+    this.evaluatorOptions = evaluatorOptions;
+    this.xref = xref;
+    this.resources = stream.dict?.get("Resources");
   }
   parse() {
     const operation = {
@@ -7245,7 +7502,8 @@ class AppearanceStreamEvaluator extends _evaluator.EvaluatorPreprocessor {
       scaleFactor: 1,
       fontSize: 0,
       fontName: "",
-      fontColor: new Uint8ClampedArray(3)
+      fontColor: new Uint8ClampedArray(3),
+      fillColorSpace: _colorspace.ColorSpace.singletons.gray
     };
     let breakLoop = false;
     const stack = [];
@@ -7265,7 +7523,8 @@ class AppearanceStreamEvaluator extends _evaluator.EvaluatorPreprocessor {
               scaleFactor: result.scaleFactor,
               fontSize: result.fontSize,
               fontName: result.fontName,
-              fontColor: result.fontColor.slice()
+              fontColor: result.fontColor.slice(),
+              fillColorSpace: result.fillColorSpace
             });
             break;
           case _util.OPS.restore:
@@ -7283,13 +7542,26 @@ class AppearanceStreamEvaluator extends _evaluator.EvaluatorPreprocessor {
               result.fontSize = fontSize * result.scaleFactor;
             }
             break;
+          case _util.OPS.setFillColorSpace:
+            result.fillColorSpace = _colorspace.ColorSpace.parse({
+              cs: args[0],
+              xref: this.xref,
+              resources: this.resources,
+              pdfFunctionFactory: this._pdfFunctionFactory,
+              localColorSpaceCache: this._localColorSpaceCache
+            });
+            break;
+          case _util.OPS.setFillColor:
+            const cs = result.fillColorSpace;
+            cs.getRgbItem(args, 0, result.fontColor, 0);
+            break;
           case _util.OPS.setFillRGBColor:
             _colorspace.ColorSpace.singletons.rgb.getRgbItem(args, 0, result.fontColor, 0);
             break;
           case _util.OPS.setFillGray:
             _colorspace.ColorSpace.singletons.gray.getRgbItem(args, 0, result.fontColor, 0);
             break;
-          case _util.OPS.setFillColorSpace:
+          case _util.OPS.setFillCMYKColor:
             _colorspace.ColorSpace.singletons.cmyk.getRgbItem(args, 0, result.fontColor, 0);
             break;
           case _util.OPS.showText:
@@ -7305,11 +7577,22 @@ class AppearanceStreamEvaluator extends _evaluator.EvaluatorPreprocessor {
     }
     this.stream.reset();
     delete result.scaleFactor;
+    delete result.fillColorSpace;
     return result;
   }
+  get _localColorSpaceCache() {
+    return (0, _util.shadow)(this, "_localColorSpaceCache", new _image_utils.LocalColorSpaceCache());
+  }
+  get _pdfFunctionFactory() {
+    const pdfFunctionFactory = new _function.PDFFunctionFactory({
+      xref: this.xref,
+      isEvalSupported: this.evaluatorOptions.isEvalSupported
+    });
+    return (0, _util.shadow)(this, "_pdfFunctionFactory", pdfFunctionFactory);
+  }
 }
-function parseAppearanceStream(stream) {
-  return new AppearanceStreamEvaluator(stream).parse();
+function parseAppearanceStream(stream, evaluatorOptions, xref) {
+  return new AppearanceStreamEvaluator(stream, evaluatorOptions, xref).parse();
 }
 function getPdfColor(color, isFill) {
   if (color[0] === color[1] && color[1] === color[2]) {
@@ -7632,13 +7915,11 @@ class ColorSpace {
           rgbBuf[rgbPos++] = colorMap[key + 2];
         }
       }
+    } else if (!needsResizing) {
+      this.getRgbBuffer(comps, 0, width * actualHeight, dest, 0, bpc, alpha01);
     } else {
-      if (!needsResizing) {
-        this.getRgbBuffer(comps, 0, width * actualHeight, dest, 0, bpc, alpha01);
-      } else {
-        rgbBuf = new Uint8ClampedArray(count * 3);
-        this.getRgbBuffer(comps, 0, count, rgbBuf, 0, bpc, 0);
-      }
+      rgbBuf = new Uint8ClampedArray(count * 3);
+      this.getRgbBuffer(comps, 0, count, rgbBuf, 0, bpc, 0);
     }
     if (rgbBuf) {
       if (needsResizing) {
@@ -28143,6 +28424,8 @@ const getGlyphsUnicode = (0, _core_utils.getLookupTableFactory)(function (t) {
   t.pikatakana = 0x30d4;
   t.pisymbolgreek = 0x03d6;
   t.piwrarmenian = 0x0583;
+  t.planckover2pi = 0x210f;
+  t.planckover2pi1 = 0x210f;
   t.plus = 0x002b;
   t.plusbelowcmb = 0x031f;
   t.pluscircle = 0x2295;
@@ -30988,14 +31271,12 @@ function compileGlyf(code, cmds, font) {
           arg2 = getUint16(code, i + 2);
         }
         i += 4;
+      } else if (flags & 0x02) {
+        arg1 = getInt8(code, i++);
+        arg2 = getInt8(code, i++);
       } else {
-        if (flags & 0x02) {
-          arg1 = getInt8(code, i++);
-          arg2 = getInt8(code, i++);
-        } else {
-          arg1 = code[i++];
-          arg2 = code[i++];
-        }
+        arg1 = code[i++];
+        arg2 = code[i++];
       }
       if (flags & 0x02) {
         x = arg1;
@@ -35158,10 +35439,8 @@ class CompositeGlyph {
       if (!(this.argument1 >= -128 && this.argument1 <= 127 && this.argument2 >= -128 && this.argument2 <= 127)) {
         size += 2;
       }
-    } else {
-      if (!(this.argument1 >= 0 && this.argument1 <= 255 && this.argument2 >= 0 && this.argument2 <= 255)) {
-        size += 2;
-      }
+    } else if (!(this.argument1 >= 0 && this.argument1 <= 255 && this.argument2 >= 0 && this.argument2 <= 255)) {
+      size += 2;
     }
     return size;
   }
@@ -35171,10 +35450,8 @@ class CompositeGlyph {
       if (!(this.argument1 >= -128 && this.argument1 <= 127 && this.argument2 >= -128 && this.argument2 <= 127)) {
         this.flags |= ARG_1_AND_2_ARE_WORDS;
       }
-    } else {
-      if (!(this.argument1 >= 0 && this.argument1 <= 255 && this.argument2 >= 0 && this.argument2 <= 255)) {
-        this.flags |= ARG_1_AND_2_ARE_WORDS;
-      }
+    } else if (!(this.argument1 >= 0 && this.argument1 <= 255 && this.argument2 >= 0 && this.argument2 <= 255)) {
+      this.flags |= ARG_1_AND_2_ARE_WORDS;
     }
     buf.setUint16(pos, this.flags);
     buf.setUint16(pos + 2, this.glyphIndex);
@@ -38024,7 +38301,7 @@ class PostScriptEvaluator {
           break;
         case "log":
           a = stack.pop();
-          stack.push(Math.log(a) / Math.LN10);
+          stack.push(Math.log10(a));
           break;
         case "lt":
           b = stack.pop();
@@ -39087,10 +39364,8 @@ function bidi(str, startLevel = -1, vertical = false) {
       } else if (t === "AN" || t === "EN") {
         levels[i] += 2;
       }
-    } else {
-      if (t === "L" || t === "AN" || t === "EN") {
-        levels[i] += 1;
-      }
+    } else if (t === "L" || t === "AN" || t === "EN") {
+      levels[i] += 1;
     }
   }
   let highestLevel = -1;
@@ -41079,18 +41354,11 @@ async function writeStream(stream, buffer, transform) {
   const {
     dict
   } = stream;
-  if (typeof CompressionStream === "undefined") {
-    dict.set("Length", string.length);
-    await writeDict(dict, buffer, transform);
-    buffer.push(" stream\n", string, "\nendstream");
-    return;
-  }
-  const filter = await dict.getAsync("Filter");
-  const params = await dict.getAsync("DecodeParms");
+  const [filter, params] = await Promise.all([dict.getAsync("Filter"), dict.getAsync("DecodeParms")]);
   const filterZero = Array.isArray(filter) ? await dict.xref.fetchIfRefAsync(filter[0]) : filter;
   const isFilterZeroFlateDecode = (0, _primitives.isName)(filterZero, "FlateDecode");
   const MIN_LENGTH_FOR_COMPRESSING = 256;
-  if (string.length >= MIN_LENGTH_FOR_COMPRESSING || isFilterZeroFlateDecode) {
+  if (typeof CompressionStream !== "undefined" && (string.length >= MIN_LENGTH_FOR_COMPRESSING || isFilterZeroFlateDecode)) {
     try {
       const byteArray = (0, _util.stringToBytes)(string);
       const cs = new CompressionStream("deflate");
@@ -48632,12 +48900,10 @@ class Line extends _xfa_object.XFAObject {
     } else if (parent.h <= thickness) {
       [x1, y1, x2, y2] = [0, "50%", "100%", "50%"];
       height = style.strokeWidth;
+    } else if (this.slope === "\\") {
+      [x1, y1, x2, y2] = [0, 0, "100%", "100%"];
     } else {
-      if (this.slope === "\\") {
-        [x1, y1, x2, y2] = [0, 0, "100%", "100%"];
-      } else {
-        [x1, y1, x2, y2] = [0, "100%", "100%", 0];
-      }
+      [x1, y1, x2, y2] = [0, "100%", "100%", 0];
     }
     const line = {
       name: "line",
@@ -57150,19 +57416,6 @@ exports.XRef = XRef;
 
 /***/ }),
 /* 104 */
-/***/ ((__unused_webpack_module, exports) => {
-
-
-
-Object.defineProperty(exports, "__esModule", ({
-  value: true
-}));
-exports.isNodeJS = void 0;
-const isNodeJS = false;
-exports.isNodeJS = isNodeJS;
-
-/***/ }),
-/* 105 */
 /***/ ((__unused_webpack_module, exports, __w_pdfjs_require__) => {
 
 
@@ -57575,7 +57828,7 @@ class MessageHandler {
 exports.MessageHandler = MessageHandler;
 
 /***/ }),
-/* 106 */
+/* 105 */
 /***/ ((__unused_webpack_module, exports, __w_pdfjs_require__) => {
 
 
@@ -57737,8 +57990,8 @@ Object.defineProperty(exports, "WorkerMessageHandler", ({
   }
 }));
 var _worker = __w_pdfjs_require__(1);
-const pdfjsVersion = '3.8.110';
-const pdfjsBuild = '88111e1b2';
+const pdfjsVersion = '3.9.146';
+const pdfjsBuild = '48cc67f17';
 })();
 
 /******/ 	return __webpack_exports__;

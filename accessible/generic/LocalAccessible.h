@@ -171,7 +171,7 @@ class LocalAccessible : public nsISupports, public Accessible {
    * Return accessible role specified by ARIA (see constants in
    * roles).
    */
-  mozilla::a11y::role ARIARole();
+  inline mozilla::a11y::role ARIARole();
 
   /**
    * Returns enumerated accessible role from native markup (see constants in
@@ -258,7 +258,7 @@ class LocalAccessible : public nsISupports, public Accessible {
   /**
    * Set the ARIA role map entry for a new accessible.
    */
-  void SetRoleMapEntry(const nsRoleMapEntry* aRoleMapEntry);
+  inline void SetRoleMapEntry(const nsRoleMapEntry* aRoleMapEntry);
 
   /**
    * Append/insert/remove a child. Return true if operation was successful.
@@ -273,7 +273,8 @@ class LocalAccessible : public nsISupports, public Accessible {
    * then the child is unbound from the document, and false is returned. Make
    * sure to null out any references on the child object as it may be destroyed.
    */
-  bool InsertAfter(LocalAccessible* aNewChild, LocalAccessible* aRefChild);
+  inline bool InsertAfter(LocalAccessible* aNewChild,
+                          LocalAccessible* aRefChild);
 
   virtual bool RemoveChild(LocalAccessible* aChild);
 
@@ -422,10 +423,8 @@ class LocalAccessible : public nsISupports, public Accessible {
   MOZ_CAN_RUN_SCRIPT
   virtual void ScrollTo(uint32_t aHow) const override;
 
-  /**
-   * Scroll the accessible to the given point.
-   */
-  void ScrollToPoint(uint32_t aCoordinateType, int32_t aX, int32_t aY);
+  virtual void ScrollToPoint(uint32_t aCoordinateType, int32_t aX,
+                             int32_t aY) override;
 
   /**
    * Get a pointer to accessibility interface for this node, which is specific
@@ -593,7 +592,7 @@ class LocalAccessible : public nsISupports, public Accessible {
   /**
    * Return true if the accessible is defunct.
    */
-  bool IsDefunct() const;
+  inline bool IsDefunct() const;
 
   /**
    * Return false if the accessible is no longer in the document.
@@ -617,12 +616,12 @@ class LocalAccessible : public nsISupports, public Accessible {
   /**
    * Return true if native markup has a numeric value.
    */
-  bool NativeHasNumericValue() const;
+  inline bool NativeHasNumericValue() const;
 
   /**
    * Return true if ARIA specifies support for a numeric value.
    */
-  bool ARIAHasNumericValue() const;
+  inline bool ARIAHasNumericValue() const;
 
   /**
    * Return true if the accessible has a numeric value.

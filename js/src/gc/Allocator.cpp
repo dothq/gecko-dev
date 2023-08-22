@@ -58,7 +58,7 @@ void Zone::setNurseryAllocFlags(bool allocObjects, bool allocStrings,
 #define INSTANTIATE_ALLOC_NURSERY_CELL(traceKind, allowGc)          \
   template void*                                                    \
   gc::CellAllocator::AllocNurseryOrTenuredCell<traceKind, allowGc>( \
-      JS::RootingContext*, AllocKind, gc::Heap, AllocSite*);
+      JS::RootingContext*, AllocKind, size_t, gc::Heap, AllocSite*);
 INSTANTIATE_ALLOC_NURSERY_CELL(JS::TraceKind::Object, NoGC)
 INSTANTIATE_ALLOC_NURSERY_CELL(JS::TraceKind::Object, CanGC)
 INSTANTIATE_ALLOC_NURSERY_CELL(JS::TraceKind::String, NoGC)
@@ -245,7 +245,6 @@ template <AllowGC allowGC>
 bool CellAllocator::PreAllocChecks(JS::RootingContext* rcx, AllocKind kind) {
   auto* cx = JSContext::from(rcx);
 
-  MOZ_ASSERT(!cx->isHelperThreadContext());
   MOZ_ASSERT(CurrentThreadCanAccessRuntime(cx->runtime()));
 
   CheckAllocZone(cx->zone(), kind);
@@ -324,7 +323,6 @@ void GCRuntime::startBackgroundAllocTaskIfIdle() {
 /* static */
 void* GCRuntime::refillFreeList(JSContext* cx, AllocKind thingKind) {
   MOZ_ASSERT(cx->zone()->arenas.freeLists().isEmpty(thingKind));
-  MOZ_ASSERT(!cx->isHelperThreadContext());
 
   // It should not be possible to allocate on the main thread while we are
   // inside a GC.

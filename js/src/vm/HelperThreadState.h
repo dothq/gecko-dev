@@ -13,25 +13,45 @@
 #ifndef vm_HelperThreadState_h
 #define vm_HelperThreadState_h
 
-#include "mozilla/Attributes.h"
-#include "mozilla/EnumeratedArray.h"
-#include "mozilla/RefPtr.h"  // RefPtr
-#include "mozilla/TimeStamp.h"
-#include "mozilla/Vector.h"  // mozilla::Vector
+#include "mozilla/AlreadyAddRefed.h"  // already_AddRefed
+#include "mozilla/Assertions.h"       // MOZ_ASSERT, MOZ_CRASH
+#include "mozilla/Attributes.h"       // MOZ_RAII
+#include "mozilla/EnumeratedArray.h"  // mozilla::EnumeratedArray
+#include "mozilla/LinkedList.h"  // mozilla::LinkedList, mozilla::LinkedListElement
+#include "mozilla/MemoryReporting.h"  // mozilla::MallocSizeOf
+#include "mozilla/RefPtr.h"           // RefPtr
+#include "mozilla/TimeStamp.h"        // mozilla::TimeDuration
 
-#include "ds/Fifo.h"
-#include "frontend/CompilationStencil.h"  // CompilationStencil, CompilationGCOutput
-#include "frontend/FrontendContext.h"
-#include "js/CompileOptions.h"
+#include <stddef.h>  // size_t
+#include <stdint.h>  // uint32_t, uint64_t
+#include <utility>   // std::move, std::pair
+
+#include "ds/Fifo.h"                      // Fifo
+#include "frontend/CompilationStencil.h"  // frontend::{CompilationStencil, ExtensibleCompilationStencil, CompilationStencilMerger, ScriptStencilRef}
+#include "frontend/FrontendContext.h"     // FrontendContext
+#include "frontend/ScriptIndex.h"         // frontend::ScriptIndex
+#include "gc/GCRuntime.h"                 // gc::GCRuntime
+#include "js/AllocPolicy.h"               // SystemAllocPolicy
+#include "js/CompileOptions.h"  // JS::OwningCompileOptions, JS::ReadOnlyCompileOptions
 #include "js/experimental/CompileScript.h"  // JS::CompilationStorage
 #include "js/experimental/JSStencil.h"      // JS::InstantiationStorage
-#include "js/HelperThreadAPI.h"
-#include "js/TypeDecls.h"
-#include "threading/ConditionVariable.h"
-#include "vm/HelperThreads.h"
-#include "vm/HelperThreadTask.h"
-#include "vm/JSContext.h"
-#include "vm/OffThreadPromiseRuntimeState.h"  // js::OffThreadPromiseTask
+#include "js/HelperThreadAPI.h"  // JS::HelperThreadTaskCallback, JS::DispatchReason
+#include "js/MemoryMetrics.h"  // JS::GlobalStats
+#include "js/ProfilingStack.h"  // JS::RegisterThreadCallback, JS::UnregisterThreadCallback
+#include "js/RootingAPI.h"                // JS::Handle
+#include "js/UniquePtr.h"                 // UniquePtr
+#include "js/Utility.h"                   // ThreadType
+#include "threading/ConditionVariable.h"  // ConditionVariable
+#include "threading/ProtectedData.h"      // WriteOnceData
+#include "vm/HelperThreads.h"  // AutoLockHelperThreadState, AutoUnlockHelperThreadState
+#include "vm/HelperThreadTask.h"             // HelperThreadTask
+#include "vm/JSContext.h"                    // JSContext
+#include "vm/JSScript.h"                     // ScriptSource
+#include "vm/Runtime.h"                      // JSRuntime
+#include "vm/SharedImmutableStringsCache.h"  // SharedImmutableString
+#include "wasm/WasmConstants.h"              // wasm::CompileMode
+
+class JSTracer;
 
 namespace js {
 
@@ -55,9 +75,6 @@ enum class ParseTaskKind {
 
   // The output is CompilationStencil for script/stencil.
   StencilDecode,
-
-  // The output is an array of CompilationStencil.
-  MultiStencilsDecode,
 };
 
 namespace wasm {
@@ -111,7 +128,6 @@ class GlobalHelperThreadState {
       SourceCompressionTaskVector;
   typedef Vector<PromiseHelperTask*, 0, SystemAllocPolicy>
       PromiseHelperTaskVector;
-  typedef Vector<JSContext*, 0, SystemAllocPolicy> ContextVector;
 
   // Count of running task by each threadType.
   mozilla::EnumeratedArray<ThreadType, ThreadType::THREAD_TYPE_MAX, size_t>
@@ -170,9 +186,6 @@ class GlobalHelperThreadState {
   GCParallelTaskList gcParallelWorklist_;
   size_t gcParallelThreadCount;
 
-  // Global list of JSContext for GlobalHelperThreadState to use.
-  ContextVector helperContexts_;
-
   using HelperThreadTaskVector =
       Vector<HelperThreadTask*, 0, SystemAllocPolicy>;
   // Vector of running HelperThreadTask.
@@ -224,7 +237,6 @@ class GlobalHelperThreadState {
                                size_t threadCount, size_t stackSize,
                                const AutoLockHelperThreadState& lock);
 
-  JSContext* getFirstUnusedContext(AutoLockHelperThreadState& locked);
   void destroyHelperContexts(AutoLockHelperThreadState& lock);
 
 #ifdef DEBUG
@@ -401,10 +413,6 @@ class GlobalHelperThreadState {
   UniquePtr<ParseTask> finishParseTaskCommon(JSContext* cx,
                                              JS::OffThreadToken* token);
 
-  bool finishMultiParseTask(JSContext* cx, ParseTaskKind kind,
-                            JS::OffThreadToken* token,
-                            mozilla::Vector<RefPtr<JS::Stencil>>* stencils);
-
  public:
   void cancelParseTask(JSRuntime* rt, JS::OffThreadToken* token);
   void destroyParseTask(JSRuntime* rt, ParseTask* parseTask);
@@ -414,9 +422,6 @@ class GlobalHelperThreadState {
   already_AddRefed<frontend::CompilationStencil> finishStencilTask(
       JSContext* cx, JS::OffThreadToken* token,
       JS::InstantiationStorage* storage);
-  bool finishMultiStencilsDecodeTask(
-      JSContext* cx, JS::OffThreadToken* token,
-      mozilla::Vector<RefPtr<JS::Stencil>>* stencils);
 
   bool hasActiveThreads(const AutoLockHelperThreadState&);
   bool canStartTasks(const AutoLockHelperThreadState& locked);
@@ -484,31 +489,11 @@ static inline GlobalHelperThreadState& HelperThreadState() {
   return *gHelperThreadState;
 }
 
-class MOZ_RAII AutoSetHelperThreadContext {
-  JSContext* cx;
-  AutoLockHelperThreadState& lock;
-
- public:
-  AutoSetHelperThreadContext(const JS::ContextOptions& options,
-                             AutoLockHelperThreadState& lock);
-  ~AutoSetHelperThreadContext();
-};
-
-struct MOZ_RAII AutoSetContextRuntime {
-  explicit AutoSetContextRuntime(JSRuntime* rt) {
-    TlsContext.get()->setRuntime(rt);
-  }
-  ~AutoSetContextRuntime() { TlsContext.get()->setRuntime(nullptr); }
-};
-
 struct ParseTask : public mozilla::LinkedListElement<ParseTask>,
                    public JS::OffThreadToken,
                    public HelperThreadTask {
   ParseTaskKind kind;
   JS::OwningCompileOptions options;
-
-  // Context options from the main thread.
-  const JS::ContextOptions contextOptions;
 
   // HelperThreads are shared between all runtimes in the process so explicitly
   // track which one we are associated with.
@@ -517,10 +502,6 @@ struct ParseTask : public mozilla::LinkedListElement<ParseTask>,
   // Callback invoked off thread when the parse finishes.
   JS::OffThreadCompileCallback callback;
   void* callbackData;
-
-  // For the multi-decode stencil case, holds onto the set of stencils produced
-  // offthread
-  mozilla::Vector<RefPtr<JS::Stencil>> stencils;
 
   // The input of the compilation.
   JS::CompilationStorage compileStorage_;
@@ -547,8 +528,6 @@ struct ParseTask : public mozilla::LinkedListElement<ParseTask>,
   virtual void parse(FrontendContext* fc) = 0;
 
   bool runtimeMatches(JSRuntime* rt) { return runtime == rt; }
-
-  void trace(JSTracer* trc);
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
   size_t sizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) const {
@@ -655,8 +634,7 @@ struct DelazifyTask : public mozilla::LinkedListElement<DelazifyTask>,
   // track which one we are associated with.
   JSRuntime* runtime = nullptr;
 
-  // Context options originally from the main thread.
-  const JS::ContextOptions contextOptions;
+  const JS::PrefableCompileOptions initialPrefableOptions;
 
   // Queue of functions to be processed while delazifying.
   UniquePtr<DelazifyStrategy> strategy;
@@ -674,11 +652,11 @@ struct DelazifyTask : public mozilla::LinkedListElement<DelazifyTask>,
   // optimization and the VM should remain working even without this
   // optimization in place.
   static UniquePtr<DelazifyTask> Create(
-      JSRuntime* runtime, const JS::ContextOptions& contextOptions,
-      const JS::ReadOnlyCompileOptions& options,
+      JSRuntime* runtime, const JS::ReadOnlyCompileOptions& options,
       const frontend::CompilationStencil& stencil);
 
-  DelazifyTask(JSRuntime* runtime, const JS::ContextOptions& options);
+  DelazifyTask(JSRuntime* runtime,
+               const JS::PrefableCompileOptions& initialPrefableOptions);
   ~DelazifyTask();
 
   [[nodiscard]] bool init(
@@ -704,7 +682,7 @@ struct DelazifyTask : public mozilla::LinkedListElement<DelazifyTask>,
   }
 
   void runHelperThreadTask(AutoLockHelperThreadState& locked) override;
-  [[nodiscard]] bool runTask(JSContext* cx);
+  [[nodiscard]] bool runTask();
   ThreadType threadType() override { return ThreadType::THREAD_TYPE_DELAZIFY; }
 };
 
@@ -801,7 +779,7 @@ class SourceCompressionTask : public HelperThreadTask {
 // of the JSContext used to create the PromiseHelperTask will call resolve() to
 // resolve promise according to those results.
 struct PromiseHelperTask : OffThreadPromiseTask, public HelperThreadTask {
-  PromiseHelperTask(JSContext* cx, Handle<PromiseObject*> promise)
+  PromiseHelperTask(JSContext* cx, JS::Handle<PromiseObject*> promise)
       : OffThreadPromiseTask(cx, promise) {}
 
   // To be called on a helper thread and implemented by the derived class.

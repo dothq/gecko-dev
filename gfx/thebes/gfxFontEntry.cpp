@@ -28,9 +28,6 @@
 #include "nsStyleConsts.h"
 #include "mozilla/AppUnits.h"
 #include "mozilla/FloatingPoint.h"
-#ifdef MOZ_WASM_SANDBOXING_GRAPHITE
-#  include "mozilla/ipc/LibrarySandboxPreload.h"
-#endif
 #include "mozilla/Likely.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Preferences.h"
@@ -160,8 +157,7 @@ void gfxFontEntry::InitializeFrom(fontlist::Face* aFace,
 bool gfxFontEntry::TrySetShmemCharacterMap() {
   MOZ_ASSERT(mShmemFace);
   auto list = gfxPlatformFontList::PlatformFontList()->SharedFontList();
-  const auto* shmemCmap =
-      static_cast<const SharedBitSet*>(mShmemFace->mCharacterMap.ToPtr(list));
+  auto* shmemCmap = mShmemFace->mCharacterMap.ToPtr<const SharedBitSet>(list);
   mShmemCharacterMap.exchange(shmemCmap);
   return shmemCmap != nullptr;
 }

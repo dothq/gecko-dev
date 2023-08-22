@@ -1655,6 +1655,12 @@ static void InvalidateAfterBailout(JSContext* cx, HandleScript outerScript,
     return;
   }
 
+  // Record a invalidation for this script in the jit hints map
+  if (cx->runtime()->jitRuntime()->hasJitHintsMap()) {
+    JitHintsMap* jitHints = cx->runtime()->jitRuntime()->getJitHintsMap();
+    jitHints->recordInvalidation(outerScript);
+  }
+
   MOZ_ASSERT(!outerScript->ionScript()->invalidated());
 
   JitSpew(JitSpew_BaselineBailouts, "Invalidating due to %s", reason);
@@ -1926,7 +1932,10 @@ bool jit::FinishBailoutToBaseline(BaselineBailoutInfo* bailoutInfoArg) {
     case BailoutKind::SpeculativePhi:
       // A value of an unexpected type flowed into a phi.
       MOZ_ASSERT(!outerScript->hadSpeculativePhiBailout());
-      outerScript->setHadSpeculativePhiBailout();
+      if (!outerScript->hasIonScript() ||
+          outerScript->ionScript()->numFixableBailouts() == 0) {
+        outerScript->setHadSpeculativePhiBailout();
+      }
       InvalidateAfterBailout(cx, outerScript, "phi specialization failure");
       break;
 

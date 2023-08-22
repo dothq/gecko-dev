@@ -9,7 +9,10 @@ WASM_SOURCES += [
     "/third_party/rlbox_wasm2c_sandbox/c_src/wasm2c_sandbox_wrapper.c",
 ]
 
-LOCAL_INCLUDES += ["/third_party/wasm2c/wasm2c/"]
+LOCAL_INCLUDES += [
+    "/third_party/simde/",
+    "/third_party/wasm2c/wasm2c/",
+]
 
 EXPORTS += [
     "/third_party/wasm2c/wasm2c/wasm-rt.h",
@@ -21,6 +24,9 @@ SOURCES += [
 ]
 
 # Configuration for the wasm2c runtime used by RLBox
+
+# Enable SIMD autovectorization
+WASM_CXXFLAGS += ["-msimd128"]
 
 # Use a mmap style allocation
 DEFINES["WASM_RT_USE_MMAP"] = 1

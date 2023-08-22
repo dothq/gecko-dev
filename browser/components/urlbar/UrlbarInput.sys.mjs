@@ -13,6 +13,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   BrowserUIUtils: "resource:///modules/BrowserUIUtils.sys.mjs",
   ExtensionSearchHandler:
     "resource://gre/modules/ExtensionSearchHandler.sys.mjs",
+  ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
   PartnerLinkAttribution: "resource:///modules/PartnerLinkAttribution.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   PromiseUtils: "resource://gre/modules/PromiseUtils.sys.mjs",
@@ -28,10 +29,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
   UrlbarValueFormatter: "resource:///modules/UrlbarValueFormatter.sys.mjs",
   UrlbarView: "resource:///modules/UrlbarView.sys.mjs",
-});
-
-XPCOMUtils.defineLazyModuleGetters(lazy, {
-  ObjectUtils: "resource://gre/modules/ObjectUtils.jsm",
 });
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -209,11 +206,11 @@ export class UrlbarInput {
     this._searchModeLabel = this.querySelector("#urlbar-label-search-mode");
     this._toolbar = this.textbox.closest("toolbar");
 
-    XPCOMUtils.defineLazyGetter(this, "valueFormatter", () => {
+    ChromeUtils.defineLazyGetter(this, "valueFormatter", () => {
       return new lazy.UrlbarValueFormatter(this);
     });
 
-    XPCOMUtils.defineLazyGetter(this, "addSearchEngineHelper", () => {
+    ChromeUtils.defineLazyGetter(this, "addSearchEngineHelper", () => {
       return new AddSearchEngineHelper(this);
     });
 
@@ -249,6 +246,7 @@ export class UrlbarInput {
       "paste",
       "scrollend",
       "select",
+      "selectionchange",
     ];
     for (let name of this._inputFieldEvents) {
       this.addEventListener(name, this);
@@ -1398,6 +1396,15 @@ export class UrlbarInput {
     }
 
     this.setResultForCurrentValue(result);
+
+    // Update placeholder selection and value to the current selected result to
+    // prevent the on_selectionchange event to detect a "accent-character"
+    // insertion.
+    if (!result.autofill && this._autofillPlaceholder) {
+      this._autofillPlaceholder.value = this.value;
+      this._autofillPlaceholder.selectionStart = this.value.length;
+      this._autofillPlaceholder.selectionEnd = this.value.length;
+    }
     return false;
   }
 
@@ -1450,6 +1457,25 @@ export class UrlbarInput {
     }
 
     this.setValueFromResult({ result });
+  }
+  /**
+   * Clears displayed autofill values and unsets the autofill placeholder.
+   */
+  #clearAutofill() {
+    if (!this._autofillPlaceholder) {
+      return;
+    }
+    let currentSelectionStart = this.selectionStart;
+    let currentSelectionEnd = this.selectionEnd;
+
+    // Overriding this value clears the selection.
+    this.inputField.value = this.value.substring(
+      0,
+      this._autofillPlaceholder.selectionStart
+    );
+    this._autofillPlaceholder = null;
+    // Restore selection
+    this.setSelectionRange(currentSelectionStart, currentSelectionEnd);
   }
 
   /**
@@ -1554,7 +1580,6 @@ export class UrlbarInput {
       isPrivate: this.isPrivate,
       maxResults: lazy.UrlbarPrefs.get("maxRichResults"),
       searchString,
-      view: this.view,
       userContextId:
         this.window.gBrowser.selectedBrowser.getAttribute("usercontextid"),
       currentPage: this.window.gBrowser.currentURI.spec,
@@ -2288,8 +2313,9 @@ export class UrlbarInput {
       this.selectionEnd == value.length &&
       !this.searchMode?.engineName &&
       this.searchMode?.source != lazy.UrlbarUtils.RESULT_SOURCE.SEARCH;
+
     if (!allowAutofill) {
-      this._autofillPlaceholder = null;
+      this.#clearAutofill();
       return false;
     }
 
@@ -2569,9 +2595,14 @@ export class UrlbarInput {
    *   The trimmed string
    */
   _trimValue(val) {
-    return lazy.UrlbarPrefs.get("trimURLs")
+    let trimmedValue = lazy.UrlbarPrefs.get("trimURLs")
       ? lazy.BrowserUIUtils.trimURL(val)
       : val;
+    // Only trim value if the directionality doesn't change to RTL.
+    return this.window.windowUtils.getDirectionFromText(trimmedValue) ==
+      this.window.windowUtils.DIRECTION_RTL
+      ? val
+      : trimmedValue;
   }
 
   /**
@@ -2661,7 +2692,13 @@ export class UrlbarInput {
     // beginning.  Do not allow it to be trimmed.
     this._setValue(value, false);
     this.inputField.setSelectionRange(selectionStart, selectionEnd);
-    this._autofillPlaceholder = { value, type, adaptiveHistoryInput };
+    this._autofillPlaceholder = {
+      value,
+      type,
+      adaptiveHistoryInput,
+      selectionStart,
+      selectionEnd,
+    };
   }
 
   /**
@@ -3529,6 +3566,21 @@ export class UrlbarInput {
       resetSearchState: false,
       event,
     });
+  }
+
+  _on_selectionchange(event) {
+    // Confirm placeholder as user text if it gets explicitly deselected. This
+    // happens when the user wants to modify the autofilled text by either
+    // clicking on it, or pressing HOME, END, RIGHT, …
+    if (
+      this._autofillPlaceholder &&
+      this._autofillPlaceholder.value == this.value &&
+      (this._autofillPlaceholder.selectionStart != this.selectionStart ||
+        this._autofillPlaceholder.selectionEnd != this.selectionEnd)
+    ) {
+      this._autofillPlaceholder = null;
+      this.window.gBrowser.userTypedValue = this.value;
+    }
   }
 
   _on_select(event) {

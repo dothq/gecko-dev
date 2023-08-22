@@ -77,6 +77,7 @@
 #include <algorithm>
 #include <limits>
 
+#include "mozilla/widget/WinMessages.h"
 #include "nsWindow.h"
 #include "nsWindowTaskbarConcealer.h"
 #include "nsAppRunner.h"
@@ -123,6 +124,7 @@
 #include "nsString.h"
 #include "mozilla/Components.h"
 #include "nsNativeThemeWin.h"
+#include "nsXULPopupManager.h"
 #include "nsWindowsDllInterceptor.h"
 #include "nsLayoutUtils.h"
 #include "nsView.h"
@@ -203,8 +205,6 @@
 #include "npapi.h"
 
 #include <d3d11.h>
-
-#include "InkCollector.h"
 
 // ERROR from wingdi.h (below) gets undefined by some code.
 // #define ERROR               0
@@ -299,8 +299,7 @@ static SystemTimeConverter<DWORD>& TimeConverter() {
 // Global event hook for window cloaking. Never deregistered.
 //  - `Nothing` if not yet set.
 //  - `Some(nullptr)` if no attempt should be made to set it.
-static mozilla::Maybe<HWINEVENTHOOK> sWinCloakEventHook =
-    IsWin8OrLater() ? Nothing() : Some(HWINEVENTHOOK(nullptr));
+static mozilla::Maybe<HWINEVENTHOOK> sWinCloakEventHook = Nothing();
 static mozilla::LazyLogModule sCloakingLog("DWMCloaking");
 
 namespace mozilla {
@@ -365,11 +364,6 @@ static NS_DEFINE_CID(kCClipboardCID, NS_CLIPBOARD_CID);
 // General purpose user32.dll hook object
 static WindowsDllInterceptor sUser32Intercept;
 
-// 2 pixel offset for TransparencyMode::BorderlessGlass which equals the size of
-// the default window border Windows paints. Glass will be extended inward
-// this distance to remove the border.
-static const int32_t kGlassMarginAdjustment = 2;
-
 // When the client area is extended out into the default window frame area,
 // this is the minimum amount of space along the edge of resizable windows
 // we will always display a resize cursor in, regardless of the underlying
@@ -424,10 +418,6 @@ class TIPMessageHandler {
   }
 
   static void Initialize() {
-    if (!IsWin8OrLater()) {
-      return;
-    }
-
     if (sInstance) {
       return;
     }
@@ -460,16 +450,6 @@ class TIPMessageHandler {
     mHook = ::SetWindowsHookEx(WH_GETMESSAGE, &TIPHook, nullptr,
                                ::GetCurrentThreadId());
     MOZ_ASSERT(mHook);
-
-    // On touchscreen devices, tiptsf.dll will have been loaded when STA COM was
-    // first initialized.
-    if (!IsWin10OrLater() && GetModuleHandle(L"tiptsf.dll") &&
-        !sProcessCaretEventsStub) {
-      sTipTsfInterceptor.Init("tiptsf.dll");
-      DebugOnly<bool> ok = sProcessCaretEventsStub.Set(
-          sTipTsfInterceptor, "ProcessCaretEvents", &ProcessCaretEventsHook);
-      MOZ_ASSERT(ok);
-    }
 
     if (!sSendMessageTimeoutWStub) {
       sUser32Intercept.Init("user32.dll");
@@ -517,16 +497,6 @@ class TIPMessageHandler {
     return ::CallNextHookEx(nullptr, aCode, aWParam, aLParam);
   }
 
-  static void CALLBACK ProcessCaretEventsHook(HWINEVENTHOOK aWinEventHook,
-                                              DWORD aEvent, HWND aHwnd,
-                                              LONG aObjectId, LONG aChildId,
-                                              DWORD aGeneratingTid,
-                                              DWORD aEventTime) {
-    A11yInstantiationBlocker block;
-    sProcessCaretEventsStub(aWinEventHook, aEvent, aHwnd, aObjectId, aChildId,
-                            aGeneratingTid, aEventTime);
-  }
-
   static LRESULT WINAPI SendMessageTimeoutWHook(HWND aHwnd, UINT aMsgCode,
                                                 WPARAM aWParam, LPARAM aLParam,
                                                 UINT aFlags, UINT aTimeout,
@@ -550,9 +520,6 @@ class TIPMessageHandler {
     return static_cast<LRESULT>(TRUE);
   }
 
-  static WindowsDllInterceptor sTipTsfInterceptor;
-  static WindowsDllInterceptor::FuncHookType<WINEVENTPROC>
-      sProcessCaretEventsStub;
   static WindowsDllInterceptor::FuncHookType<decltype(&SendMessageTimeoutW)>
       sSendMessageTimeoutWStub;
   static StaticAutoPtr<TIPMessageHandler> sInstance;
@@ -562,9 +529,6 @@ class TIPMessageHandler {
   uint32_t mA11yBlockCount;
 };
 
-WindowsDllInterceptor TIPMessageHandler::sTipTsfInterceptor;
-WindowsDllInterceptor::FuncHookType<WINEVENTPROC>
-    TIPMessageHandler::sProcessCaretEventsStub;
 WindowsDllInterceptor::FuncHookType<decltype(&SendMessageTimeoutW)>
     TIPMessageHandler::sSendMessageTimeoutWStub;
 StaticAutoPtr<TIPMessageHandler> TIPMessageHandler::sInstance;
@@ -585,7 +549,8 @@ namespace mozilla {
 // it to be null or to have a valid value.
 class InitializeVirtualDesktopManagerTask : public Task {
  public:
-  InitializeVirtualDesktopManagerTask() : Task(false, kDefaultPriorityValue) {}
+  InitializeVirtualDesktopManagerTask()
+      : Task(Kind::OffMainThreadOnly, kDefaultPriorityValue) {}
 
 #ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
   bool GetName(nsACString& aName) override {
@@ -595,10 +560,6 @@ class InitializeVirtualDesktopManagerTask : public Task {
 #endif
 
   virtual bool Run() override {
-    if (!IsWin10OrLater()) {
-      return true;
-    }
-
     RefPtr<IVirtualDesktopManager> desktopManager;
     HRESULT hr = ::CoCreateInstance(
         CLSID_VirtualDesktopManager, NULL, CLSCTX_INPROC_SERVER,
@@ -770,9 +731,6 @@ nsWindow::nsWindow(bool aIsChildWindow)
     // Init theme data
     nsUXThemeData::UpdateNativeThemeInfo();
     RedirectedKeyDownMessageManager::Forget();
-    if (mPointerEvents.ShouldEnableInkCollector()) {
-      InkCollector::sInkCollector = new InkCollector();
-    }
   }  // !sInstanceCount
 
   sInstanceCount++;
@@ -797,10 +755,6 @@ nsWindow::~nsWindow() {
 
   // Global shutdown
   if (sInstanceCount == 0) {
-    if (InkCollector::sInkCollector) {
-      InkCollector::sInkCollector->Shutdown();
-      InkCollector::sInkCollector = nullptr;
-    }
     IMEHandler::Terminate();
     sCurrentCursor = {};
     if (sIsOleInitialized) {
@@ -824,15 +778,6 @@ nsWindow::~nsWindow() {
 // Allow Derived classes to modify the height that is passed
 // when the window is created or resized.
 int32_t nsWindow::GetHeight(int32_t aProposedHeight) { return aProposedHeight; }
-
-static bool ShouldCacheTitleBarInfo(WindowType aWindowType,
-                                    BorderStyle aBorderStyle) {
-  return (aWindowType == WindowType::TopLevel) &&
-         (aBorderStyle == BorderStyle::Default ||
-          aBorderStyle == BorderStyle::All) &&
-         (!nsUXThemeData::sTitlebarInfoPopulatedThemed ||
-          !nsUXThemeData::sTitlebarInfoPopulatedAero);
-}
 
 void nsWindow::SendAnAPZEvent(InputData& aEvent) {
   LRESULT popupHandlingResult;
@@ -894,13 +839,6 @@ void nsWindow::RecreateDirectManipulationIfNeeded() {
   if (!(StaticPrefs::apz_allow_zooming() ||
         StaticPrefs::apz_windows_use_direct_manipulation()) ||
       StaticPrefs::apz_windows_force_disable_direct_manipulation()) {
-    return;
-  }
-
-  if (!IsWin10OrLater()) {
-    // Chrome source said the Windows Direct Manipulation implementation had
-    // important bugs until Windows 10 (although IE on Windows 8.1 seems to use
-    // Direct Manipulation).
     return;
   }
 
@@ -972,23 +910,9 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   DWORD style = WindowStyle();
   DWORD extendedStyle = WindowExStyle();
 
-  // When window is PiP window on Windows7, WS_EX_COMPOSITED is set to suppress
-  // flickering during resizing with hardware acceleration.
-  bool isPIPWindow = aInitData && aInitData->mPIPWindow;
-  if (isPIPWindow && !IsWin8OrLater() &&
-      gfxConfig::IsEnabled(gfx::Feature::HW_COMPOSITING) &&
-      WidgetTypeSupportsAcceleration()) {
-    extendedStyle |= WS_EX_COMPOSITED;
-  }
-
   if (mWindowType == WindowType::Popup) {
     if (!aParent) {
       parent = nullptr;
-    }
-
-    if (!IsWin8OrLater() && HasBogusPopupsDropShadowOnMultiMonitor() &&
-        ShouldUseOffMainThreadCompositing()) {
-      extendedStyle |= WS_EX_COMPOSITED;
     }
   } else if (mWindowType == WindowType::Invisible) {
     // Make sure CreateWindowEx succeeds at creating a toplevel window
@@ -1218,12 +1142,6 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   mDefaultIMC.Init(this);
   IMEHandler::InitInputContext(this, mInputContext);
 
-  // Query for command button metric data for rendering the titlebar. We
-  // only do this once on the first window that has an actual titlebar
-  if (ShouldCacheTitleBarInfo(mWindowType, mBorderStyle)) {
-    nsUXThemeData::UpdateTitlebarInfo(mWnd);
-  }
-
   static bool a11yPrimed = false;
   if (!a11yPrimed && mWindowType == WindowType::TopLevel) {
     a11yPrimed = true;
@@ -1381,10 +1299,7 @@ DWORD nsWindow::WindowStyle() {
       break;
 
     case WindowType::Popup:
-      style = WS_POPUP;
-      if (!HasGlass()) {
-        style |= WS_OVERLAPPED;
-      }
+      style = WS_POPUP | WS_OVERLAPPED;
       break;
 
     default:
@@ -1865,9 +1780,8 @@ bool nsWindow::IsVisible() const { return mIsVisible; }
 // operations.
 // XXX this is apparently still needed in Windows 7 and later
 void nsWindow::ClearThemeRegion() {
-  if (!HasGlass() &&
-      (mWindowType == WindowType::Popup && !IsPopupWithTitleBar() &&
-       (mPopupType == PopupType::Tooltip || mPopupType == PopupType::Panel))) {
+  if (mWindowType == WindowType::Popup && !IsPopupWithTitleBar() &&
+      (mPopupType == PopupType::Tooltip || mPopupType == PopupType::Panel)) {
     SetWindowRgn(mWnd, nullptr, false);
   }
 }
@@ -2319,7 +2233,7 @@ void nsWindow::GetWorkspaceID(nsAString& workspaceID) {
 void nsWindow::AsyncUpdateWorkspaceID(Desktop& aDesktop) {
   struct UpdateWorkspaceIdTask : public Task {
     explicit UpdateWorkspaceIdTask(nsWindow* aSelf)
-        : Task(false /* mainThread */, EventQueuePriority::Normal),
+        : Task(Kind::OffMainThreadOnly, EventQueuePriority::Normal),
           mSelf(aSelf) {}
 
     bool Run() override {
@@ -2714,9 +2628,6 @@ void nsWindow::UpdateGetWindowInfoCaptionStatus(bool aActiveCaption) {
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 
 void nsWindow::UpdateDarkModeToolbar() {
-  if (!IsWin10OrLater()) {
-    return;
-  }
   LookAndFeel::EnsureColorSchemesInitialized();
   BOOL dark = LookAndFeel::ColorSchemeForChrome() == ColorScheme::Dark;
   DwmSetWindowAttribute(mWnd, DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, &dark,
@@ -2872,27 +2783,13 @@ bool nsWindow::UpdateNonClientMargins(bool aReflowWindow) {
     mNonClientOffset.left = mHorResizeMargin;
     mNonClientOffset.right = mHorResizeMargin;
   } else if (sizeMode == nsSizeMode_Maximized) {
-    // On Windows 10+, we make the entire frame part of the client area. We
-    // leave the default frame sizes for left, right and bottom since Windows
-    // will automagically position the edges "offscreen" for maximized windows.
-    //
-    // On versions prior to Windows 10, we add padding to the widget to
-    // circumvent a bug in DwmDefWindowProc (see
-    // nsNativeThemeWin::GetWidgetPadding).  We "undo" that padding in
-    // WM_NCCALCSIZE by adding the caption (as well as the sizing frame) to the
-    // client area.
-    //
-    // The padding is not needed on Win10+ because we handle window buttons
-    // non-natively in the theme.  It also does not work on Win10+ -- it exposes
-    // a new issue where widget edges would sometimes appear to bleed into other
-    // displays (bug 1614218).
-    int verticalResize = 0;
-    if (IsWin10OrLater()) {
-      verticalResize =
-          WinUtils::GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
-          (hasCaption ? WinUtils::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
-                      : 0);
-    }
+    // We make the entire frame part of the client area. We leave the default
+    // frame sizes for left, right and bottom since Windows will automagically
+    // position the edges "offscreen" for maximized windows.
+    int verticalResize =
+        WinUtils::GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+        (hasCaption ? WinUtils::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+                    : 0);
 
     mNonClientOffset.top = mCaptionHeight - verticalResize;
     mNonClientOffset.bottom = 0;
@@ -2910,14 +2807,12 @@ bool nsWindow::UpdateNonClientMargins(bool aReflowWindow) {
         mNonClientOffset.bottom -= kHiddenTaskbarSize;
       }
 
-      // On Windows 10+, when we are drawing the non-client region, we need
+      // When we are drawing the non-client region, we need
       // to clear the portion of the NC region that is exposed by the
       // hidden taskbar.  As above, we clear the bottom of the NC region
       // when the taskbar is at the top of the screen.
-      if (IsWin10OrLater()) {
-        UINT clearEdge = (edge == ABE_TOP) ? ABE_BOTTOM : edge;
-        mClearNCEdge = Some(clearEdge);
-      }
+      UINT clearEdge = (edge == ABE_TOP) ? ABE_BOTTOM : edge;
+      mClearNCEdge = Some(clearEdge);
     }
   } else {
     mNonClientOffset = NormalWindowNonClientOffset();
@@ -3267,36 +3162,6 @@ void nsWindow::SetTransparencyMode(TransparencyMode aMode) {
   window->SetWindowTranslucencyInner(aMode);
 }
 
-void nsWindow::UpdateOpaqueRegion(const LayoutDeviceIntRegion& aOpaqueRegion) {
-  if (!HasGlass() || GetParent()) return;
-
-  // If there is no opaque region or hidechrome=true, set margins
-  // to support a full sheet of glass. Comments in MSDN indicate
-  // all values must be set to -1 to get a full sheet of glass.
-  MARGINS margins = {-1, -1, -1, -1};
-  if (!aOpaqueRegion.IsEmpty()) {
-    LayoutDeviceIntRect clientBounds = GetClientBounds();
-    // Find the largest rectangle and use that to calculate the inset.
-    LayoutDeviceIntRect largest = aOpaqueRegion.GetLargestRectangle();
-    margins.cxLeftWidth = largest.X();
-    margins.cxRightWidth = clientBounds.Width() - largest.XMost();
-    margins.cyBottomHeight = clientBounds.Height() - largest.YMost();
-    if (mCustomNonClient) {
-      // The minimum glass height must be the caption buttons height,
-      // otherwise the buttons are drawn incorrectly.
-      largest.MoveToY(std::max<uint32_t>(
-          largest.Y(), nsUXThemeData::GetCommandButtonBoxMetrics().cy));
-    }
-    margins.cyTopHeight = largest.Y();
-  }
-
-  // Only update glass area if there are changes
-  if (memcmp(&mGlassMargins, &margins, sizeof mGlassMargins)) {
-    mGlassMargins = margins;
-    UpdateGlass();
-  }
-}
-
 /**************************************************************
  *
  * SECTION: nsIWidget::UpdateWindowDraggingRegion
@@ -3310,42 +3175,6 @@ void nsWindow::UpdateWindowDraggingRegion(
     const LayoutDeviceIntRegion& aRegion) {
   if (mDraggableRegion != aRegion) {
     mDraggableRegion = aRegion;
-  }
-}
-
-void nsWindow::UpdateGlass() {
-  MARGINS margins = mGlassMargins;
-
-  // DWMNCRP_USEWINDOWSTYLE - The non-client rendering area is
-  //                          rendered based on the window style.
-  // DWMNCRP_ENABLED        - The non-client area rendering is
-  //                          enabled; the window style is ignored.
-  DWMNCRENDERINGPOLICY policy = DWMNCRP_USEWINDOWSTYLE;
-  switch (mTransparencyMode) {
-    case TransparencyMode::BorderlessGlass:
-      // Only adjust if there is some opaque rectangle
-      if (margins.cxLeftWidth >= 0) {
-        margins.cxLeftWidth += kGlassMarginAdjustment;
-        margins.cyTopHeight += kGlassMarginAdjustment;
-        margins.cxRightWidth += kGlassMarginAdjustment;
-        margins.cyBottomHeight += kGlassMarginAdjustment;
-      }
-      policy = DWMNCRP_ENABLED;
-      break;
-    default:
-      break;
-  }
-
-  MOZ_LOG(gWindowsLog, LogLevel::Info,
-          ("glass margins: left:%d top:%d right:%d bottom:%d\n",
-           margins.cxLeftWidth, margins.cyTopHeight, margins.cxRightWidth,
-           margins.cyBottomHeight));
-
-  // Extends the window frame behind the client area
-  if (gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
-    DwmExtendFrameIntoClientArea(mWnd, &margins);
-    DwmSetWindowAttribute(mWnd, DWMWA_NCRENDERING_POLICY, &policy,
-                          sizeof policy);
   }
 }
 
@@ -4264,47 +4093,6 @@ nsresult nsWindow::OnDefaultButtonLoaded(
   return NS_OK;
 }
 
-void nsWindow::UpdateThemeGeometries(
-    const nsTArray<ThemeGeometry>& aThemeGeometries) {
-  RefPtr<WebRenderLayerManager> layerManager =
-      GetWindowRenderer() ? GetWindowRenderer()->AsWebRender() : nullptr;
-  if (!layerManager) {
-    return;
-  }
-
-  if (!HasGlass() ||
-      !gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled()) {
-    return;
-  }
-
-  mWindowButtonsRect = Nothing();
-
-  if (!IsWin10OrLater()) {
-    for (size_t i = 0; i < aThemeGeometries.Length(); i++) {
-      if (aThemeGeometries[i].mType ==
-          nsNativeThemeWin::eThemeGeometryTypeWindowButtons) {
-        LayoutDeviceIntRect bounds = aThemeGeometries[i].mRect;
-        // Extend the bounds by one pixel to the right, because that's how much
-        // the actual window button shape extends past the client area of the
-        // window (and overlaps the right window frame).
-        bounds.SetWidth(bounds.Width() + 1);
-        if (!mWindowButtonsRect) {
-          mWindowButtonsRect = Some(bounds);
-        }
-      }
-    }
-  }
-}
-
-void nsWindow::AddWindowOverlayWebRenderCommands(
-    layers::WebRenderBridgeChild* aWrBridge, wr::DisplayListBuilder& aBuilder,
-    wr::IpcResourceUpdateQueue& aResources) {
-  if (mWindowButtonsRect) {
-    wr::LayoutRect rect = wr::ToLayoutRect(*mWindowButtonsRect);
-    aBuilder.PushClearRect(rect);
-  }
-}
-
 uint32_t nsWindow::GetMaxTouchPoints() const {
   return WinUtils::GetMaxTouchPoints();
 }
@@ -4561,17 +4349,6 @@ bool nsWindow::DispatchMouseEvent(EventMessage aEventMessage, WPARAM wParam,
 
   uint32_t pointerId =
       aPointerInfo ? aPointerInfo->pointerId : MOUSE_POINTERID();
-
-  // Since it is unclear whether a user will use the digitizer,
-  // Postpone initialization until first PEN message will be found.
-  if (MouseEvent_Binding::MOZ_SOURCE_PEN == aInputSource
-      // Messages should be only at topLevel window.
-      && WindowType::TopLevel == mWindowType
-      // Currently this scheme is used only when pointer events is enabled.
-      && InkCollector::sInkCollector) {
-    InkCollector::sInkCollector->SetTarget(mWnd);
-    InkCollector::sInkCollector->SetPointerId(pointerId);
-  }
 
   switch (aEventMessage) {
     case eMouseDown:
@@ -5006,108 +4783,8 @@ LRESULT CALLBACK nsWindow::WindowProc(HWND hWnd, UINT msg, WPARAM wParam,
                                                wParam, lParam);
 }
 
-namespace geckoprofiler::markers {
-
-struct WindowProcMarker {
-  static constexpr Span<const char> MarkerTypeName() {
-    return MakeStringSpan("WindowProc");
-  }
-  static void StreamJSONMarkerData(baseprofiler::SpliceableJSONWriter& aWriter,
-                                   UINT aMsg, WPARAM aWParam, LPARAM aLParam) {
-    aWriter.IntProperty("uMsg", aMsg);
-    const char* name;
-    if (aMsg < WM_USER) {
-      const auto eventMsgInfo = mozilla::widget::gAllEvents.find(aMsg);
-      if (eventMsgInfo != mozilla::widget::gAllEvents.end()) {
-        name = eventMsgInfo->second.mStr;
-      } else {
-        name = "ui message";
-      }
-    } else if (aMsg >= WM_USER && aMsg < WM_APP) {
-      name = "WM_USER message";
-    } else if (aMsg >= WM_APP && aMsg < 0xC000) {
-      name = "WM_APP message";
-    } else if (aMsg >= 0xC000 && aMsg < 0x10000) {
-      name = "registered windows message";
-    } else {
-      name = "system message";
-    }
-    aWriter.StringProperty("name", MakeStringSpan(name));
-
-    if (aWParam) {
-      aWriter.IntProperty("wParam", aWParam);
-    }
-    if (aLParam) {
-      aWriter.IntProperty("lParam", aLParam);
-    }
-  }
-
-  static MarkerSchema MarkerTypeDisplay() {
-    using MS = MarkerSchema;
-    MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
-    schema.AddKeyFormat("uMsg", MS::Format::Integer);
-    schema.SetChartLabel("{marker.data.name} ({marker.data.uMsg})");
-    schema.SetTableLabel(
-        "{marker.name} - {marker.data.name} ({marker.data.uMsg})");
-    schema.SetTooltipLabel("{marker.name} - {marker.data.name}");
-    schema.AddKeyFormat("wParam", MS::Format::Integer);
-    schema.AddKeyFormat("lParam", MS::Format::Integer);
-    return schema;
-  }
-};
-
-}  // namespace geckoprofiler::markers
-
-class MOZ_RAII AutoProfilerMessageMarker {
- public:
-  explicit AutoProfilerMessageMarker(HWND hWnd, UINT msg, WPARAM wParam,
-                                     LPARAM lParam)
-      : mMsg(msg), mWParam(wParam), mLParam(lParam) {
-    if (profiler_thread_is_being_profiled_for_markers()) {
-      mOptions.emplace(MarkerOptions(MarkerTiming::IntervalStart()));
-      nsWindow* win = WinUtils::GetNSWindowPtr(hWnd);
-      if (win) {
-        nsIWidgetListener* wl = win->GetWidgetListener();
-        if (wl) {
-          PresShell* presShell = wl->GetPresShell();
-          if (presShell) {
-            Document* doc = presShell->GetDocument();
-            if (doc) {
-              mOptions->Set(MarkerInnerWindowId(doc->InnerWindowID()));
-            }
-          }
-        }
-      }
-    }
-  }
-
-  ~AutoProfilerMessageMarker() {
-    if (!profiler_thread_is_being_profiled_for_markers()) {
-      return;
-    }
-
-    if (mOptions) {
-      mOptions->TimingRef().SetIntervalEnd();
-    } else {
-      mOptions.emplace(MarkerOptions(MarkerTiming::IntervalEnd()));
-    }
-    profiler_add_marker("WindowProc", ::mozilla::baseprofiler::category::OTHER,
-                        std::move(*mOptions),
-                        geckoprofiler::markers::WindowProcMarker{}, mMsg,
-                        mWParam, mLParam);
-  }
-
- protected:
-  Maybe<MarkerOptions> mOptions;
-  UINT mMsg;
-  WPARAM mWParam;
-  LPARAM mLParam;
-};
-
 LRESULT CALLBACK nsWindow::WindowProcInternal(HWND hWnd, UINT msg,
                                               WPARAM wParam, LPARAM lParam) {
-  AutoProfilerMessageMarker marker(hWnd, msg, wParam, lParam);
-
   if (::GetWindowLongPtrW(hWnd, GWLP_ID) == eFakeTrackPointScrollableID) {
     // This message was sent to the FAKETRACKPOINTSCROLLABLE.
     if (msg == WM_HSCROLL) {
@@ -5196,9 +4873,9 @@ bool nsWindow::ProcessMessage(UINT msg, WPARAM& wParam, LPARAM& lParam,
                               LRESULT* aRetValue) {
   // For some events we might change the parameter values, so log
   // before and after we process them.
-  PrintEvent printEvent(mWnd, msg, wParam, lParam);
+  NativeEventLogger eventLogger("nsWindow", mWnd, msg, wParam, lParam);
   bool result = ProcessMessageInternal(msg, wParam, lParam, aRetValue);
-  printEvent.SetResult(*aRetValue, result);
+  eventLogger.SetResult(*aRetValue, result);
 
   return result;
 }
@@ -5225,13 +4902,12 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
     return true;
   }
 
-  // Glass hit testing w/custom transparent margins
+  // Glass hit testing w/custom transparent margins.
+  //
+  // FIXME(emilio): is this needed? We deal with titlebar buttons non-natively
+  // now.
   LRESULT dwmHitResult;
   if (mCustomNonClient &&
-      gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled() &&
-      /* We don't do this for win10 glass with a custom titlebar,
-       * in order to avoid the caption buttons breaking. */
-      !(IsWin10OrLater() && HasGlass()) &&
       DwmDefWindowProc(mWnd, msg, wParam, lParam, &dwmHitResult)) {
     *aRetValue = dwmHitResult;
     return true;
@@ -5840,21 +5516,6 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
                          MouseButton::ePrimary, MOUSE_INPUT_SOURCE());
     } break;
 
-    case MOZ_WM_PEN_LEAVES_HOVER_OF_DIGITIZER: {
-      LPARAM pos = lParamToClient(::GetMessagePos());
-      MOZ_ASSERT(InkCollector::sInkCollector);
-      uint16_t pointerId = InkCollector::sInkCollector->GetPointerId();
-      if (pointerId != 0) {
-        WinPointerInfo pointerInfo;
-        pointerInfo.pointerId = pointerId;
-        DispatchMouseEvent(eMouseExitFromWidget, wParam, pos, false,
-                           MouseButton::ePrimary,
-                           MouseEvent_Binding::MOZ_SOURCE_PEN, &pointerInfo);
-        InkCollector::sInkCollector->ClearTarget();
-        InkCollector::sInkCollector->ClearPointerId();
-      }
-    } break;
-
     case WM_CONTEXTMENU: {
       // If the context menu is brought up by a touch long-press, then
       // the APZ code is responsible for dealing with this, so we don't
@@ -6175,7 +5836,7 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
         DispatchCustomEvent(u"draggableregionleftmousedown"_ns);
       }
 
-      if (IsWindowButton(wParam) && mCustomNonClient && !mWindowButtonsRect) {
+      if (IsWindowButton(wParam) && mCustomNonClient) {
         DispatchMouseEvent(eMouseDown, wParamFromGlobalMouseState(),
                            lParamToClient(lParam), false, MouseButton::ePrimary,
                            MOUSE_INPUT_SOURCE(), nullptr, true);
@@ -6232,6 +5893,10 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
           DispatchInputEvent(&event);
           if (sSwitchKeyboardLayout && mLastKeyboardLayout)
             ActivateKeyboardLayout(mLastKeyboardLayout, 0);
+
+#ifdef ACCESSIBILITY
+          a11y::LazyInstantiator::ResetUiaDetectionCache();
+#endif
         }
       }
     } break;
@@ -6254,6 +5919,12 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
     case WM_WINDOWPOSCHANGING: {
       LPWINDOWPOS info = (LPWINDOWPOS)lParam;
       OnWindowPosChanging(info);
+      result = true;
+    } break;
+
+    // Workaround for race condition in explorer.exe.
+    case MOZ_WM_FULLSCREEN_STATE_UPDATE: {
+      TaskbarConcealer::OnAsyncStateUpdateRequest(mWnd);
       result = true;
     } break;
 
@@ -6377,7 +6048,6 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       // TODO: Why is NotifyThemeChanged needed, what does it affect? And can we
       // make it more granular by tweaking the ChangeKind we pass?
       NotifyThemeChanged(widget::ThemeChangeKind::StyleAndLayout);
-      UpdateGlass();
       Invalidate(true, true, true);
       break;
 
@@ -7728,7 +7398,6 @@ void nsWindow::OnDPIChanged(int32_t x, int32_t y, int32_t width,
 /* static */
 void nsWindow::OnCloakEvent(HWND aWnd, bool aCloaked) {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(IsWin8OrLater());
 
   const char* const kEventName = aCloaked ? "CLOAKED" : "UNCLOAKED";
   nsWindow* pWin = WinUtils::GetNSWindowPtr(aWnd);
@@ -7935,27 +7604,10 @@ void nsWindow::SetWindowTranslucencyInner(TransparencyMode aMode) {
   ::SetWindowLongPtrW(hWnd, GWL_STYLE, style);
   ::SetWindowLongPtrW(hWnd, GWL_EXSTYLE, exStyle);
 
-  if (HasGlass()) memset(&mGlassMargins, 0, sizeof mGlassMargins);
   mTransparencyMode = aMode;
 
   if (mCompositorWidgetDelegate) {
     mCompositorWidgetDelegate->UpdateTransparency(aMode);
-  }
-  UpdateGlass();
-
-  // Clear window by transparent black when compositor window is used in GPU
-  // process and non-client area rendering by DWM is enabled.
-  // It is for showing non-client area rendering. See nsWindow::UpdateGlass().
-  if (HasGlass() && GetWindowRenderer()->AsKnowsCompositor() &&
-      GetWindowRenderer()->AsKnowsCompositor()->GetUseCompositorWnd()) {
-    HDC hdc;
-    RECT rect;
-    hdc = ::GetWindowDC(mWnd);
-    ::GetWindowRect(mWnd, &rect);
-    ::MapWindowPoints(nullptr, mWnd, (LPPOINT)&rect, 2);
-    ::FillRect(hdc, &rect,
-               reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-    ReleaseDC(mWnd, hdc);
   }
 }
 
@@ -8288,6 +7940,15 @@ bool nsWindow::DealWithPopups(HWND aWnd, UINT aMessage, WPARAM aWParam,
 
   if (!::IsWindowVisible(aWnd)) {
     return false;
+  }
+
+  if (MOZ_UNLIKELY(aMessage == WM_KILLFOCUS)) {
+    // NOTE: We deal with this here rather than on the switch below because we
+    // want to do this even if there are no menus to rollup (tooltips don't set
+    // the rollup listener etc).
+    if (RefPtr pm = nsXULPopupManager::GetInstance()) {
+      pm->RollupTooltips();
+    }
   }
 
   nsIRollupListener* rollupListener = nsBaseWidget::GetActiveRollupListener();
@@ -9335,25 +8996,6 @@ nsresult nsWindow::RestoreHiDPIMode() { return WinUtils::RestoreHiDPIMode(); }
 mozilla::Maybe<UINT> nsWindow::GetHiddenTaskbarEdge() {
   HMONITOR windowMonitor = ::MonitorFromWindow(mWnd, MONITOR_DEFAULTTONEAREST);
 
-  if (!IsWin8OrLater()) {
-    // Per-monitor taskbar information is not available.
-    APPBARDATA appBarData;
-    appBarData.cbSize = sizeof(appBarData);
-    UINT taskbarState = SHAppBarMessage(ABM_GETSTATE, &appBarData);
-    if (ABS_AUTOHIDE & taskbarState) {
-      appBarData.hWnd = FindWindow(L"Shell_TrayWnd", nullptr);
-      if (appBarData.hWnd) {
-        HMONITOR taskbarMonitor =
-            ::MonitorFromWindow(appBarData.hWnd, MONITOR_DEFAULTTOPRIMARY);
-        if (taskbarMonitor == windowMonitor) {
-          SHAppBarMessage(ABM_GETTASKBARPOS, &appBarData);
-          return Some(appBarData.uEdge);
-        }
-      }
-    }
-    return Nothing();
-  }
-
   // Check all four sides of our monitor for an appbar.  Skip any that aren't
   // the system taskbar.
   MONITORINFO mi;
@@ -9454,6 +9096,20 @@ void nsWindow::FrameState::EnsureSizeMode(nsSizeMode aMode,
                                           DoShowWindow aDoShowWindow) {
   if (mSizeMode == aMode) {
     return;
+  }
+
+  if (StaticPrefs::widget_windows_fullscreen_remind_taskbar()) {
+    // If we're unminimizing a window, asynchronously notify the taskbar after
+    // the message has been processed. This redundant notification works around
+    // a race condition in explorer.exe. (See bug 1835851, or comments in
+    // TaskbarConcealer.)
+    //
+    // Note that we notify regardless of `aMode`: unminimizing a non-fullscreen
+    // window can also affect the correct taskbar state, yet fail to affect the
+    // current taskbar state.
+    if (mSizeMode == nsSizeMode_Minimized) {
+      ::PostMessage(mWindow->mWnd, MOZ_WM_FULLSCREEN_STATE_UPDATE, 0, 0);
+    }
   }
 
   if (aMode == nsSizeMode_Fullscreen) {

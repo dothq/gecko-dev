@@ -15,7 +15,6 @@
 
 #include "lib/jxl/base/compiler_specific.h"
 #include "lib/jxl/base/data_parallel.h"
-#include "lib/jxl/base/file_io.h"
 #include "lib/jxl/base/random.h"
 #include "lib/jxl/enc_color_management.h"
 #include "lib/jxl/enc_xyb.h"
@@ -201,7 +200,7 @@ TEST_P(ColorManagementTest, VerifyAllProfiles) {
 
   // Can set an equivalent ColorEncoding from the generated ICC profile.
   ColorEncoding c3;
-  ASSERT_TRUE(c3.SetICC(PaddedBytes(c.ICC())));
+  ASSERT_TRUE(c3.SetICC(PaddedBytes(c.ICC()), &GetJxlCms()));
   EXPECT_THAT(c3, HasSameFieldsAs(c));
 
   VerifyPixelRoundTrip(c);
@@ -234,7 +233,7 @@ TEST_F(ColorManagementTest, D2700Chromaticity) {
   PaddedBytes icc =
       jxl::test::ReadTestData("jxl/color_management/sRGB-D2700.icc");
   ColorEncoding sRGB_D2700;
-  ASSERT_TRUE(sRGB_D2700.SetICC(std::move(icc)));
+  ASSERT_TRUE(sRGB_D2700.SetICC(std::move(icc), &GetJxlCms()));
 
   EXPECT_THAT(sRGB_D2700.GetWhitePoint(), CIExyIs(0.45986, 0.41060));
   // The illuminant-relative chromaticities of this profile's primaries are the
@@ -246,12 +245,13 @@ TEST_F(ColorManagementTest, D2700Chromaticity) {
 }
 
 TEST_F(ColorManagementTest, D2700ToSRGB) {
+  const JxlCmsInterface& cms = GetJxlCms();
   PaddedBytes icc =
       jxl::test::ReadTestData("jxl/color_management/sRGB-D2700.icc");
   ColorEncoding sRGB_D2700;
-  ASSERT_TRUE(sRGB_D2700.SetICC(std::move(icc)));
+  ASSERT_TRUE(sRGB_D2700.SetICC(std::move(icc), &cms));
 
-  ColorSpaceTransform transform(GetJxlCms());
+  ColorSpaceTransform transform(cms);
   ASSERT_TRUE(transform.Init(sRGB_D2700, ColorEncoding::SRGB(),
                              kDefaultIntensityTarget, 1, 1));
   const float sRGB_D2700_values[3] = {0.863, 0.737, 0.490};
@@ -378,7 +378,8 @@ TEST_F(ColorManagementTest, XYBProfile) {
   Image3F opsin(kNumColors, 1);
   ToXYB(ib, nullptr, &opsin, cms, nullptr);
 
-  Image3F opsin2 = CopyImage(opsin);
+  Image3F opsin2(kNumColors, 1);
+  CopyImageTo(opsin, &opsin2);
   ScaleXYB(&opsin2);
 
   float* src = xform.BufSrc(0);

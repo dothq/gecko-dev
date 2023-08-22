@@ -13,7 +13,6 @@
 #include "ImageContainer.h"
 #include "MediaContainerType.h"
 #include "MediaData.h"
-#include "TimeUnits.h"
 #include "VideoUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/CheckedInt.h"
@@ -48,7 +47,6 @@
 #endif
 
 mozilla::LazyLogModule gWebCodecsLog("WebCodecs");
-using mozilla::media::TimeUnit;
 
 namespace mozilla::dom {
 
@@ -85,104 +83,23 @@ NS_IMPL_RELEASE_INHERITED(VideoDecoder, DOMEventTargetHelper)
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(VideoDecoder)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 
-template <typename T>
-Maybe<T> OptionalToMaybe(const dom::Optional<T>& aOptional) {
-  if (aOptional.WasPassed()) {
-    return Some(aOptional.Value());
-  }
-  return Nothing();
-}
-
-template <typename T>
-Maybe<T> NullableToMaybe(const dom::Nullable<T>& aNullable) {
-  if (!aNullable.IsNull()) {
-    return Some(aNullable.Value());
-  }
-  return Nothing();
-}
-
-template <typename T>
-Nullable<T> MaybeToNullable(const Maybe<T>& aOptional) {
-  if (aOptional.isSome()) {
-    return Nullable<T>(aOptional.value());
-  }
-  return Nullable<T>();
-}
-
-VideoColorSpaceInternal::VideoColorSpaceInternal(
-    const dom::VideoColorSpaceInit& aColorSpaceInit) {
-  mFullRange = NullableToMaybe(aColorSpaceInit.mFullRange);
-  mMatrix = NullableToMaybe(aColorSpaceInit.mMatrix);
-  mPrimaries = NullableToMaybe(aColorSpaceInit.mPrimaries);
-  mTransfer = NullableToMaybe(aColorSpaceInit.mTransfer);
-}
-
-VideoColorSpaceInit VideoColorSpaceInternal::ToColorSpaceInit() const {
-  VideoColorSpaceInit init;
-  init.mFullRange = MaybeToNullable(mFullRange);
-  init.mMatrix = MaybeToNullable(mMatrix);
-  init.mPrimaries = MaybeToNullable(mPrimaries);
-  init.mTransfer = MaybeToNullable(mTransfer);
-  return init;
-}
-
-static Result<RefPtr<MediaByteBuffer>, nsresult> GetExtraData(
-    const OwningMaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer) {
-  RefPtr<MediaByteBuffer> data = nullptr;
-  Span<uint8_t> buf;
-  MOZ_TRY_VAR(buf, GetSharedArrayBufferData(aBuffer));
-  if (buf.empty()) {
-    return data;
-  }
-  data = MakeRefPtr<MediaByteBuffer>();
-  data->AppendElements(buf);
-  return data;
-}
-
-VideoDecoderConfigInternal::VideoDecoderConfigInternal(
-    const VideoDecoderConfig& aConfig) {
-  mCodec = aConfig.mCodec;
-  mCodedHeight = OptionalToMaybe(aConfig.mCodedHeight);
-  mCodedWidth = OptionalToMaybe(aConfig.mCodedWidth);
-  if (aConfig.mColorSpace.WasPassed()) {
-    auto colorspace(aConfig.mColorSpace.Value());
-    VideoColorSpaceInternal internal(colorspace);
-    mColorSpace = Some(internal);
-  } else {
-    mColorSpace = Nothing();
-  }
-  if (aConfig.mDescription.WasPassed()) {
-    RefPtr<MediaByteBuffer> buf;
-    auto rv = GetExtraData(aConfig.mDescription.Value());
-    if (rv.isErr()) {
-      MOZ_ASSERT(false, "OOM?");
-    }
-    mDescription = Some(rv.unwrap());
-  } else {
-    mDescription = Nothing();
-  }
-  mDisplayAspectHeight = OptionalToMaybe(aConfig.mDisplayAspectHeight);
-  mDisplayAspectWidth = OptionalToMaybe(aConfig.mDisplayAspectWidth);
-  mHardwareAcceleration = aConfig.mHardwareAcceleration;
-  mOptimizeForLatency = OptionalToMaybe(aConfig.mOptimizeForLatency);
-}
-
 /*
  * The followings are helpers for VideoDecoder methods
  */
 
 // https://w3c.github.io/webcodecs/#valid-videodecoderconfig
-static bool IsValid(const VideoDecoderConfig& aConfig) {
+static Result<Ok, nsCString> Validate(const VideoDecoderConfig& aConfig) {
   nsTArray<nsString> codecs;
   if (!ParseCodecsString(aConfig.mCodec, codecs) || codecs.Length() != 1 ||
       codecs[0] != aConfig.mCodec) {
-    return false;
+    return Err("invalid codec string"_ns);
   }
 
   // WebCodecs doesn't support theora
   if (!IsAV1CodecString(codecs[0]) && !IsVP9CodecString(codecs[0]) &&
-      !IsVP8CodecString(codecs[0]) && !IsH264CodecString(codecs[0])) {
-    return false;
+      !IsVP8CodecString(codecs[0]) && !IsH264CodecString(codecs[0]) &&
+      !IsH265CodecString(codecs[0])) {
+    return Err("unsupported codec"_ns);
   }
 
   // Gecko allows codec string starts with vp9 or av1 but Webcodecs requires to
@@ -190,41 +107,45 @@ static bool IsValid(const VideoDecoderConfig& aConfig) {
   // https://www.w3.org/TR/webcodecs-codec-registry/#video-codec-registry
   if (StringBeginsWith(aConfig.mCodec, u"vp9"_ns) ||
       StringBeginsWith(aConfig.mCodec, u"av1"_ns)) {
-    return false;
+    return Err("invalid codec string"_ns);
   }
 
   if (aConfig.mCodedWidth.WasPassed() != aConfig.mCodedHeight.WasPassed()) {
-    return false;
+    return aConfig.mCodedWidth.WasPassed()
+               ? Err("Invalid VideoDecoderConfig: codedWidth passed without codedHeight"_ns)
+               : Err("Invalid VideoDecoderConfig: codedHeight passed without codedWidth"_ns);
   }
   if (aConfig.mCodedWidth.WasPassed() &&
       (aConfig.mCodedWidth.Value() == 0 || aConfig.mCodedHeight.Value() == 0)) {
-    return false;
+    return Err("codedWidth and/or codedHeight can't be zero"_ns);
   }
 
   if (aConfig.mDisplayAspectWidth.WasPassed() !=
       aConfig.mDisplayAspectHeight.WasPassed()) {
-    return false;
+    return Err(
+        "display aspect width or height cannot be set without the other"_ns);
   }
   if (aConfig.mDisplayAspectWidth.WasPassed() &&
       (aConfig.mDisplayAspectWidth.Value() == 0 ||
        aConfig.mDisplayAspectHeight.Value() == 0)) {
-    return false;
+    return Err("display aspect width and height cannot be zero"_ns);
   }
 
-  return true;
+  return Ok();
 }
 
-static nsTArray<nsCString> GuessMIMETypes(
-    const VideoDecoderConfigInternal& aConfig) {
-  const auto codec = NS_ConvertUTF16toUTF8(aConfig.mCodec);
+static nsTArray<nsCString> GuessMIMETypes(const nsAString& aCodec,
+                                          const uint32_t* aCodedWidth,
+                                          const uint32_t* aCodedHeight) {
+  const auto codec = NS_ConvertUTF16toUTF8(aCodec);
   nsTArray<nsCString> types;
-  for (const nsCString& container : GuessContainers(aConfig.mCodec)) {
+  for (const nsCString& container : GuessContainers(aCodec)) {
     nsPrintfCString mime("video/%s; codecs=%s", container.get(), codec.get());
-    if (aConfig.mCodedWidth.isSome()) {
-      mime.Append(nsPrintfCString("; width=%d", aConfig.mCodedWidth.value()));
+    if (aCodedWidth) {
+      mime.Append(nsPrintfCString("; width=%d", *aCodedWidth));
     }
-    if (aConfig.mCodedHeight.isSome()) {
-      mime.Append(nsPrintfCString("; height=%d", aConfig.mCodedHeight.value()));
+    if (aCodedHeight) {
+      mime.Append(nsPrintfCString("; height=%d", *aCodedHeight));
     }
     types.AppendElement(mime);
   }
@@ -240,7 +161,8 @@ static bool IsOnLinux() {
 }
 
 // https://w3c.github.io/webcodecs/#check-configuration-support
-static bool CanDecode(const VideoDecoderConfigInternal& aConfig) {
+static bool CanDecode(const nsAString& aCodec, const uint32_t* aCodecWidth,
+                      const uint32_t* aCodecHeight) {
   // Bug 1840508: H264-annexb doesn't work on non-linux platform. We only enable
   // Linux for now.
   if (!IsOnLinux()) {
@@ -249,7 +171,8 @@ static bool CanDecode(const VideoDecoderConfigInternal& aConfig) {
   // TODO: Instead of calling CanHandleContainerType with the guessed the
   // containers, DecoderTraits should provide an API to tell if a codec is
   // decodable or not.
-  for (const nsCString& mime : GuessMIMETypes(aConfig)) {
+  for (const nsCString& mime :
+       GuessMIMETypes(aCodec, aCodecWidth, aCodecHeight)) {
     if (Maybe<MediaContainerType> containerType =
             MakeMediaExtendedMIMEType(mime)) {
       if (DecoderTraits::CanHandleContainerType(
@@ -262,11 +185,28 @@ static bool CanDecode(const VideoDecoderConfigInternal& aConfig) {
   return false;
 }
 
+static bool CanDecode(const VideoDecoderConfigInternal& aConfig) {
+  return CanDecode(aConfig.mCodec, aConfig.mCodedWidth.ptrOr(nullptr),
+                   aConfig.mCodedHeight.ptrOr(nullptr));
+}
+
+static bool CanDecode(const VideoDecoderConfig& aConfig) {
+  // Converting Optional to Maybe may looks better, but it requires memory
+  // allocations.
+  return CanDecode(
+      aConfig.mCodec,
+      aConfig.mCodedWidth.WasPassed() ? &aConfig.mCodedWidth.Value() : nullptr,
+      aConfig.mCodedHeight.WasPassed() ? &aConfig.mCodedHeight.Value()
+                                       : nullptr);
+}
+
 static nsTArray<UniquePtr<TrackInfo>> GetTracksInfo(
     const VideoDecoderConfigInternal& aConfig) {
   // TODO: Instead of calling GetTracksInfo with the guessed containers,
   // DecoderTraits should provide an API to create the TrackInfo directly.
-  for (const nsCString& mime : GuessMIMETypes(aConfig)) {
+  for (const nsCString& mime :
+       GuessMIMETypes(aConfig.mCodec, aConfig.mCodedWidth.ptrOr(nullptr),
+                      aConfig.mCodedHeight.ptrOr(nullptr))) {
     if (Maybe<MediaContainerType> containerType =
             MakeMediaExtendedMIMEType(mime)) {
       if (nsTArray<UniquePtr<TrackInfo>> tracks =
@@ -277,6 +217,19 @@ static nsTArray<UniquePtr<TrackInfo>> GetTracksInfo(
     }
   }
   return {};
+}
+
+static Result<RefPtr<MediaByteBuffer>, nsresult> GetExtraData(
+    const OwningMaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer) {
+  RefPtr<MediaByteBuffer> data = nullptr;
+  Span<uint8_t> buf;
+  MOZ_TRY_VAR(buf, GetSharedArrayBufferData(aBuffer));
+  if (buf.empty()) {
+    return data;
+  }
+  data = MakeRefPtr<MediaByteBuffer>();
+  data->AppendElements(buf);
+  return data;
 }
 
 static Result<UniquePtr<TrackInfo>, nsresult> CreateVideoInfo(
@@ -417,7 +370,7 @@ static Result<UniquePtr<TrackInfo>, nsresult> CreateVideoInfo(
 static Result<Ok, nsresult> CloneConfiguration(
     RootedDictionary<VideoDecoderConfig>& aDest, JSContext* aCx,
     const VideoDecoderConfig& aConfig) {
-  MOZ_ASSERT(IsValid(aConfig));
+  MOZ_ASSERT(Validate(aConfig).isOk());
 
   aDest.mCodec = aConfig.mCodec;
   if (aConfig.mCodedHeight.WasPassed()) {
@@ -664,6 +617,81 @@ static nsTArray<RefPtr<VideoFrame>> DecodedDataToVideoFrames(
   return frames;
 }
 
+/*
+ * Below are helper classes used in VideoDecoder
+ */
+
+VideoColorSpaceInternal::VideoColorSpaceInternal(
+    const VideoColorSpaceInit& aColorSpaceInit) {
+  mFullRange = NullableToMaybe(aColorSpaceInit.mFullRange);
+  mMatrix = NullableToMaybe(aColorSpaceInit.mMatrix);
+  mPrimaries = NullableToMaybe(aColorSpaceInit.mPrimaries);
+  mTransfer = NullableToMaybe(aColorSpaceInit.mTransfer);
+}
+
+VideoColorSpaceInit VideoColorSpaceInternal::ToColorSpaceInit() const {
+  VideoColorSpaceInit init;
+  init.mFullRange = MaybeToNullable(mFullRange);
+  init.mMatrix = MaybeToNullable(mMatrix);
+  init.mPrimaries = MaybeToNullable(mPrimaries);
+  init.mTransfer = MaybeToNullable(mTransfer);
+  return init;
+}
+
+/* static */
+UniquePtr<VideoDecoderConfigInternal> VideoDecoderConfigInternal::Create(
+    const VideoDecoderConfig& aConfig) {
+  if (auto r = Validate(aConfig); r.isErr()) {
+    nsCString e = r.unwrapErr();
+    LOGE("Failed to create VideoDecoderConfigInternal: %s", e.get());
+    return nullptr;
+  }
+
+  Maybe<RefPtr<MediaByteBuffer>> description;
+  if (aConfig.mDescription.WasPassed()) {
+    auto rv = GetExtraData(aConfig.mDescription.Value());
+    if (rv.isErr()) {  // Invalid description data.
+      LOGE(
+          "Failed to create VideoDecoderConfigInternal due to invalid "
+          "description data. Error: 0x%08" PRIx32,
+          static_cast<uint32_t>(rv.unwrapErr()));
+      return nullptr;
+    }
+    description.emplace(rv.unwrap());
+  }
+
+  Maybe<VideoColorSpaceInternal> colorSpace;
+  if (aConfig.mColorSpace.WasPassed()) {
+    colorSpace.emplace(VideoColorSpaceInternal(aConfig.mColorSpace.Value()));
+  }
+
+  return UniquePtr<VideoDecoderConfigInternal>(new VideoDecoderConfigInternal(
+      aConfig.mCodec, OptionalToMaybe(aConfig.mCodedHeight),
+      OptionalToMaybe(aConfig.mCodedWidth), std::move(colorSpace),
+      std::move(description), OptionalToMaybe(aConfig.mDisplayAspectHeight),
+      OptionalToMaybe(aConfig.mDisplayAspectWidth),
+      aConfig.mHardwareAcceleration,
+      OptionalToMaybe(aConfig.mOptimizeForLatency)));
+}
+
+VideoDecoderConfigInternal::VideoDecoderConfigInternal(
+    const nsAString& aCodec, Maybe<uint32_t>&& aCodedHeight,
+    Maybe<uint32_t>&& aCodedWidth, Maybe<VideoColorSpaceInternal>&& aColorSpace,
+    Maybe<RefPtr<MediaByteBuffer>>&& aDescription,
+    Maybe<uint32_t>&& aDisplayAspectHeight,
+    Maybe<uint32_t>&& aDisplayAspectWidth,
+    const HardwareAcceleration& aHardwareAcceleration,
+    Maybe<bool>&& aOptimizeForLatency)
+    : mCodec(aCodec),
+      mCodedHeight(std::move(aCodedHeight)),
+      mCodedWidth(std::move(aCodedWidth)),
+      mColorSpace(std::move(aColorSpace)),
+      mDescription(std::move(aDescription)),
+      mDisplayAspectHeight(std::move(aDisplayAspectHeight)),
+      mDisplayAspectWidth(std::move(aDisplayAspectWidth)),
+      mHardwareAcceleration(aHardwareAcceleration),
+      mOptimizeForLatency(std::move(aOptimizeForLatency)) {}
+
 template <typename T>
 class MessageRequestHolder {
  public:
@@ -688,7 +716,7 @@ class ConfigureMessage final
   using Id = DecoderAgent::Id;
   static constexpr Id NoId = 0;
   static ConfigureMessage* Create(
-      UniquePtr<VideoDecoderConfigInternal>& aConfig) {
+      UniquePtr<VideoDecoderConfigInternal>&& aConfig) {
     // This needs to be atomic since this can run on the main thread or worker
     // thread.
     static std::atomic<Id> sNextId = NoId;
@@ -722,30 +750,9 @@ class DecodeMessage final
       public MessageRequestHolder<DecoderAgent::DecodePromise> {
  public:
   using Id = size_t;
-  struct ChunkData {
-    explicit ChunkData(EncodedVideoChunk& aChunk)
-        : mBuffer(aChunk.Data(), static_cast<size_t>(aChunk.ByteLength())),
-          mIsKey(aChunk.Type() == EncodedVideoChunkType::Key),
-          mTimestamp(aChunk.Timestamp()),
-          mDuration(aChunk.GetDuration().IsNull()
-                        ? Nothing()
-                        : Some(aChunk.GetDuration().Value())) {
-      LOGV("Create %zu-byte ChunkData from %u-byte EncodedVideoChunk",
-           mBuffer ? mBuffer.Size() : 0, aChunk.ByteLength());
-    }
-
-    RefPtr<MediaRawData> IntoMediaRawData(
-        const RefPtr<MediaByteBuffer>& aExtraData,
-        const VideoDecoderConfigInternal& aConfig);
-
-    AlignedByteBuffer mBuffer;
-    bool mIsKey;
-    int64_t mTimestamp;
-    Maybe<uint64_t> mDuration;
-  };
 
   DecodeMessage(Id aId, ConfigureMessage::Id aConfigId,
-                UniquePtr<ChunkData>&& aData)
+                UniquePtr<EncodedVideoChunkData>&& aData)
       : ControlMessage(
             nsPrintfCString("decode #%zu (config #%d)", aId, aConfigId)),
         mId(aId),
@@ -754,18 +761,41 @@ class DecodeMessage final
   virtual void Cancel() override { Disconnect(); }
   virtual bool IsProcessing() override { return Exists(); };
   virtual DecodeMessage* AsDecodeMessage() override { return this; }
-  RefPtr<MediaRawData> TakeData(const RefPtr<MediaByteBuffer>& aExtraData,
-                                const VideoDecoderConfigInternal& aConfig) {
+  already_AddRefed<MediaRawData> TakeData(
+      const RefPtr<MediaByteBuffer>& aExtraData,
+      const VideoDecoderConfigInternal& aConfig) {
     if (!mData) {
-      LOGE("No data in DecodeMessage");  // Data has been taken.
+      LOGE("No data in DecodeMessage");
       return nullptr;
     }
-    return mData->IntoMediaRawData(aExtraData, aConfig);
+
+    RefPtr<MediaRawData> sample = mData->TakeData();
+    if (!sample) {
+      LOGE("Take no data in DecodeMessage");
+      return nullptr;
+    }
+
+    // aExtraData is either provided by Configure() or a default one created for
+    // the decoder creation. If it's created for decoder creation only, we don't
+    // set it to sample.
+    if (aConfig.mDescription && aExtraData) {
+      sample->mExtraData = aExtraData;
+    }
+
+    LOGV(
+        "EncodedVideoChunkData %p converted to %zu-byte MediaRawData - time: "
+        "%" PRIi64 "us, timecode: %" PRIi64 "us, duration: %" PRIi64
+        "us, key-frame: %s, has extra data: %s",
+        mData.get(), sample->Size(), sample->mTime.ToMicroseconds(),
+        sample->mTimecode.ToMicroseconds(), sample->mDuration.ToMicroseconds(),
+        sample->mKeyframe ? "yes" : "no", sample->mExtraData ? "yes" : "no");
+
+    return sample.forget();
   }
   const Id mId;  // A unique id shown in log.
 
  private:
-  UniquePtr<ChunkData> mData;
+  UniquePtr<EncodedVideoChunkData> mData;
 };
 
 class FlushMessage final
@@ -795,44 +825,9 @@ class FlushMessage final
   RefPtr<Promise> mPromise;
 };
 
-RefPtr<MediaRawData> DecodeMessage::ChunkData::IntoMediaRawData(
-    const RefPtr<MediaByteBuffer>& aExtraData,
-    const VideoDecoderConfigInternal& aConfig) {
-  if (!mBuffer) {
-    LOGE("Chunk is empty!");
-    return nullptr;
-  }
-
-  RefPtr<MediaRawData> sample(new MediaRawData(std::move(mBuffer)));
-  sample->mKeyframe = mIsKey;
-  sample->mTime = TimeUnit::FromMicroseconds(mTimestamp);
-  sample->mTimecode = TimeUnit::FromMicroseconds(mTimestamp);
-
-  if (mDuration) {
-    CheckedInt64 duration(*mDuration);
-    if (!duration.isValid()) {
-      LOGE("Chunk's duration exceeds TimeUnit's limit");
-      return nullptr;
-    }
-    sample->mDuration = TimeUnit::FromMicroseconds(duration.value());
-  }
-
-  // aExtraData is either provided by Configure() or a default one created for
-  // the decoder creation. If it's created for decoder creation only, we don't
-  // set it to sample.
-  if (aConfig.mDescription && aExtraData) {
-    sample->mExtraData = aExtraData;
-  }
-
-  LOGV("Input chunk converted to %zu-byte MediaRawData - time: %" PRIi64
-       "us, timecode: %" PRIi64 "us, duration: %" PRIi64
-       "us, key-frame: %s, has extra data: %s",
-       sample->Size(), sample->mTime.ToMicroseconds(),
-       sample->mTimecode.ToMicroseconds(), sample->mDuration.ToMicroseconds(),
-       sample->mKeyframe ? "yes" : "no", sample->mExtraData ? "yes" : "no");
-
-  return sample.forget();
-}
+/*
+ * Below are VideoDecoder implementation
+ */
 
 VideoDecoder::VideoDecoder(nsIGlobalObject* aParent,
                            RefPtr<WebCodecsErrorCallback>&& aErrorCallback,
@@ -896,8 +891,10 @@ void VideoDecoder::Configure(const VideoDecoderConfig& aConfig,
   LOG("VideoDecoder %p, Configure: codec %s", this,
       NS_ConvertUTF16toUTF8(aConfig.mCodec).get());
 
-  if (!IsValid(aConfig)) {
-    aRv.ThrowTypeError("Invalid VideoDecoderConfig");
+  if (auto r = Validate(aConfig); r.isErr()) {
+    nsCString e = r.unwrapErr();
+    LOGE("config is invalid: %s", e.get());
+    aRv.ThrowTypeError(e);
     return;
   }
 
@@ -907,28 +904,20 @@ void VideoDecoder::Configure(const VideoDecoderConfig& aConfig,
   }
 
   // Clone a VideoDecoderConfig as the active decoder config.
-  AutoJSAPI jsapi;
-  if (!jsapi.Init(GetParentObject())) {
-    aRv.Throw(NS_ERROR_UNEXPECTED);
+  UniquePtr<VideoDecoderConfigInternal> config =
+      VideoDecoderConfigInternal::Create(aConfig);
+  if (!config) {
+    aRv.Throw(NS_ERROR_UNEXPECTED);  // Invalid description data.
     return;
   }
-  RootedDictionary<VideoDecoderConfig> config(jsapi.cx());
-  auto c = CloneConfiguration(config, jsapi.cx(), aConfig);
-  if (c.isErr()) {
-    aRv.Throw(c.unwrapErr());
-    return;
-  }
-  MOZ_ASSERT(IsValid(config));
 
   mState = CodecState::Configured;
   mKeyChunkRequired = true;
   mDecodeCounter = 0;
   mFlushCounter = 0;
 
-  auto conf = MakeUnique<VideoDecoderConfigInternal>(config);
-
   mControlMessageQueue.emplace(
-      UniquePtr<ControlMessage>(ConfigureMessage::Create(conf)));
+      UniquePtr<ControlMessage>(ConfigureMessage::Create(std::move(config))));
   mLatestConfigureId = mControlMessageQueue.back()->AsConfigureMessage()->mId;
   LOG("VideoDecoder %p enqueues %s", this,
       mControlMessageQueue.back()->ToString().get());
@@ -957,8 +946,7 @@ void VideoDecoder::Decode(EncodedVideoChunk& aChunk, ErrorResult& aRv) {
 
   mDecodeQueueSize += 1;
   mControlMessageQueue.emplace(UniquePtr<ControlMessage>(
-      new DecodeMessage(++mDecodeCounter, mLatestConfigureId,
-                        MakeUnique<DecodeMessage::ChunkData>(aChunk))));
+      new DecodeMessage(++mDecodeCounter, mLatestConfigureId, aChunk.Clone())));
   LOGV("VideoDecoder %p enqueues %s", this,
        mControlMessageQueue.back()->ToString().get());
   ProcessControlMessageQueue();
@@ -1031,8 +1019,10 @@ already_AddRefed<Promise> VideoDecoder::IsConfigSupported(
     return p.forget();
   }
 
-  if (!IsValid(aConfig)) {
-    p->MaybeRejectWithTypeError("Invalid VideoDecoderConfig");
+  if (auto r = Validate(aConfig); r.isErr()) {
+    nsCString e = r.unwrapErr();
+    LOGE("config is invalid: %s", e.get());
+    p->MaybeRejectWithTypeError(e);
     return p.forget();
   }
 
@@ -1049,8 +1039,8 @@ already_AddRefed<Promise> VideoDecoder::IsConfigSupported(
     aRv.Throw(e);
     return p.forget();
   }
-  VideoDecoderConfigInternal internal(config);
-  bool canDecode = CanDecode(internal);
+
+  bool canDecode = CanDecode(config);
   RootedDictionary<VideoDecoderSupport> s(aGlobal.Context());
   s.mConfig.Construct(std::move(config));
   s.mSupported.Construct(canDecode);

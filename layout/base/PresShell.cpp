@@ -903,11 +903,12 @@ void PresShell::Init(nsPresContext* aPresContext, nsViewManager* aViewManager) {
   // Add the preference style sheet.
   UpdatePreferenceStyles();
 
-  bool accessibleCaretEnabled =
+  const bool accessibleCaretEnabled =
       AccessibleCaretEnabled(mDocument->GetDocShell());
   if (accessibleCaretEnabled) {
     // Need to happen before nsFrameSelection has been set up.
     mAccessibleCaretEventHub = new AccessibleCaretEventHub(this);
+    mAccessibleCaretEventHub->Init();
   }
 
   mSelection = new nsFrameSelection(this, nullptr, accessibleCaretEnabled);
@@ -5441,14 +5442,8 @@ PresShell::CanvasBackground PresShell::ComputeCanvasBackground() const {
   nscolor color = NS_RGBA(0, 0, 0, 0);
   bool drawBackgroundImage = false;
   bool drawBackgroundColor = false;
-  const nsStyleDisplay* disp = bgFrame->StyleDisplay();
-  StyleAppearance appearance = disp->EffectiveAppearance();
-  if (bgFrame->IsThemed(disp) &&
-      appearance != StyleAppearance::MozWinBorderlessGlass) {
-    // Ignore the CSS background-color if -moz-appearance is used and it is
-    // not one of the glass values. (Windows 7 Glass has traditionally not
-    // overridden background colors, so we preserve that behavior for now.)
-  } else {
+  if (!bgFrame->IsThemed()) {
+    // Ignore the CSS background-color if -moz-appearance is used.
     color = nsCSSRendering::DetermineBackgroundColor(
         mPresContext, bgFrame->Style(), canvas, drawBackgroundImage,
         drawBackgroundColor);
@@ -8320,7 +8315,8 @@ bool PresShell::EventHandler::PrepareToDispatchEvent(
       // if web apps want to prevent it since we respect our users' intention.
       // In this case, we don't fire "contextmenu" event on web content because
       // of not cancelable.
-      if (mouseEvent->IsShift()) {
+      if (mouseEvent->IsShift() &&
+          StaticPrefs::dom_event_contextmenu_shift_suppresses_event()) {
         aEvent->mFlags.mOnlyChromeDispatch = true;
         aEvent->mFlags.mRetargetToNonNativeAnonymous = true;
       }

@@ -4,23 +4,18 @@
 
 import React, { Component } from "react";
 import PropTypes from "prop-types";
-import { showMenu } from "../../context-menu/menu";
 import { connect } from "../../utils/connect";
 import { score as fuzzaldrinScore } from "fuzzaldrin-plus";
 
 import { containsPosition, positionAfter } from "../../utils/ast";
-import { copyToTheClipboard } from "../../utils/clipboard";
-import { findFunctionText } from "../../utils/function";
 import { createLocation } from "../../utils/location";
 
 import actions from "../../actions";
 import {
   getSelectedLocation,
   getSelectedSource,
-  getSelectedSourceTextContent,
   getSymbols,
   getCursorPosition,
-  getContext,
 } from "../../selectors";
 
 import OutlineFilter from "./OutlineFilter";
@@ -71,9 +66,7 @@ export class Outline extends Component {
     return {
       alphabetizeOutline: PropTypes.bool.isRequired,
       cursorPosition: PropTypes.object,
-      cx: PropTypes.object.isRequired,
       flashLineRange: PropTypes.func.isRequired,
-      getFunctionText: PropTypes.func.isRequired,
       onAlphabetizeClick: PropTypes.func.isRequired,
       selectLocation: PropTypes.func.isRequired,
       selectedSource: PropTypes.object.isRequired,
@@ -128,13 +121,12 @@ export class Outline extends Component {
   }
 
   selectItem(selectedItem) {
-    const { cx, selectedSource, selectLocation } = this.props;
+    const { selectedSource, selectLocation } = this.props;
     if (!selectedSource || !selectedItem) {
       return;
     }
 
     selectLocation(
-      cx,
       createLocation({
         source: selectedSource,
         line: selectedItem.location.start.line,
@@ -149,31 +141,7 @@ export class Outline extends Component {
     event.stopPropagation();
     event.preventDefault();
 
-    const { selectedSource, flashLineRange, getFunctionText } = this.props;
-
-    if (!selectedSource) {
-      return;
-    }
-
-    const sourceLine = func.location.start.line;
-    const functionText = getFunctionText(sourceLine);
-
-    const copyFunctionItem = {
-      id: "node-menu-copy-function",
-      label: L10N.getStr("copyFunction.label"),
-      accesskey: L10N.getStr("copyFunction.accesskey"),
-      disabled: !functionText,
-      click: () => {
-        flashLineRange({
-          start: sourceLine,
-          end: func.location.end.line,
-          sourceId: selectedSource.id,
-        });
-        return copyToTheClipboard(functionText);
-      },
-    };
-    const menuOptions = [copyFunctionItem];
-    showMenu(event, menuOptions);
+    this.props.showOutlineContextMenu(event, func);
   }
 
   updateFilter = filter => {
@@ -346,27 +314,13 @@ const mapStateToProps = state => {
   const symbols = getSymbols(state, getSelectedLocation(state));
 
   return {
-    cx: getContext(state),
     symbols,
     selectedSource,
     cursorPosition: getCursorPosition(state),
-    getFunctionText: line => {
-      if (selectedSource) {
-        const selectedSourceTextContent = getSelectedSourceTextContent(state);
-        return findFunctionText(
-          line,
-          selectedSource,
-          selectedSourceTextContent,
-          symbols
-        );
-      }
-
-      return null;
-    },
   };
 };
 
 export default connect(mapStateToProps, {
   selectLocation: actions.selectLocation,
-  flashLineRange: actions.flashLineRange,
+  showOutlineContextMenu: actions.showOutlineContextMenu,
 })(Outline);

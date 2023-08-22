@@ -9,6 +9,25 @@ Services.scriptloader.loadSubScript(
 );
 
 /**
+ * Returns the intl display name of a given language tag.
+ *
+ * @param {string} langTag - The BCP-47 language tag.
+ */
+const getIntlDisplayName = (() => {
+  let displayNames = null;
+
+  return langTag => {
+    if (!displayNames) {
+      displayNames = new Services.intl.DisplayNames(undefined, {
+        type: "language",
+        fallback: "none",
+      });
+    }
+    return displayNames.of(langTag);
+  };
+})();
+
+/**
  * Assert some property about the translations button.
  *
  * @param {Record<string, boolean>} visibleAssertions
@@ -69,8 +88,22 @@ async function openTranslationsSettingsMenuViaTranslationsButton() {
     click(button, "Opening the popup");
   });
 
-  const gearIcon = getByL10nId("translations-panel-settings-button");
-  click(gearIcon, "Open the settings menu");
+  const gearIcons = getAllByL10nId("translations-panel-settings-button");
+  for (const gearIcon of gearIcons) {
+    if (gearIcon.hidden) {
+      continue;
+    }
+    click(gearIcon, "Open the settings menu");
+    info("Waiting for settings menu to open.");
+    const manageLanguages = await waitForCondition(() =>
+      maybeGetByL10nId("translations-panel-settings-manage-languages")
+    );
+    ok(
+      manageLanguages,
+      "The manage languages item should be visible in the settings menu."
+    );
+    return;
+  }
 }
 
 /**
@@ -81,8 +114,22 @@ async function openTranslationsSettingsMenuViaTranslationsButton() {
  */
 async function openTranslationsSettingsMenuViaAppMenu() {
   await openTranslationsPanelViaAppMenu();
-  const gearIcon = getByL10nId("translations-panel-settings-button");
-  click(gearIcon, "Open the settings menu");
+  const gearIcons = getAllByL10nId("translations-panel-settings-button");
+  for (const gearIcon of gearIcons) {
+    if (gearIcon.hidden) {
+      continue;
+    }
+    click(gearIcon, "Open the settings menu");
+    info("Waiting for settings menu to open.");
+    const manageLanguages = await waitForCondition(() =>
+      maybeGetByL10nId("translations-panel-settings-manage-languages")
+    );
+    ok(
+      manageLanguages,
+      "The manage languages item should be visible in the settings menu."
+    );
+    return;
+  }
 }
 
 /**
@@ -121,6 +168,7 @@ async function toggleAlwaysTranslateLanguage() {
   );
   info("Toggle the always-translate-language menuitem");
   await alwaysTranslateLanguage.doCommand();
+  await closeSettingsMenuIfOpen();
 }
 
 /**
@@ -134,6 +182,7 @@ async function toggleNeverTranslateLanguage() {
   );
   info("Toggle the never-translate-language menuitem");
   await neverTranslateLanguage.doCommand();
+  await closeSettingsMenuIfOpen();
 }
 
 /**
@@ -147,18 +196,24 @@ async function toggleNeverTranslateSite() {
   );
   info("Toggle the never-translate-site menuitem");
   await neverTranslateSite.doCommand();
+  await closeSettingsMenuIfOpen();
 }
 
 /**
  * Asserts that the always-translate-language checkbox matches the expected checked state.
  *
  * @param {string} langTag - A BCP-47 language tag
- * @param {boolean} expectChecked - Whether the checkbox should be checked
+ * @param {object} expectations
+ * @param {boolean} expectations.checked - Whether the checkbox is expected to be checked.
+ * @param {boolean} expectations.disabled - Whether the menuitem is expected to be disabled.
  */
-async function assertIsAlwaysTranslateLanguage(langTag, expectChecked) {
+async function assertIsAlwaysTranslateLanguage(
+  langTag,
+  { checked = true, disabled = false }
+) {
   await assertCheckboxState(
     "translations-panel-settings-always-translate-language",
-    expectChecked
+    { langTag, checked, disabled }
   );
 }
 
@@ -166,12 +221,17 @@ async function assertIsAlwaysTranslateLanguage(langTag, expectChecked) {
  * Asserts that the never-translate-language checkbox matches the expected checked state.
  *
  * @param {string} langTag - A BCP-47 language tag
- * @param {boolean} expectChecked - Whether the checkbox should be checked
+ * @param {object} expectations
+ * @param {boolean} expectations.checked - Whether the checkbox is expected to be checked.
+ * @param {boolean} expectations.disabled - Whether the menuitem is expected to be disabled.
  */
-async function assertIsNeverTranslateLanguage(langTag, expectChecked) {
+async function assertIsNeverTranslateLanguage(
+  langTag,
+  { checked = true, disabled = false }
+) {
   await assertCheckboxState(
     "translations-panel-settings-never-translate-language",
-    expectChecked
+    { langTag, checked, disabled }
   );
 }
 
@@ -179,12 +239,17 @@ async function assertIsNeverTranslateLanguage(langTag, expectChecked) {
  * Asserts that the never-translate-site checkbox matches the expected checked state.
  *
  * @param {string} url - The url of a website
- * @param {boolean} expectChecked - Whether the checkbox should be checked
+ * @param {object} expectations
+ * @param {boolean} expectations.checked - Whether the checkbox is expected to be checked.
+ * @param {boolean} expectations.disabled - Whether the menuitem is expected to be disabled.
  */
-async function assertIsNeverTranslateSite(url, expectChecked) {
+async function assertIsNeverTranslateSite(
+  url,
+  { checked = true, disabled = false }
+) {
   await assertCheckboxState(
     "translations-panel-settings-never-translate-site",
-    expectChecked
+    { checked, disabled }
   );
 }
 
@@ -193,19 +258,39 @@ async function assertIsNeverTranslateSite(url, expectChecked) {
  * checked or not, based on the value of expected being true or false.
  *
  * @param {string} dataL10nId - The data-l10n-id of the checkbox.
- * @param {boolean} expectChecked - Whether the checkbox should be checked.
+ * @param {object} expectations
+ * @param {string} expectations.langTag - The BCP-47 language tag.
+ * @param {boolean} expectations.checked - Whether the checkbox is expected to be checked.
+ * @param {boolean} expectations.disabled - Whether the menuitem is expected to be disabled.
  */
-async function assertCheckboxState(dataL10nId, expectChecked) {
+async function assertCheckboxState(
+  dataL10nId,
+  { langTag = null, checked = true, disabled = false }
+) {
   const menuItems = getAllByL10nId(dataL10nId);
   for (const menuItem of menuItems) {
+    if (langTag) {
+      const {
+        args: { language },
+      } = document.l10n.getAttributes(menuItem);
+      is(
+        language,
+        getIntlDisplayName(langTag),
+        `Should match expected language display name for ${dataL10nId}`
+      );
+    }
+    is(
+      menuItem.disabled,
+      disabled,
+      `Should match expected disabled state for ${dataL10nId}`
+    );
     await waitForCondition(
-      () =>
-        menuItem.getAttribute("checked") === (expectChecked ? "true" : "false"),
+      () => menuItem.getAttribute("checked") === (checked ? "true" : "false"),
       "Waiting for checkbox state"
     );
     is(
       menuItem.getAttribute("checked"),
-      expectChecked ? "true" : "false",
+      checked ? "true" : "false",
       `Should match expected checkbox state for ${dataL10nId}`
     );
   }
@@ -267,6 +352,9 @@ function click(button, message) {
  * @returns {boolean}
  */
 function isVisible(element) {
+  if (element.offsetParent === null) {
+    return false;
+  }
   const win = element.ownerDocument.ownerGlobal;
   const { visibility, display } = win.getComputedStyle(element);
   return visibility === "visible" && display !== "none";
@@ -352,12 +440,14 @@ function maybeGetByL10nId(l10nId, doc = document) {
  * @returns {Promise<void>}
  */
 async function waitForTranslationsPopupEvent(eventName, callback) {
+  // De-lazify the panel elements.
+  TranslationsPanel.elements;
   const panel = document.getElementById("translations-panel");
   if (!panel) {
     throw new Error("Unable to find the translations panel element.");
   }
   const promise = BrowserTestUtils.waitForEvent(panel, eventName);
-  callback();
+  await callback();
   info("Waiting for the translations panel popup to be shown");
   await promise;
   // Wait a single tick on the event loop.
@@ -382,15 +472,16 @@ async function waitForViewShown(callback) {
   await new Promise(resolve => setTimeout(resolve, 0));
 }
 
+const FRENCH_PAGE_URL = TRANSLATIONS_TESTER_FR;
 const ENGLISH_PAGE_URL = TRANSLATIONS_TESTER_EN;
 const SPANISH_PAGE_URL = TRANSLATIONS_TESTER_ES;
 const SPANISH_PAGE_URL_2 = TRANSLATIONS_TESTER_ES_2;
 const SPANISH_PAGE_URL_DOT_ORG = TRANSLATIONS_TESTER_ES_DOT_ORG;
 const LANGUAGE_PAIRS = [
-  { fromLang: "es", toLang: "en", isBeta: false },
-  { fromLang: "en", toLang: "es", isBeta: false },
-  { fromLang: "fr", toLang: "en", isBeta: false },
-  { fromLang: "en", toLang: "fr", isBeta: false },
-  { fromLang: "en", toLang: "uk", isBeta: true },
-  { fromLang: "uk", toLang: "en", isBeta: true },
+  { fromLang: "es", toLang: "en" },
+  { fromLang: "en", toLang: "es" },
+  { fromLang: "fr", toLang: "en" },
+  { fromLang: "en", toLang: "fr" },
+  { fromLang: "en", toLang: "uk" },
+  { fromLang: "uk", toLang: "en" },
 ];

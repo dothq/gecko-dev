@@ -5,7 +5,6 @@
 
 #include "nsAccUtils.h"
 
-#include "LocalAccessible-inl.h"
 #include "AccAttributes.h"
 #include "ARIAMap.h"
 #include "nsCoreUtils.h"
@@ -14,15 +13,13 @@
 #include "DocAccessibleParent.h"
 #include "HyperTextAccessible.h"
 #include "nsIAccessibleTypes.h"
-#include "Role.h"
+#include "mozilla/a11y/Role.h"
 #include "States.h"
 #include "TextLeafAccessible.h"
 
 #include "nsIBaseWindow.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsIDOMXULContainerElement.h"
-#include "nsISimpleEnumerator.h"
-#include "mozilla/a11y/PDocAccessibleChild.h"
 #include "mozilla/a11y/RemoteAccessible.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"

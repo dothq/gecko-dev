@@ -6,21 +6,15 @@
 
 #include "ARIAMap.h"
 #include "CachedTableAccessible.h"
-#include "DocAccessible.h"
 #include "RemoteAccessible.h"
 #include "mozilla/a11y/DocAccessibleParent.h"
 #include "mozilla/a11y/DocManager.h"
 #include "mozilla/a11y/Platform.h"
-#include "mozilla/a11y/RemoteAccessible.h"
-#include "mozilla/a11y/RemoteAccessible.h"
-#include "mozilla/a11y/Role.h"
 #include "mozilla/a11y/TableAccessible.h"
 #include "mozilla/a11y/TableCellAccessible.h"
-#include "mozilla/BinarySearch.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
-#include "mozilla/dom/DocumentInlines.h"
 #include "mozilla/gfx/Matrix.h"
 #include "nsAccessibilityService.h"
 #include "mozilla/Unused.h"
@@ -29,7 +23,6 @@
 #include "Pivot.h"
 #include "Relation.h"
 #include "RelationType.h"
-#include "TextLeafRange.h"
 #include "xpcAccessibleDocument.h"
 
 #ifdef A11Y_LOG
@@ -1306,12 +1299,12 @@ void RemoteAccessible::DOMNodeID(nsString& aID) const {
   }
 }
 
-#if !defined(XP_WIN)
 void RemoteAccessible::ScrollToPoint(uint32_t aScrollType, int32_t aX,
                                      int32_t aY) {
   Unused << mDoc->SendScrollToPoint(mID, aScrollType, aX, aY);
 }
 
+#if !defined(XP_WIN)
 void RemoteAccessible::Announce(const nsString& aAnnouncement,
                                 uint16_t aPriority) {
   Unused << mDoc->SendAnnounce(mID, aAnnouncement, aPriority);
@@ -1538,6 +1531,16 @@ already_AddRefed<AccAttributes> RemoteAccessible::Attributes() {
       mCachedFields->GetAttribute(nsGkAtoms::src, src);
       if (!src.IsEmpty()) {
         attributes->SetAttribute(nsGkAtoms::src, std::move(src));
+      }
+    }
+
+    if (IsTextField()) {
+      nsString placeholder;
+      mCachedFields->GetAttribute(nsGkAtoms::placeholder, placeholder);
+      if (!placeholder.IsEmpty()) {
+        attributes->SetAttribute(nsGkAtoms::placeholder,
+                                 std::move(placeholder));
+        attributes->Remove(nsGkAtoms::aria_placeholder);
       }
     }
   }

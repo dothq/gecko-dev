@@ -37,15 +37,6 @@ using hwy::HWY_NAMESPACE::Sub;
 using DI = HWY_FULL(int32_t);
 constexpr DI di;
 
-void ZigZagShuffle(int32_t* JXL_RESTRICT block) {
-  // TODO(szabadka) SIMDify this.
-  int32_t tmp[DCTSIZE2];
-  for (int k = 0; k < DCTSIZE2; ++k) {
-    tmp[k] = block[kJPEGNaturalOrder[k]];
-  }
-  memcpy(block, tmp, DCTSIZE2 * sizeof(tmp[0]));
-}
-
 template <typename DI, class V>
 JXL_INLINE V NumBits(DI di, const V x) {
   // TODO(szabadka) Add faster implementations for some specific architectures.

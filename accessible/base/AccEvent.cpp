@@ -7,7 +7,6 @@
 #include "AccEvent.h"
 
 #include "nsAccUtils.h"
-#include "DocAccessible.h"
 #include "xpcAccEvents.h"
 #include "States.h"
 #include "TextRange.h"
@@ -161,18 +160,6 @@ AccSelChangeEvent::AccSelChangeEvent(LocalAccessible* aWidget,
     mEventType = nsIAccessibleEvent::EVENT_SELECTION_REMOVE;
   }
 }
-
-////////////////////////////////////////////////////////////////////////////////
-// AccTableChangeEvent
-////////////////////////////////////////////////////////////////////////////////
-
-AccTableChangeEvent::AccTableChangeEvent(LocalAccessible* aAccessible,
-                                         uint32_t aEventType,
-                                         int32_t aRowOrColIndex,
-                                         int32_t aNumRowsOrCols)
-    : AccEvent(aEventType, aAccessible),
-      mRowOrColIndex(aRowOrColIndex),
-      mNumRowsOrCols(aNumRowsOrCols) {}
 
 ////////////////////////////////////////////////////////////////////////////////
 // AccVCChangeEvent

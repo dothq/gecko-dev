@@ -476,10 +476,14 @@ class GCRuntime {
   void removeWeakPointerCompartmentCallback(
       JSWeakPointerCompartmentCallback callback);
   JS::GCSliceCallback setSliceCallback(JS::GCSliceCallback callback);
-  JS::GCNurseryCollectionCallback setNurseryCollectionCallback(
-      JS::GCNurseryCollectionCallback callback);
+  bool addNurseryCollectionCallback(JS::GCNurseryCollectionCallback callback,
+                                    void* data);
+  void removeNurseryCollectionCallback(JS::GCNurseryCollectionCallback callback,
+                                       void* data);
   JS::DoCycleCollectionCallback setDoCycleCollectionCallback(
       JS::DoCycleCollectionCallback callback);
+  void callNurseryCollectionCallbacks(JS::GCNurseryProgress progress,
+                                      JS::GCReason reason);
 
   bool addFinalizationRegistry(JSContext* cx,
                                Handle<FinalizationRegistryObject*> registry);
@@ -840,6 +844,7 @@ class GCRuntime {
   void sweepCompressionTasks();
   void sweepWeakMaps();
   void sweepUniqueIds();
+  void sweepObjectsWithWeakPointers();
   void sweepDebuggerOnMainThread(JS::GCContext* gcx);
   void sweepJitDataOnMainThread(JS::GCContext* gcx);
   void sweepFinalizationObserversOnMainThread();
@@ -1131,6 +1136,10 @@ class GCRuntime {
   // thread.
   MainThreadData<bool> useBackgroundThreads;
 
+  // Whether we have already discarded JIT code for all collected zones in this
+  // slice.
+  MainThreadData<bool> haveDiscardedJITCodeThisSlice;
+
 #ifdef DEBUG
   /* Shutdown has started. Further collections must be shutdown collections. */
   MainThreadData<bool> hadShutdownGC;
@@ -1303,6 +1312,8 @@ class GCRuntime {
       updateWeakPointerZonesCallbacks;
   MainThreadData<CallbackVector<JSWeakPointerCompartmentCallback>>
       updateWeakPointerCompartmentCallbacks;
+  MainThreadData<CallbackVector<JS::GCNurseryCollectionCallback>>
+      nurseryCollectionCallbacks;
 
   /*
    * The trace operations to trace embedding-specific GC roots. One is for

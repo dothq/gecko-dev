@@ -1314,7 +1314,7 @@ void nsGenericHTMLElement::MapCommonAttributesInto(
   MapCommonAttributesIntoExceptHidden(aBuilder);
   if (!aBuilder.PropertyIsSet(eCSSProperty_display)) {
     if (aBuilder.GetAttr(nsGkAtoms::hidden)) {
-      aBuilder.SetKeywordValue(eCSSProperty_display, StyleDisplay::None);
+      aBuilder.SetKeywordValue(eCSSProperty_display, StyleDisplay::None._0);
     }
   }
 }
@@ -2056,16 +2056,15 @@ void nsGenericHTMLFormElement::UpdateFormOwner(bool aBindToTree,
              "aFormIdElement shouldn't be set if aBindToTree is true!");
 
   bool needStateUpdate = false;
+  HTMLFormElement* form = GetFormInternal();
   if (!aBindToTree) {
-    HTMLFormElement* form = GetFormInternal();
     needStateUpdate = form && form->IsDefaultSubmitElement(this);
     ClearForm(true, false);
+    form = nullptr;
   }
 
-  // We have to get form again since the above ClearForm() call might update the
-  // form value.
-  HTMLFormElement* oldForm = GetFormInternal();
-  if (!oldForm) {
+  HTMLFormElement* oldForm = form;
+  if (!form) {
     // If @form is set, we have to use that to find the form.
     nsAutoString formId;
     if (GetAttr(nsGkAtoms::form, formId)) {
@@ -2086,7 +2085,8 @@ void nsGenericHTMLFormElement::UpdateFormOwner(bool aBindToTree,
 
         if (element && element->IsHTMLElement(nsGkAtoms::form) &&
             nsContentUtils::IsInSameAnonymousTree(this, element)) {
-          SetFormInternal(static_cast<HTMLFormElement*>(element), aBindToTree);
+          form = static_cast<HTMLFormElement*>(element);
+          SetFormInternal(form, aBindToTree);
         }
       }
     } else {
@@ -2096,11 +2096,11 @@ void nsGenericHTMLFormElement::UpdateFormOwner(bool aBindToTree,
       // it to the right value.  Also note that even if being bound here didn't
       // change our parent, we still need to search, since our parent chain
       // probably changed _somewhere_.
-      SetFormInternal(FindAncestorForm(), aBindToTree);
+      form = FindAncestorForm();
+      SetFormInternal(form, aBindToTree);
     }
   }
 
-  HTMLFormElement* form = GetFormInternal();
   if (form && !HasFlag(ADDED_TO_FORM)) {
     // Now we need to add ourselves to the form
     nsAutoString nameVal, idVal;
@@ -3330,16 +3330,14 @@ void nsGenericHTMLElement::RunPopoverToggleEventTask(
 void nsGenericHTMLElement::ShowPopover(ErrorResult& aRv) {
   return ShowPopoverInternal(nullptr, aRv);
 }
-void nsGenericHTMLElement::ShowPopoverInternal(
-    nsGenericHTMLFormControlElementWithState* aInvoker, ErrorResult& aRv) {
-  if (PopoverData* data = GetPopoverData()) {
-    data->SetInvoker(aInvoker);
-  }
-
+void nsGenericHTMLElement::ShowPopoverInternal(Element* aInvoker,
+                                               ErrorResult& aRv) {
   if (!CheckPopoverValidity(PopoverVisibilityState::Hidden, nullptr, aRv)) {
     return;
   }
   RefPtr<Document> document = OwnerDoc();
+
+  MOZ_ASSERT(!GetPopoverData() || !GetPopoverData()->GetInvoker());
   MOZ_ASSERT(!OwnerDoc()->TopLayerContains(*this));
 
   bool wasShowingOrHiding = GetPopoverData()->IsShowingOrHiding();
@@ -3362,12 +3360,19 @@ void nsGenericHTMLElement::ShowPopoverInternal(
   bool shouldRestoreFocus = false;
   nsWeakPtr originallyFocusedElement;
   if (IsAutoPopover()) {
-    RefPtr<nsINode> ancestor = GetTopmostPopoverAncestor();
+    auto originalState = GetPopoverAttributeState();
+    RefPtr<nsINode> ancestor = GetTopmostPopoverAncestor(aInvoker);
     if (!ancestor) {
       ancestor = document;
     }
     document->HideAllPopoversUntil(*ancestor, false,
                                    /* aFireEvents = */ !wasShowingOrHiding);
+    if (GetPopoverAttributeState() != originalState) {
+      aRv.ThrowInvalidStateError(
+          "The value of the popover attribute was changed while hiding the "
+          "popover.");
+      return;
+    }
 
     // TODO: Handle if document changes, see
     // https://github.com/whatwg/html/issues/9177
@@ -3389,7 +3394,12 @@ void nsGenericHTMLElement::ShowPopoverInternal(
   document->AddPopoverToTopLayer(*this);
 
   PopoverPseudoStateUpdate(true, true);
-  GetPopoverData()->SetPopoverVisibilityState(PopoverVisibilityState::Showing);
+
+  {
+    auto* popoverData = GetPopoverData();
+    popoverData->SetPopoverVisibilityState(PopoverVisibilityState::Showing);
+    popoverData->SetInvoker(aInvoker);
+  }
 
   // Run the popover focusing steps given element.
   FocusPopover();
@@ -3444,13 +3454,20 @@ void nsGenericHTMLElement::FocusPreviousElementAfterHidingPopover() {
 }
 
 // https://html.spec.whatwg.org/multipage/popover.html#dom-togglepopover
-void nsGenericHTMLElement::TogglePopover(const Optional<bool>& aForce,
+bool nsGenericHTMLElement::TogglePopover(const Optional<bool>& aForce,
                                          ErrorResult& aRv) {
   if (PopoverOpen() && (!aForce.WasPassed() || !aForce.Value())) {
     HidePopover(aRv);
   } else if (!aForce.WasPassed() || aForce.Value()) {
     ShowPopover(aRv);
+  } else {
+    CheckPopoverValidity(GetPopoverData()
+                             ? GetPopoverData()->GetPopoverVisibilityState()
+                             : PopoverVisibilityState::Showing,
+                         nullptr, aRv);
   }
+
+  return PopoverOpen();
 }
 
 // https://html.spec.whatwg.org/multipage/popover.html#popover-focusing-steps

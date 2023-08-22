@@ -9,6 +9,7 @@
 #include "ipc/EnumSerializer.h"
 #include "mozilla/Logging.h"
 #include "mozilla/ProfilerMarkerTypes.h"
+#include "nsPrintfCString.h"
 
 namespace mozilla {
 
@@ -57,6 +58,20 @@ using MFMediaEngineError = MF_MEDIA_ENGINE_ERR;
         LOG_AND_WARNING("(" #x ") failed, rv=%lx", rv); \
         return defaultOut;                              \
       }                                                 \
+    } while (false)
+#endif
+
+#ifndef SHUTDOWN_IF_POSSIBLE
+#  define SHUTDOWN_IF_POSSIBLE(class)                                        \
+    do {                                                                     \
+      IMFShutdown* pShutdown = nullptr;                                      \
+      HRESULT rv = class->QueryInterface(IID_PPV_ARGS(&pShutdown));          \
+      if (SUCCEEDED(rv)) {                                                   \
+        pShutdown->Shutdown();                                               \
+        pShutdown->Release();                                                \
+      } else {                                                               \
+        LOG_AND_WARNING(#class " doesn't support IMFShutdown?, rv=%lx", rv); \
+      }                                                                      \
     } while (false)
 #endif
 

@@ -166,7 +166,7 @@ export class AddonSuggestions extends BaseFeature {
 
   async onRemoteSettingsSync(rs) {
     const records = await rs.get({ filters: { type: "amo-suggestions" } });
-    if (rs != lazy.QuickSuggestRemoteSettings.rs) {
+    if (!this.isEnabled) {
       return;
     }
 
@@ -174,7 +174,7 @@ export class AddonSuggestions extends BaseFeature {
 
     for (const record of records) {
       const { buffer } = await rs.attachments.download(record);
-      if (rs != lazy.QuickSuggestRemoteSettings.rs) {
+      if (!this.isEnabled) {
         return;
       }
 
@@ -183,7 +183,7 @@ export class AddonSuggestions extends BaseFeature {
         mapKeyword:
           lazy.SuggestionsMap.MAP_KEYWORD_PREFIXES_STARTING_AT_FIRST_WORD,
       });
-      if (rs != lazy.QuickSuggestRemoteSettings.rs) {
+      if (!this.isEnabled) {
         return;
       }
     }
@@ -356,7 +356,7 @@ export class AddonSuggestions extends BaseFeature {
     return commands;
   }
 
-  handleCommand(queryContext, result, selType) {
+  handleCommand(view, result, selType) {
     switch (selType) {
       case RESULT_MENU_COMMAND.HELP:
         // "help" is handled by UrlbarInput, no need to do anything here.
@@ -366,10 +366,10 @@ export class AddonSuggestions extends BaseFeature {
       case RESULT_MENU_COMMAND.NOT_INTERESTED:
       case RESULT_MENU_COMMAND.NOT_RELEVANT:
         lazy.UrlbarPrefs.set("suggest.addons", false);
-        queryContext.view.acknowledgeDismissal(result);
+        view.acknowledgeDismissal(result);
         break;
       case RESULT_MENU_COMMAND.SHOW_LESS_FREQUENTLY:
-        queryContext.view.acknowledgeFeedback(result);
+        view.acknowledgeFeedback(result);
         this.incrementShowLessFrequentlyCount();
         break;
     }

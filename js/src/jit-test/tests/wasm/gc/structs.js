@@ -67,7 +67,7 @@ var bin = wasmTextToBinary(
       (func (export "mk_int_node") (param i32) (param externref) (result eqref)
        (struct.new $int_node (local.get 0) (local.get 1)))
 
-      ;; Too big to fit in an InlineTypedObject.
+      ;; Too big to fit in an inline WasmGcObject.
 
       (type $bigger (struct
                      (field $a i32)
@@ -451,16 +451,6 @@ assertErrorMessage(() => ins.pop(),
     assertEq(ins.testf(10), 10);
     assertEq(ins.testg(10), 20);
 }
-
-// Test that field names must be unique in the module.
-
-assertErrorMessage(() => wasmTextToBinary(
-    `(module
-      (type $s (struct (field $x i32)))
-      (type $t (struct (field $x i32)))
-     )`),
-                  SyntaxError,
-                  /duplicate identifier for field/);
 
 // negative tests
 

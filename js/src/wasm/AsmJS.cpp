@@ -64,6 +64,7 @@
 #include "vm/TypedArrayObject.h"
 #include "vm/Warnings.h"  // js::WarnNumberASCII
 #include "wasm/WasmCompile.h"
+#include "wasm/WasmFeatures.h"
 #include "wasm/WasmGenerator.h"
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmIonCompile.h"
@@ -1955,9 +1956,9 @@ class MOZ_STACK_CLASS ModuleValidator : public ModuleValidatorShared {
     auto& ts = tokenStream();
     ErrorMetadata metadata;
     if (ts.computeErrorMetadata(&metadata, AsVariant(offset))) {
-      if (ts.anyCharsAccess().options().throwOnAsmJSValidationFailureOption) {
-        ReportCompileErrorLatin1(fc_, std::move(metadata), nullptr,
-                                 JSMSG_USE_ASM_TYPE_FAIL, &args);
+      if (ts.anyCharsAccess().options().throwOnAsmJSValidationFailure()) {
+        ReportCompileErrorLatin1VA(fc_, std::move(metadata), nullptr,
+                                   JSMSG_USE_ASM_TYPE_FAIL, &args);
       } else {
         // asm.js type failure is indicated by calling one of the fail*
         // functions below.  These functions always return false to
@@ -2106,7 +2107,7 @@ class MOZ_STACK_CLASS ModuleValidator : public ModuleValidatorShared {
   }
 
   SharedModule finish() {
-    MOZ_ASSERT(!moduleEnv_.usesMemory());
+    MOZ_ASSERT(moduleEnv_.numMemories() == 0);
     if (memory_.usage != MemoryUsage::None) {
       Limits limits;
       limits.shared = memory_.usage == MemoryUsage::Shared ? Shareable::True
@@ -2114,7 +2115,9 @@ class MOZ_STACK_CLASS ModuleValidator : public ModuleValidatorShared {
       limits.initial = memory_.minPages();
       limits.maximum = Nothing();
       limits.indexType = IndexType::I32;
-      moduleEnv_.memory = Some(MemoryDesc(limits));
+      if (!moduleEnv_.memories.append(MemoryDesc(limits))) {
+        return nullptr;
+      }
     }
     MOZ_ASSERT(moduleEnv_.funcs.empty());
     if (!moduleEnv_.funcs.resize(funcImportMap_.count() + funcDefs_.length())) {
@@ -6803,7 +6806,7 @@ static bool CheckBuffer(JSContext* cx, const AsmJSMetadata& metadata,
   }
   JSObject* bufferObj = &bufferVal.toObject();
 
-  if (metadata.usesSharedMemory()) {
+  if (metadata.memories[0].isShared()) {
     if (!bufferObj->is<SharedArrayBufferObject>()) {
       return LinkFail(
           cx, "shared views can only be constructed onto SharedArrayBuffer");
@@ -6843,8 +6846,9 @@ static bool CheckBuffer(JSContext* cx, const AsmJSMetadata& metadata,
   // This check is sufficient without considering the size of the loaded datum
   // because heap loads and stores start on an aligned boundary and the heap
   // byteLength has larger alignment.
-  uint64_t minMemoryLength =
-      metadata.usesMemory() ? metadata.memory->initialLength32() : 0;
+  uint64_t minMemoryLength = metadata.memories.length() != 0
+                                 ? metadata.memories[0].initialLength32()
+                                 : 0;
   MOZ_ASSERT((minMemoryLength - 1) <= INT32_MAX);
   if (memoryLength < minMemoryLength) {
     UniqueChars msg(JS_smprintf("ArrayBuffer byteLength of 0x%" PRIx64
@@ -6950,15 +6954,16 @@ static bool TryInstantiate(JSContext* cx, CallArgs args, const Module& module,
 
   Rooted<ImportValues> imports(cx);
 
-  if (module.metadata().usesMemory()) {
-    RootedArrayBufferObject buffer(cx);
+  if (module.metadata().memories.length() != 0) {
+    MOZ_ASSERT(module.metadata().memories.length() == 1);
+    Rooted<ArrayBufferObject*> buffer(cx);
     if (!CheckBuffer(cx, metadata, bufferVal, &buffer)) {
       return false;
     }
 
-    imports.get().memory =
-        WasmMemoryObject::create(cx, buffer, /* isHuge= */ false, nullptr);
-    if (!imports.get().memory) {
+    Rooted<WasmMemoryObject*> memory(
+        cx, WasmMemoryObject::create(cx, buffer, /* isHuge= */ false, nullptr));
+    if (!memory || !imports.get().memories.append(memory)) {
       return false;
     }
   }
@@ -7010,7 +7015,7 @@ static bool HandleInstantiationFailure(JSContext* cx, CallArgs args,
   options.setMutedErrors(source->mutedErrors())
       .setFile(source->filename())
       .setNoScriptRval(false);
-  options.asmJSOption = AsmJSOption::DisabledByLinker;
+  options.setAsmJSOption(AsmJSOption::DisabledByLinker);
 
   // The exported function inherits an implicit strict context if the module
   // also inherited it somehow.
@@ -7090,7 +7095,7 @@ static bool SuccessfulValidation(frontend::ParserBase& parser,
 }
 
 static bool TypeFailureWarning(frontend::ParserBase& parser, const char* str) {
-  if (parser.options().throwOnAsmJSValidationFailureOption) {
+  if (parser.options().throwOnAsmJSValidationFailure()) {
     parser.errorNoOffset(JSMSG_USE_ASM_TYPE_FAIL, str ? str : "");
     return false;
   }
@@ -7109,7 +7114,7 @@ static bool IsAsmJSCompilerAvailable(JSContext* cx) {
 }
 
 static bool EstablishPreconditions(frontend::ParserBase& parser) {
-  switch (parser.options().asmJSOption) {
+  switch (parser.options().asmJSOption()) {
     case AsmJSOption::DisabledByAsmJSPref:
       return TypeFailureWarning(
           parser, "Asm.js optimizer disabled by 'asmjs' runtime option");

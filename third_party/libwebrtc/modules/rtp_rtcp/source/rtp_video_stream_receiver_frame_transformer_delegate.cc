@@ -51,11 +51,15 @@ class TransformableVideoReceiverFrame
     return frame_->FrameType() == VideoFrameType::kVideoFrameKey;
   }
 
-  std::vector<uint8_t> GetAdditionalData() const override {
-    return RtpDescriptorAuthentication(frame_->GetRtpVideoHeader());
+  const std::string& GetRid() const override {
+    static const std::string empty;
+    return empty;
   }
 
   const VideoFrameMetadata& GetMetadata() const override { return metadata_; }
+
+  VideoFrameMetadata Metadata() const override { return metadata_; }
+
   void SetMetadata(const VideoFrameMetadata&) override {
     RTC_DCHECK_NOTREACHED()
         << "TransformableVideoReceiverFrame::SetMetadata is not implemented";
@@ -77,8 +81,7 @@ RtpVideoStreamReceiverFrameTransformerDelegate::
     RtpVideoStreamReceiverFrameTransformerDelegate(
         RtpVideoFrameReceiver* receiver,
         rtc::scoped_refptr<FrameTransformerInterface> frame_transformer,
-        rtc::Thread* network_thread,
-        uint32_t ssrc)
+        TaskQueueBase* network_thread, uint32_t ssrc)
     : receiver_(receiver),
       frame_transformer_(std::move(frame_transformer)),
       network_thread_(network_thread),

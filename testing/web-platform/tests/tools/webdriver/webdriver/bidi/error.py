@@ -63,12 +63,20 @@ class NoSuchScriptException(BidiException):
     error_code = "no such script"
 
 
+class UnableToCaptureScreenException(BidiException):
+    error_code = "unable to capture screen"
+
+
 class UnknownCommandException(BidiException):
     error_code = "unknown command"
 
 
 class UnknownErrorException(BidiException):
     error_code = "unknown error"
+
+
+class UnsupportedOperationException(BidiException):
+    error_code = "unsupported operation"
 
 
 def from_error_details(error: str, message: str, stacktrace: Optional[str]) -> BidiException:

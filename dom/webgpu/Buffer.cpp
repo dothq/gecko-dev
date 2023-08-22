@@ -81,7 +81,7 @@ already_AddRefed<Buffer> Buffer::Create(Device* aDevice, RawId aDeviceId,
     auto maybeShmem = ipc::UnsafeSharedMemoryHandle::CreateAndMap(size);
 
     if (maybeShmem.isNothing()) {
-      aRv.ThrowAbortError(
+      aRv.ThrowRangeError(
           nsPrintfCString("Unable to allocate shmem of size %" PRIuPTR, size));
       return nullptr;
     }
@@ -247,9 +247,10 @@ void Buffer::GetMappedRange(JSContext* aCx, uint64_t aOffset,
 
   std::shared_ptr<ipc::WritableSharedMemoryMapping>* userData =
       new std::shared_ptr<ipc::WritableSharedMemoryMapping>(mShmem);
-  auto* const arrayBuffer = JS::NewExternalArrayBuffer(
-      aCx, size, span.data(), &ExternalBufferFreeCallback, userData);
-
+  UniquePtr<void, JS::BufferContentsDeleter> dataPtr{
+      span.data(), {&ExternalBufferFreeCallback, userData}};
+  JS::Rooted<JSObject*> arrayBuffer(
+      aCx, JS::NewExternalArrayBuffer(aCx, size, std::move(dataPtr)));
   if (!arrayBuffer) {
     aRv.NoteJSContextException(aCx);
     return;

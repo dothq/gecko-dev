@@ -172,6 +172,19 @@ pref("app.update.langpack.enabled", true);
   // By default, snapshot Firefox Messaging System targeting for use by the
   // background update task every 60 minutes.
   pref("app.update.background.messaging.targeting.snapshot.intervalSec", 3600);
+  // For historical reasons, the background update process requires the Mozilla
+  // Maintenance Service to be available and enabled via the service registry
+  // key.  When this value is `true`, allow the background update process to
+  // update unelevated installations (that are writeable, etc).
+  //
+  // N.b. This feature impacts the `applications: firefox_desktop` Nimbus
+  // application ID (and not the `firefox_desktop_background_task` application
+  // ID).  However, the pref will be automatically mirrored to the background
+  // update task profile. This means that experiments and enrollment impact the
+  // Firefox Desktop browsing profile that _schedules_ the background update
+  // task, and then the background update task collects telemetry in accordance
+  // with the mirrored pref.
+  pref("app.update.background.allowUpdatesForUnelevatedInstallations", false);
 #endif
 
 #ifdef XP_MACOSX
@@ -601,6 +614,10 @@ pref("browser.urlbar.addons.featureGate", false);
 // addons suggestions are turned on.
 pref("browser.urlbar.suggest.addons", true);
 
+// If `browser.urlbar.mdn.featureGate` is true, this controls whether
+// mdn suggestions are turned on.
+pref("browser.urlbar.suggest.mdn", true);
+
 // The minimum prefix length of addons keyword the user must type to trigger
 // the suggestion. 0 means the min length should be taken from Nimbus.
 pref("browser.urlbar.addons.minKeywordLength", 0);
@@ -692,12 +709,23 @@ pref("browser.search.separatePrivateDefault.ui.enabled", false);
 pref("browser.search.separatePrivateDefault.ui.banner.max", 0);
 
 // Enables search SERP telemetry (impressions, engagements and abandonment)
+#ifdef NIGHTLY_BUILD
+pref("browser.search.serpEventTelemetry.enabled", true);
+#else
 pref("browser.search.serpEventTelemetry.enabled", false);
+#endif
 
 // Enable new experimental shopping features. This is solely intended as a
 // rollout/"emergency stop" button - it will go away once the feature has
 // rolled out. There will be separate controls for user opt-in/opt-out.
 pref("browser.shopping.experience2023.enabled", false);
+
+// Ternary int-valued pref indicating if the user has opted into the new
+// experimental shopping feature.
+// 0 means the user has not opted in or out.
+// 1 means the user has opted in.
+// 2 means the user has opted out.
+pref("browser.shopping.experience2023.optedIn", 0);
 
 // Enables the display of the Mozilla VPN banner in private browsing windows
 pref("browser.privatebrowsing.vpnpromourl", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-%CHANNEL%-browser&utm_campaign=private-browsing-vpn-link");
@@ -1119,6 +1147,14 @@ pref("browser.sessionstore.resume_from_crash", true);
 pref("browser.sessionstore.resume_session_once", false);
 pref("browser.sessionstore.resuming_after_os_restart", false);
 
+// Toggle for the behavior to include closed tabs from all windows in
+// recently-closed tab lists & counts, and re-open tabs into the current window
+#ifdef NIGHTLY_BUILD
+  pref("browser.sessionstore.closedTabsFromAllWindows", true);
+#else
+  pref("browser.sessionstore.closedTabsFromAllWindows", false);
+#endif
+
 // Minimal interval between two save operations in milliseconds (while the user is idle).
 pref("browser.sessionstore.interval.idle", 3600000); // 1h
 
@@ -1163,6 +1199,13 @@ pref("browser.sessionstore.debug", false);
 pref("browser.sessionstore.cleanup.forget_closed_after", 1209600000);
 // Platform collects session storage data for session store
 pref("browser.sessionstore.collect_session_storage", true);
+
+// temporary pref that will be removed in a future release, see bug 1836952
+#ifdef NIGHTLY_BUILD
+  pref("browser.sessionstore.persist_closed_tabs_between_sessions", true);
+#else
+  pref("browser.sessionstore.persist_closed_tabs_between_sessions", false);
+#endif
 
 // Don't quit the browser when Ctrl + Q is pressed.
 pref("browser.quitShortcut.disabled", false);
@@ -1233,9 +1276,6 @@ pref("browser.places.speculativeConnect.enabled", true);
 // if true, use full page zoom instead of text zoom
 pref("browser.zoom.full", true);
 
-// Whether or not to save and restore zoom levels on a per-site basis.
-pref("browser.zoom.siteSpecific", true);
-
 // Whether or not to update background tabs to the current zoom level.
 pref("browser.zoom.updateBackgroundTabs", true);
 
@@ -1255,9 +1295,6 @@ pref("app.support.baseURL", "https://support.mozilla.org/1/firefox/%VERSION%/%OS
 
 // base url for web-based feedback pages
 pref("app.feedback.baseURL", "https://ideas.mozilla.org/");
-
-// Name of alternate about: page for certificate errors (when undefined, defaults to about:neterror)
-pref("security.alternate_certificate_error_page", "certerror");
 
 pref("security.certerrors.recordEventTelemetry", true);
 pref("security.certerrors.permanentOverride", true);
@@ -1422,6 +1459,7 @@ pref("services.sync.prefs.sync.browser.search.update", true);
 pref("services.sync.prefs.sync.browser.search.widget.inNavBar", true);
 pref("services.sync.prefs.sync.browser.startup.homepage", true);
 pref("services.sync.prefs.sync.browser.startup.page", true);
+pref("services.sync.prefs.sync.browser.startup.upgradeDialog.enabled", true);
 pref("services.sync.prefs.sync.browser.tabs.loadInBackground", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnClose", true);
 pref("services.sync.prefs.sync.browser.tabs.warnOnOpen", true);
@@ -1602,7 +1640,7 @@ pref("browser.newtabpage.activity-stream.discoverystream.essentialReadsHeader.en
 pref("browser.newtabpage.activity-stream.discoverystream.recentSaves.enabled", false);
 pref("browser.newtabpage.activity-stream.discoverystream.editorsPicksHeader.enabled", false);
 pref("browser.newtabpage.activity-stream.discoverystream.spoc-positions", "1,5,7,11,18,20");
-pref("browser.newtabpage.activity-stream.discoverystream.spoc-topsites-positions", "1");
+pref("browser.newtabpage.activity-stream.discoverystream.spoc-topsites-positions", "2");
 pref("browser.newtabpage.activity-stream.discoverystream.widget-positions", "");
 
 pref("browser.newtabpage.activity-stream.discoverystream.spocs-endpoint", "");
@@ -1629,7 +1667,7 @@ pref("browser.newtabpage.activity-stream.discoverystream.region-stories-block", 
 // List of regions that get stories by default.
 pref("browser.newtabpage.activity-stream.discoverystream.region-stories-config", "US,DE,CA,GB,IE,CH,AT,BE,IN,FR,IT,ES");
 // List of regions that support the new recommendations BFF, also requires region-stories-config
-pref("browser.newtabpage.activity-stream.discoverystream.region-bff-config", "FR,IT,ES");
+pref("browser.newtabpage.activity-stream.discoverystream.region-bff-config", "US,DE,CA,GB,IE,CH,AT,BE,IN,FR,IT,ES");
 // List of regions that get spocs by default.
 pref("browser.newtabpage.activity-stream.discoverystream.region-spocs-config", "US,CA,DE,GB,FR,IT,ES");
 // List of regions that don't get the 7 row layout.
@@ -1686,9 +1724,6 @@ pref("nimbus.validation.enabled", true);
 // Nimbus QA prefs. Used to monitor pref-setting test experiments.
 pref("nimbus.qa.pref-1", "default");
 pref("nimbus.qa.pref-2", "default");
-
-// Enable the DOM fullscreen API.
-pref("full-screen-api.enabled", true);
 
 // Startup Crash Tracking
 // number of startup crashes that can occur before starting into safe mode automatically
@@ -1822,9 +1857,7 @@ pref("browser.translation.neverForLanguages", "");
 
 // Enable Firefox translations powered by the Bergamot translations
 // engine https://browser.mt/.
-#ifdef NIGHTLY_BUILD
 pref("browser.translations.enable", true);
-#endif
 
 // Telemetry settings.
 // Determines if Telemetry pings can be archived locally.
@@ -1865,7 +1898,6 @@ pref("privacy.trackingprotection.cryptomining.enabled", true);
 
 pref("browser.contentblocking.database.enabled", true);
 
-pref("dom.storage_access.enabled", true);
 pref("dom.storage_access.frame_only", true);
 
 // Enable URL query stripping and strip on share in Nightly.
@@ -1987,8 +2019,6 @@ pref("browser.promo.pin.enabled", true);
 // Set to true for Fx113 (see bug 1808611)
 pref("browser.promo.cookiebanners.enabled", false);
 
-// Comma separated string of mozilla vpn supported platforms.
-pref("browser.contentblocking.report.vpn_platforms", "win,mac,linux");
 pref("browser.contentblocking.report.hide_vpn_banner", false);
 pref("browser.contentblocking.report.vpn_sub_id", "sub_HrfCZF7VPHzZkA");
 
@@ -2107,15 +2137,7 @@ pref("reader.parse-node-limit", 0);
 // and because (normally) these errors are not persisted anywhere.
 pref("reader.errors.includeURLs", true);
 
-// What version of Pocket CTA to show in Reader Mode (Empty string is no CTA)
-pref("reader.pocket.ctaVersion", "");
-
 pref("view_source.tab", true);
-
-pref("dom.serviceWorkers.enabled", true);
-
-// Enable Push API.
-pref("dom.push.enabled", true);
 
 // These are the thumbnail width/height set in about:newtab.
 // If you change this, ENSURE IT IS THE SAME SIZE SET
@@ -2163,8 +2185,8 @@ pref("browser.migrate.vivaldi.enabled", true);
 pref("browser.migrate.content-modal.enabled", true);
 pref("browser.migrate.content-modal.import-all.enabled", true);
 
-// Values can be: "default", "autoclose", "standalone", "legacy".
-pref("browser.migrate.content-modal.about-welcome-behavior", "legacy");
+// Values can be: "default", "autoclose", "standalone", "legacy", "embedded".
+pref("browser.migrate.content-modal.about-welcome-behavior", "embedded");
 
 // The maximum age of history entries we'll import, in days.
 pref("browser.migrate.history.maxAgeInDays", 180);
@@ -2425,11 +2447,7 @@ pref("devtools.inspector.showUserAgentStyles", false);
 // Show native anonymous content and user agent shadow roots
 pref("devtools.inspector.showAllAnonymousContent", false);
 // Enable the inline CSS compatiblity warning in inspector rule view
-#ifdef NIGHTLY_BUILD
-  pref("devtools.inspector.ruleview.inline-compatibility-warning.enabled", true);
-#else
-  pref("devtools.inspector.ruleview.inline-compatibility-warning.enabled", false);
-#endif
+pref("devtools.inspector.ruleview.inline-compatibility-warning.enabled", true);
 // Enable the compatibility tool in the inspector.
 pref("devtools.inspector.compatibility.enabled", true);
 // Enable overflow debugging in the inspector.
@@ -2478,9 +2496,6 @@ pref("devtools.markup.collapseAttributes", true);
 pref("devtools.markup.collapseAttributeLength", 120);
 // Whether to auto-beautify the HTML on copy.
 pref("devtools.markup.beautifyOnCopy", false);
-// Whether or not the DOM mutation breakpoints context menu are enabled in the
-// markup view.
-pref("devtools.markup.mutationBreakpoints.enabled", true);
 
 // DevTools default color unit
 pref("devtools.defaultColorUnit", "authored");
@@ -2784,6 +2799,8 @@ pref("svg.context-properties.content.allowed-domains", "profile.accounts.firefox
 pref("browser.firefox-view.feature-tour", "{\"screen\":\"FIREFOX_VIEW_SPOTLIGHT\",\"complete\":false}");
 // Number of times the user visited about:firefoxview
 pref("browser.firefox-view.view-count", 0);
+// Maximum number of rows to show on the "History" page.
+pref("browser.firefox-view.max-history-rows", 500);
 
 // If the user has seen the pdf.js feature tour this value reflects the tour
 // message id, the id of the last screen they saw, and whether they completed the tour

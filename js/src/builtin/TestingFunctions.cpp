@@ -49,11 +49,11 @@
 #  include "builtin/intl/SharedIntlData.h"
 #endif
 #include "builtin/BigInt.h"
+#include "builtin/JSON.h"
 #include "builtin/MapObject.h"
 #include "builtin/Promise.h"
 #include "builtin/TestingUtility.h"  // js::ParseCompileOptions, js::ParseDebugMetadata
-#include "frontend/BytecodeCompilation.h"  // frontend::CompileGlobalScriptToExtensibleStencil, frontend::DelazifyCanonicalScriptedFunction
-#include "frontend/BytecodeCompiler.h"  // frontend::ParseModuleToExtensibleStencil
+#include "frontend/BytecodeCompiler.h"  // frontend::{CompileGlobalScriptToExtensibleStencil,ParseModuleToExtensibleStencil}
 #include "frontend/CompilationStencil.h"  // frontend::CompilationStencil
 #include "frontend/FrontendContext.h"     // AutoReportFrontendContext
 #include "gc/Allocator.h"
@@ -123,11 +123,13 @@
 #include "vm/SavedStacks.h"
 #include "vm/ScopeKind.h"
 #include "vm/Stack.h"
+#include "vm/StencilCache.h"   // DelazificationCache
 #include "vm/StencilObject.h"  // StencilObject, StencilXDRBufferObject
 #include "vm/StringObject.h"
 #include "vm/StringType.h"
 #include "wasm/AsmJS.h"
 #include "wasm/WasmBaselineCompile.h"
+#include "wasm/WasmFeatures.h"
 #include "wasm/WasmGcObject.h"
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmIntrinsic.h"
@@ -911,7 +913,7 @@ static bool WasmThreadsEnabled(JSContext* cx, unsigned argc, Value* vp) {
     args.rval().setBoolean(wasm::NAME##Available(cx));                       \
     return true;                                                             \
   }
-JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE, WASM_FEATURE);
+JS_FOR_WASM_FEATURES(WASM_FEATURE);
 #undef WASM_FEATURE
 
 static bool WasmSimdEnabled(JSContext* cx, unsigned argc, Value* vp) {
@@ -1069,7 +1071,7 @@ static bool WasmGlobalFromArrayBuffer(JSContext* cx, unsigned argc, Value* vp) {
     JS_ReportErrorASCII(cx, "argument is not an array buffer");
     return false;
   }
-  RootedArrayBufferObject buffer(
+  Rooted<ArrayBufferObject*> buffer(
       cx, &args.get(1).toObject().as<ArrayBufferObject>());
 
   // Only allow POD to be created from bytes
@@ -2016,9 +2018,10 @@ static bool WasmGcReadField(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  uint32_t fieldIndex;
-  if (!JS::ToUint32(cx, args[1], &fieldIndex)) {
-    ReportUsageErrorASCII(cx, callee, "Second argument must be an integer");
+  int32_t fieldIndex;
+  if (!JS::ToInt32(cx, args[1], &fieldIndex) || fieldIndex < 0) {
+    ReportUsageErrorASCII(cx, callee,
+                          "Second argument must be a non-negative integer");
     return false;
   }
 
@@ -2114,7 +2117,7 @@ static bool IsInStencilCache(JSContext* cx, unsigned argc, Value* vp) {
   JSFunction* fun = &args[0].toObject().as<JSFunction>();
   BaseScript* script = fun->baseScript();
   RefPtr<ScriptSource> ss = script->scriptSource();
-  StencilCache& cache = cx->runtime()->caches().delazificationCache;
+  DelazificationCache& cache = DelazificationCache::getSingleton();
   auto guard = cache.isSourceCached(ss);
   if (!guard) {
     args.rval().setBoolean(false);
@@ -2143,7 +2146,7 @@ static bool WaitForStencilCache(JSContext* cx, unsigned argc, Value* vp) {
   JSFunction* fun = &args[0].toObject().as<JSFunction>();
   BaseScript* script = fun->baseScript();
   RefPtr<ScriptSource> ss = script->scriptSource();
-  StencilCache& cache = cx->runtime()->caches().delazificationCache;
+  DelazificationCache& cache = DelazificationCache::getSingleton();
   StencilContext key(ss, script->extent());
 
   AutoLockHelperThreadState lock;
@@ -4989,10 +4992,9 @@ class CloneBufferObject : public NativeObject {
       return false;
     }
 
-    auto* rawBuffer = buffer.release();
-    JSObject* arrayBuffer = JS::NewArrayBufferWithContents(cx, size, rawBuffer);
+    JSObject* arrayBuffer =
+        JS::NewArrayBufferWithContents(cx, size, std::move(buffer));
     if (!arrayBuffer) {
-      js_free(rawBuffer);
       return false;
     }
 
@@ -5277,6 +5279,7 @@ class CustomSerializableObject : public NativeObject {
   }
 
   static bool ReadTransfer(JSContext* cx, JSStructuredCloneReader* r,
+                           const JS::CloneDataPolicy& cloneDataPolicy,
                            uint32_t tag, void* content, uint64_t extraData,
                            void* closure,
                            JS::MutableHandleObject returnObject) {
@@ -5564,6 +5567,46 @@ static bool DetachArrayBuffer(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   args.rval().setUndefined();
+  return true;
+}
+
+static bool JSONStringify(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  RootedValue value(cx, args.get(0));
+  RootedValue behaviorVal(cx, args.get(1));
+  StringifyBehavior behavior = StringifyBehavior::Normal;
+  if (behaviorVal.isString()) {
+    bool matches;
+#define MATCH(name)                                                           \
+  if (!JS_StringEqualsLiteral(cx, behaviorVal.toString(), #name, &matches)) { \
+    return false;                                                             \
+  }                                                                           \
+  if (matches) {                                                              \
+    behavior = StringifyBehavior::name;                                       \
+  }
+    MATCH(Normal)
+    MATCH(FastOnly)
+    MATCH(SlowOnly)
+    MATCH(Compare)
+#undef MATCH
+  }
+
+  JSStringBuilder sb(cx);
+  if (!Stringify(cx, &value, nullptr, UndefinedValue(), sb, behavior)) {
+    return false;
+  }
+
+  if (!sb.empty()) {
+    JSString* str = sb.finishString();
+    if (!str) {
+      return false;
+    }
+    args.rval().setString(str);
+  } else {
+    args.rval().setUndefined();
+  }
+
   return true;
 }
 
@@ -9126,7 +9169,7 @@ gc::ZealModeHelpText),
     JS_FN_HELP("wasm" #NAME "Enabled", Wasm##NAME##Enabled, 0, 0, \
 "wasm" #NAME "Enabled()", \
 "  Returns a boolean indicating whether the WebAssembly " #NAME " proposal is enabled."),
-JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE, WASM_FEATURE)
+JS_FOR_WASM_FEATURES(WASM_FEATURE)
 #undef WASM_FEATURE
 
     JS_FN_HELP("wasmThreadsEnabled", WasmThreadsEnabled, 0, 0,
@@ -9358,6 +9401,15 @@ JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE, WASM_FEATURE)
 "     1 - fail during readTransfer() hook\n"
 "     2 - fail during read() hook\n"
 "  Set the log to null to clear it."),
+
+    JS_FN_HELP("JSONStringify", JSONStringify, 4, 0,
+"JSONStringify(value, behavior)",
+"  Same as JSON.stringify(value), but allows setting behavior:\n"
+"    Normal: the default\n"
+"    FastOnly: throw if the fast path bails\n"
+"    SlowOnly: skip the fast path entirely\n"
+"    Compare: run both the fast and slow paths and compare the result. Crash if\n"
+"      they do not match. If the fast path bails, no comparison is done."),
 
     JS_FN_HELP("helperThreadCount", HelperThreadCount, 0, 0,
 "helperThreadCount()",

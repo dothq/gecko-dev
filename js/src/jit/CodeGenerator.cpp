@@ -34,6 +34,7 @@
 #include "jit/CompileInfo.h"
 #include "jit/InlineScriptTree.h"
 #include "jit/Invalidation.h"
+#include "jit/IonGenericCallStub.h"
 #include "jit/IonIC.h"
 #include "jit/IonScript.h"
 #include "jit/JitcodeMap.h"
@@ -65,7 +66,7 @@
 #include "vm/BuiltinObjectKind.h"
 #include "vm/FunctionFlags.h"  // js::FunctionFlags
 #include "vm/Interpreter.h"
-#include "vm/JSAtom.h"
+#include "vm/JSAtomUtils.h"  // AtomizeString
 #include "vm/MatchPairs.h"
 #include "vm/RegExpObject.h"
 #include "vm/RegExpStatics.h"
@@ -2401,48 +2402,10 @@ void CreateDependentString::generateFallback(MacroAssembler& masm) {
   }
 }
 
-static void CreateMatchResultFallback(MacroAssembler& masm, Register object,
-                                      Register temp1, Register temp2,
-                                      const TemplateObject& templateObject,
-                                      Label* fail) {
-  JitSpew(JitSpew_Codegen, "# Emitting CreateMatchResult fallback");
-
-  MOZ_ASSERT(templateObject.isArrayObject());
-
-  LiveRegisterSet regsToSave(RegisterSet::Volatile());
-  regsToSave.takeUnchecked(object);
-  regsToSave.takeUnchecked(temp1);
-  regsToSave.takeUnchecked(temp2);
-
-  masm.PushRegsInMask(regsToSave);
-
-  using Fn = void* (*)(JSContext* cx, gc::AllocKind kind, size_t nDynamicSlots);
-  masm.setupUnalignedABICall(object);
-
-  masm.loadJSContext(object);
-  masm.passABIArg(object);
-  masm.move32(Imm32(int32_t(templateObject.getAllocKind())), temp1);
-  masm.passABIArg(temp1);
-  masm.move32(
-      Imm32(int32_t(templateObject.asTemplateNativeObject().numDynamicSlots())),
-      temp2);
-  masm.passABIArg(temp2);
-  masm.callWithABI<Fn, CreateMatchResultFallbackFunc>();
-  masm.storeCallPointerResult(object);
-
-  masm.PopRegsInMask(regsToSave);
-
-  masm.branchPtr(Assembler::Equal, object, ImmWord(0), fail);
-
-  masm.initGCThing(object, temp1, templateObject);
-}
-
 // Generate the RegExpMatcher and RegExpExecMatch stubs. These are very similar,
 // but RegExpExecMatch also has to load and update .lastIndex for global/sticky
 // regular expressions.
-static JitCode* GenerateRegExpMatchStubShared(JSContext* cx,
-                                              gc::Heap initialStringHeap,
-                                              bool isExecMatch) {
+static JitCode* GenerateRegExpMatchStubShared(JSContext* cx, bool isExecMatch) {
   if (isExecMatch) {
     JitSpew(JitSpew_Codegen, "# Emitting RegExpExecMatch stub");
   } else {
@@ -2512,6 +2475,9 @@ static JitCode* GenerateRegExpMatchStubShared(JSContext* cx,
   // the stack.
   int32_t inputOutputDataStartOffset = 2 * sizeof(void*);
 
+  JS::AutoAssertNoGC nogc(cx);
+  gc::Heap initialStringHeap = cx->realm()->jitRealm()->getInitialStringHeap();
+
   Label notFound, oolEntry;
   if (!PrepareAndExecuteRegExp(cx, masm, regexp, input, lastIndex, temp1, temp2,
                                temp3, inputOutputDataStartOffset,
@@ -2536,9 +2502,8 @@ static JitCode* GenerateRegExpMatchStubShared(JSContext* cx,
 
   // Construct the result.
   Register object = temp1;
-  Label matchResultFallback, matchResultJoin;
-  masm.createGCObject(object, temp2, templateObj, gc::Heap::Default,
-                      &matchResultFallback);
+  Label matchResultJoin;
+  masm.createGCObject(object, temp2, templateObj, gc::Heap::Default, &oolEntry);
   masm.bind(&matchResultJoin);
 
   MOZ_ASSERT(nativeTemplateObj.numFixedSlots() == 0);
@@ -2771,11 +2736,6 @@ static JitCode* GenerateRegExpMatchStubShared(JSContext* cx,
     depStr.generateFallback(masm);
   }
 
-  // Fallback path for createGCObject.
-  masm.bind(&matchResultFallback);
-  CreateMatchResultFallback(masm, object, temp2, temp3, templateObj, &oolEntry);
-  masm.jump(&matchResultJoin);
-
   // Fall-through to the ool entry after restoring the registers.
   masm.bind(&restoreRegExpAndLastIndex);
   maybeRestoreRegExpAndLastIndex();
@@ -2803,13 +2763,11 @@ static JitCode* GenerateRegExpMatchStubShared(JSContext* cx,
 }
 
 JitCode* JitRealm::generateRegExpMatcherStub(JSContext* cx) {
-  return GenerateRegExpMatchStubShared(cx, initialStringHeap,
-                                       /* isExecMatch = */ false);
+  return GenerateRegExpMatchStubShared(cx, /* isExecMatch = */ false);
 }
 
 JitCode* JitRealm::generateRegExpExecMatchStub(JSContext* cx) {
-  return GenerateRegExpMatchStubShared(cx, initialStringHeap,
-                                       /* isExecMatch = */ true);
+  return GenerateRegExpMatchStubShared(cx, /* isExecMatch = */ true);
 }
 
 class OutOfLineRegExpMatcher : public OutOfLineCodeBase<CodeGenerator> {
@@ -5708,91 +5666,30 @@ void CodeGenerator::emitCallInvokeFunction(
 }
 
 void CodeGenerator::visitCallGeneric(LCallGeneric* call) {
-  Register calleereg = ToRegister(call->getFunction());
-  Register objreg = ToRegister(call->getTempObject());
-  Register nargsreg = ToRegister(call->getNargsReg());
+  // The callee is passed straight through to the trampoline.
+  MOZ_ASSERT(ToRegister(call->getCallee()) == IonGenericCallCalleeReg);
+
+  Register argcReg = ToRegister(call->getArgc());
   uint32_t unusedStack =
       UnusedStackBytesForCall(call->mir()->paddedNumStackArgs());
-  Label invoke, thunk, makeCall, end;
 
   // Known-target case is handled by LCallKnown.
   MOZ_ASSERT(!call->hasSingleTarget());
 
   masm.checkStackAlignment();
 
-  // Guard that calleereg is actually a function object.
-  if (call->mir()->needsClassCheck()) {
-    masm.branchTestObjIsFunction(Assembler::NotEqual, calleereg, nargsreg,
-                                 calleereg, &invoke);
-  }
-
-  // Guard that callee allows the [[Call]] or [[Construct]] operation required.
-  if (call->mir()->isConstructing()) {
-    masm.branchTestFunctionFlags(calleereg, FunctionFlags::CONSTRUCTOR,
-                                 Assembler::Zero, &invoke);
-  } else {
-    masm.branchFunctionKind(Assembler::Equal, FunctionFlags::ClassConstructor,
-                            calleereg, objreg, &invoke);
-  }
-
-  // Use the slow path if CreateThis was unable to create the |this| object.
-  if (call->mir()->needsThisCheck()) {
-    MOZ_ASSERT(call->mir()->isConstructing());
-    Address thisAddr(masm.getStackPointer(), unusedStack);
-    masm.branchTestNull(Assembler::Equal, thisAddr, &invoke);
-  } else {
-#ifdef DEBUG
-    if (call->mir()->isConstructing()) {
-      Address thisAddr(masm.getStackPointer(), unusedStack);
-      Label ok;
-      masm.branchTestNull(Assembler::NotEqual, thisAddr, &ok);
-      masm.assumeUnreachable("Unexpected null this-value");
-      masm.bind(&ok);
-    }
-#endif
-  }
-
-  // Load jitCodeRaw for callee if it exists.
-  masm.branchIfFunctionHasNoJitEntry(calleereg, call->mir()->isConstructing(),
-                                     &invoke);
-  masm.loadJitCodeRaw(calleereg, objreg);
-
-  // Target may be a different realm even if same compartment.
-  if (call->mir()->maybeCrossRealm()) {
-    masm.switchToObjectRealm(calleereg, nargsreg);
-  }
+  masm.move32(Imm32(call->numActualArgs()), argcReg);
 
   // Nestle the StackPointer up to the argument vector.
   masm.freeStack(unusedStack);
-
-  // Construct the JitFrameLayout.
-  masm.PushCalleeToken(calleereg, call->mir()->isConstructing());
-  masm.PushFrameDescriptorForJitCall(FrameType::IonJS, call->numActualArgs());
-
-  // Check whether the provided arguments satisfy target argc.
-  // We cannot have lowered to LCallGeneric with a known target. Assert that we
-  // didn't add any undefineds in WarpBuilder. NB: MCall::numStackArgs includes
-  // |this|.
-  DebugOnly<unsigned> numNonArgsOnStack = 1 + call->isConstructing();
-  MOZ_ASSERT(call->numActualArgs() ==
-             call->mir()->numStackArgs() - numNonArgsOnStack);
-  masm.loadFunctionArgCount(calleereg, nargsreg);
-  masm.branch32(Assembler::Above, nargsreg, Imm32(call->numActualArgs()),
-                &thunk);
-  masm.jump(&makeCall);
-
-  // Argument fixup needed. Load the ArgumentsRectifier.
-  masm.bind(&thunk);
-  {
-    TrampolinePtr argumentsRectifier =
-        gen->jitRuntime()->getArgumentsRectifier();
-    masm.movePtr(argumentsRectifier, objreg);
-  }
-
-  // Finally call the function in objreg.
-  masm.bind(&makeCall);
   ensureOsiSpace();
-  uint32_t callOffset = masm.callJit(objreg);
+
+  auto kind = call->mir()->isConstructing() ? IonGenericCallKind::Construct
+                                            : IonGenericCallKind::Call;
+
+  TrampolinePtr genericCallStub =
+      gen->jitRuntime()->getIonGenericCallStub(kind);
+  uint32_t callOffset = masm.callJit(genericCallStub);
   markSafepointAt(callOffset, call);
 
   if (call->mir()->maybeCrossRealm()) {
@@ -5801,20 +5698,9 @@ void CodeGenerator::visitCallGeneric(LCallGeneric* call) {
     masm.switchToRealm(gen->realm->realmPtr(), ReturnReg);
   }
 
-  // Restore stack pointer: pop JitFrameLayout fields still left on the stack
-  // and undo the earlier |freeStack(unusedStack)|.
-  int prefixGarbage =
-      sizeof(JitFrameLayout) - JitFrameLayout::bytesPoppedAfterCall();
-  masm.adjustStack(prefixGarbage - unusedStack);
-  masm.jump(&end);
-
-  // Handle uncompiled or native functions.
-  masm.bind(&invoke);
-  emitCallInvokeFunction(call, calleereg, call->isConstructing(),
-                         call->ignoresReturnValue(), call->numActualArgs(),
-                         unusedStack);
-
-  masm.bind(&end);
+  // Restore stack pointer.
+  masm.setFramePushed(frameSize());
+  emitRestoreStackPointerFromFP();
 
   // If the return value of the constructing function is Primitive,
   // replace the return value with the Object from CreateThis.
@@ -5831,6 +5717,413 @@ void CodeGenerator::visitCallGeneric(LCallGeneric* call) {
 #endif
     masm.bind(&notPrimitive);
   }
+}
+
+void JitRuntime::generateIonGenericCallArgumentsShift(
+    MacroAssembler& masm, Register argc, Register curr, Register end,
+    Register scratch, Label* done) {
+  static_assert(sizeof(Value) == 8);
+  // There are |argc| Values on the stack. Shift them all down by 8 bytes,
+  // overwriting the first value.
+
+  // Initialize `curr` to the destination of the first copy, and `end` to the
+  // final value of curr.
+  masm.moveStackPtrTo(curr);
+  masm.computeEffectiveAddress(BaseValueIndex(curr, argc), end);
+
+  Label loop;
+  masm.bind(&loop);
+  masm.branchPtr(Assembler::Equal, curr, end, done);
+  masm.loadPtr(Address(curr, 8), scratch);
+  masm.storePtr(scratch, Address(curr, 0));
+  masm.addPtr(Imm32(sizeof(uintptr_t)), curr);
+  masm.jump(&loop);
+}
+
+void JitRuntime::generateIonGenericCallStub(MacroAssembler& masm,
+                                            IonGenericCallKind kind) {
+  AutoCreatedBy acb(masm, "JitRuntime::generateIonGenericCallStub");
+  ionGenericCallStubOffset_[kind] = startTrampolineCode(masm);
+
+  // This code is tightly coupled with visitCallGeneric.
+  //
+  // Upon entry:
+  //   IonGenericCallCalleeReg contains a pointer to the callee object.
+  //   IonGenericCallArgcReg contains the number of actual args.
+  //   The arguments have been pushed onto the stack:
+  //     [newTarget] (iff isConstructing)
+  //     [argN]
+  //     ...
+  //     [arg1]
+  //     [arg0]
+  //     [this]
+  //     <return address> (if not JS_USE_LINK_REGISTER)
+  //
+  // This trampoline is responsible for entering the callee's realm,
+  // massaging the stack into the right shape, and then performing a
+  // tail call. We will return directly to the Ion code from the
+  // callee.
+  //
+  // To do a tail call, we keep the return address in a register, even
+  // on platforms that don't normally use a link register, and push it
+  // just before jumping to the callee, after we are done setting up
+  // the stack.
+  //
+  // The caller is responsible for switching back to the caller's
+  // realm and cleaning up the stack.
+
+  Register calleeReg = IonGenericCallCalleeReg;
+  Register argcReg = IonGenericCallArgcReg;
+  Register scratch = IonGenericCallScratch;
+  Register scratch2 = IonGenericCallScratch2;
+
+#ifndef JS_USE_LINK_REGISTER
+  Register returnAddrReg = IonGenericCallReturnAddrReg;
+  masm.pop(returnAddrReg);
+#endif
+
+#ifdef JS_CODEGEN_ARM
+  // The default second scratch register on arm is lr, which we need
+  // preserved for tail calls.
+  AutoNonDefaultSecondScratchRegister andssr(masm, IonGenericSecondScratchReg);
+#endif
+
+  bool isConstructing = kind == IonGenericCallKind::Construct;
+
+  Label entry, notFunction, noJitEntry, vmCall;
+  masm.bind(&entry);
+
+  // Guard that the callee is actually a function.
+  masm.branchTestObjIsFunction(Assembler::NotEqual, calleeReg, scratch,
+                               calleeReg, &notFunction);
+
+  // Guard that the callee supports the [[Call]] or [[Construct]] operation.
+  // If these tests fail, we will call into the VM to throw an exception.
+  if (isConstructing) {
+    masm.branchTestFunctionFlags(calleeReg, FunctionFlags::CONSTRUCTOR,
+                                 Assembler::Zero, &vmCall);
+  } else {
+    masm.branchFunctionKind(Assembler::Equal, FunctionFlags::ClassConstructor,
+                            calleeReg, scratch, &vmCall);
+  }
+
+  if (isConstructing) {
+    // Use the slow path if CreateThis was unable to create the |this| object.
+    Address thisAddr(masm.getStackPointer(), 0);
+    masm.branchTestNull(Assembler::Equal, thisAddr, &vmCall);
+  }
+
+  masm.switchToObjectRealm(calleeReg, scratch);
+
+  // Load jitCodeRaw for callee if it exists.
+  masm.branchIfFunctionHasNoJitEntry(calleeReg, isConstructing, &noJitEntry);
+
+  // ****************************
+  // * Functions with jit entry *
+  // ****************************
+  masm.loadJitCodeRaw(calleeReg, scratch2);
+
+  // Construct the JitFrameLayout.
+  masm.PushCalleeToken(calleeReg, isConstructing);
+  masm.PushFrameDescriptorForJitCall(FrameType::IonJS, argcReg, scratch);
+#ifndef JS_USE_LINK_REGISTER
+  masm.push(returnAddrReg);
+#endif
+
+  // Check whether we need a rectifier frame.
+  Label noRectifier;
+  masm.loadFunctionArgCount(calleeReg, scratch);
+  masm.branch32(Assembler::BelowOrEqual, scratch, argcReg, &noRectifier);
+  {
+    // Tail-call the arguments rectifier.
+    // Because all trampolines are created at the same time,
+    // we can't create a TrampolinePtr for the arguments rectifier,
+    // because it hasn't been linked yet. We can, however, directly
+    // encode its offset.
+    Label rectifier;
+    bindLabelToOffset(&rectifier, argumentsRectifierOffset_);
+
+    masm.jump(&rectifier);
+  }
+
+  // Tail call the jit entry.
+  masm.bind(&noRectifier);
+  masm.jump(scratch2);
+
+  // ********************
+  // * Native functions *
+  // ********************
+  masm.bind(&noJitEntry);
+  if (!isConstructing) {
+    generateIonGenericCallFunCall(masm, &entry, &vmCall);
+  }
+  generateIonGenericCallNativeFunction(masm, isConstructing);
+
+  // *******************
+  // * Bound functions *
+  // *******************
+  // TODO: support class hooks?
+  masm.bind(&notFunction);
+  if (!isConstructing) {
+    // TODO: support generic bound constructors?
+    generateIonGenericCallBoundFunction(masm, &entry, &vmCall);
+  }
+
+  // ********************
+  // * Fallback VM call *
+  // ********************
+  masm.bind(&vmCall);
+
+  masm.push(masm.getStackPointer());  // argv
+  masm.push(argcReg);                 // argc
+  masm.push(Imm32(false));            // ignores return value
+  masm.push(Imm32(isConstructing));   // constructing
+  masm.push(calleeReg);               // callee
+
+  using Fn = bool (*)(JSContext*, HandleObject, bool, bool, uint32_t, Value*,
+                      MutableHandleValue);
+  VMFunctionId id = VMFunctionToId<Fn, jit::InvokeFunction>::id;
+  uint32_t invokeFunctionOffset = functionWrapperOffsets_[size_t(id)];
+  Label invokeFunctionVMEntry;
+  bindLabelToOffset(&invokeFunctionVMEntry, invokeFunctionOffset);
+
+  masm.pushFrameDescriptor(FrameType::IonJS);
+#ifndef JS_USE_LINK_REGISTER
+  masm.push(returnAddrReg);
+#endif
+  masm.jump(&invokeFunctionVMEntry);
+}
+
+void JitRuntime::generateIonGenericCallNativeFunction(MacroAssembler& masm,
+                                                      bool isConstructing) {
+  Register calleeReg = IonGenericCallCalleeReg;
+  Register argcReg = IonGenericCallArgcReg;
+  Register scratch = IonGenericCallScratch;
+  Register scratch2 = IonGenericCallScratch2;
+  Register contextReg = IonGenericCallScratch3;
+#ifndef JS_USE_LINK_REGISTER
+  Register returnAddrReg = IonGenericCallReturnAddrReg;
+#endif
+
+  // Push a value containing the callee, which will become argv[0].
+  masm.pushValue(JSVAL_TYPE_OBJECT, calleeReg);
+
+  // Load the callee address into calleeReg.
+#ifdef JS_SIMULATOR
+  masm.movePtr(ImmPtr(RedirectedCallAnyNative()), calleeReg);
+#else
+  masm.loadPrivate(Address(calleeReg, JSFunction::offsetOfNativeOrEnv()),
+                   calleeReg);
+#endif
+
+  // Load argv into scratch2.
+  masm.moveStackPtrTo(scratch2);
+
+  // Push argc.
+  masm.push(argcReg);
+
+  masm.loadJSContext(contextReg);
+
+  // Construct native exit frame. Note that unlike other cases in this
+  // trampoline, this code does not use a tail call.
+  masm.pushFrameDescriptor(FrameType::IonJS);
+#ifdef JS_USE_LINK_REGISTER
+  masm.pushReturnAddress();
+#else
+  masm.push(returnAddrReg);
+#endif
+
+  masm.push(FramePointer);
+  masm.moveStackPtrTo(FramePointer);
+  masm.enterFakeExitFrameForNative(contextReg, scratch, isConstructing);
+
+  masm.setupUnalignedABICall(scratch);
+  masm.passABIArg(contextReg);  // cx
+  masm.passABIArg(argcReg);     // argc
+  masm.passABIArg(scratch2);    // argv
+
+  masm.callWithABI(calleeReg);
+
+  // Test for failure.
+  masm.branchIfFalseBool(ReturnReg, masm.exceptionLabel());
+
+  masm.loadValue(
+      Address(masm.getStackPointer(), NativeExitFrameLayout::offsetOfResult()),
+      JSReturnOperand);
+
+  // Leave the exit frame.
+  masm.moveToStackPtr(FramePointer);
+  masm.pop(FramePointer);
+
+  // Return.
+  masm.ret();
+}
+
+void JitRuntime::generateIonGenericCallFunCall(MacroAssembler& masm,
+                                               Label* entry, Label* vmCall) {
+  Register calleeReg = IonGenericCallCalleeReg;
+  Register argcReg = IonGenericCallArgcReg;
+  Register scratch = IonGenericCallScratch;
+  Register scratch2 = IonGenericCallScratch2;
+  Register scratch3 = IonGenericCallScratch3;
+
+  Label notFunCall;
+  masm.branchPtr(Assembler::NotEqual,
+                 Address(calleeReg, JSFunction::offsetOfNativeOrEnv()),
+                 ImmPtr(js::fun_call), &notFunCall);
+
+  // In general, we can implement fun_call by replacing calleeReg with
+  // |this|, sliding all the other arguments down, and decrementing argc.
+  //
+  // *BEFORE*                           *AFTER*
+  //  [argN]  argc = N+1                 <padding>
+  //  ...                                [argN]  argc = N
+  //  [arg1]                             ...
+  //  [arg0]                             [arg1] <- now arg0
+  //  [this] <- top of stack (aligned)   [arg0] <- now this
+  //
+  // The only exception is when argc is already 0, in which case instead
+  // of shifting arguments down we replace [this] with UndefinedValue():
+  //
+  // *BEFORE*                           *AFTER*
+  // [this] argc = 0                     [undef] argc = 0
+  //
+  // After making this transformation, we can jump back to the beginning
+  // of this trampoline to handle the inner call.
+
+  // Guard that |this| is an object. If it is, replace calleeReg.
+  masm.fallibleUnboxObject(Address(masm.getStackPointer(), 0), scratch, vmCall);
+  masm.movePtr(scratch, calleeReg);
+
+  Label hasArgs;
+  masm.branch32(Assembler::NotEqual, argcReg, Imm32(0), &hasArgs);
+
+  // No arguments. Replace |this| with |undefined| and start from the top.
+  masm.storeValue(UndefinedValue(), Address(masm.getStackPointer(), 0));
+  masm.jump(entry);
+
+  masm.bind(&hasArgs);
+
+  Label doneSliding;
+  generateIonGenericCallArgumentsShift(masm, argcReg, scratch, scratch2,
+                                       scratch3, &doneSliding);
+  masm.bind(&doneSliding);
+  masm.sub32(Imm32(1), argcReg);
+
+  masm.jump(entry);
+
+  masm.bind(&notFunCall);
+}
+
+void JitRuntime::generateIonGenericCallBoundFunction(MacroAssembler& masm,
+                                                     Label* entry,
+                                                     Label* vmCall) {
+  Register calleeReg = IonGenericCallCalleeReg;
+  Register argcReg = IonGenericCallArgcReg;
+  Register scratch = IonGenericCallScratch;
+  Register scratch2 = IonGenericCallScratch2;
+  Register scratch3 = IonGenericCallScratch3;
+
+  masm.branchTestObjClass(Assembler::NotEqual, calleeReg,
+                          &BoundFunctionObject::class_, scratch, calleeReg,
+                          vmCall);
+
+  Address targetSlot(calleeReg, BoundFunctionObject::offsetOfTargetSlot());
+  Address flagsSlot(calleeReg, BoundFunctionObject::offsetOfFlagsSlot());
+  Address thisSlot(calleeReg, BoundFunctionObject::offsetOfBoundThisSlot());
+  Address firstInlineArgSlot(
+      calleeReg, BoundFunctionObject::offsetOfFirstInlineBoundArg());
+
+  // Check that we won't be pushing too many arguments.
+  masm.load32(flagsSlot, scratch);
+  masm.rshift32(Imm32(BoundFunctionObject::NumBoundArgsShift), scratch);
+  masm.add32(argcReg, scratch);
+  masm.branch32(Assembler::Above, scratch, Imm32(JIT_ARGS_LENGTH_MAX), vmCall);
+
+  // The stack is currently correctly aligned for a jit call. We will
+  // be updating the `this` value and potentially adding additional
+  // arguments. On platforms with 16-byte alignment, if the number of
+  // bound arguments is odd, we have to move the arguments that are
+  // currently on the stack. For example, with one bound argument:
+  //
+  // *BEFORE*                           *AFTER*
+  //  [argN]                             <padding>
+  //  ...                                [argN]   |
+  //  [arg1]                             ...      |  These arguments have been
+  //  [arg0]                             [arg1]   |  shifted down 8 bytes.
+  //  [this] <- top of stack (aligned)   [arg0]   v
+  //                                     [bound0]    <- one bound argument (odd)
+  //                                     [boundThis] <- top of stack (aligned)
+  //
+  Label poppedThis;
+  if (JitStackValueAlignment > 1) {
+    Label alreadyAligned;
+    masm.branchTest32(Assembler::Zero, flagsSlot,
+                      Imm32(1 << BoundFunctionObject::NumBoundArgsShift),
+                      &alreadyAligned);
+
+    // We have an odd number of bound arguments. Shift the existing arguments
+    // down by 8 bytes.
+    generateIonGenericCallArgumentsShift(masm, argcReg, scratch, scratch2,
+                                         scratch3, &poppedThis);
+    masm.bind(&alreadyAligned);
+  }
+
+  // Pop the current `this`. It will be replaced with the bound `this`.
+  masm.freeStack(sizeof(Value));
+  masm.bind(&poppedThis);
+
+  // Load the number of bound arguments in scratch
+  masm.load32(flagsSlot, scratch);
+  masm.rshift32(Imm32(BoundFunctionObject::NumBoundArgsShift), scratch);
+
+  Label donePushingBoundArguments;
+  masm.branch32(Assembler::Equal, scratch, Imm32(0),
+                &donePushingBoundArguments);
+
+  // Update argc to include bound arguments.
+  masm.add32(scratch, argcReg);
+
+  // Load &boundArgs[0] in scratch2.
+  Label outOfLineBoundArguments, haveBoundArguments;
+  masm.branch32(Assembler::Above, scratch,
+                Imm32(BoundFunctionObject::MaxInlineBoundArgs),
+                &outOfLineBoundArguments);
+  masm.computeEffectiveAddress(firstInlineArgSlot, scratch2);
+  masm.jump(&haveBoundArguments);
+
+  masm.bind(&outOfLineBoundArguments);
+  masm.unboxObject(firstInlineArgSlot, scratch2);
+  masm.loadPtr(Address(scratch2, NativeObject::offsetOfElements()), scratch2);
+
+  masm.bind(&haveBoundArguments);
+
+  // Load &boundArgs[numBoundArgs] in scratch.
+  BaseObjectElementIndex lastBoundArg(scratch2, scratch);
+  masm.computeEffectiveAddress(lastBoundArg, scratch);
+
+  // Push the bound arguments, starting with the last one.
+  // Copying pre-decrements scratch until scratch2 is reached.
+  Label boundArgumentsLoop;
+  masm.bind(&boundArgumentsLoop);
+  masm.subPtr(Imm32(sizeof(Value)), scratch);
+  masm.pushValue(Address(scratch, 0));
+  masm.branchPtr(Assembler::Above, scratch, scratch2, &boundArgumentsLoop);
+  masm.bind(&donePushingBoundArguments);
+
+  // Push the bound `this`.
+  masm.pushValue(thisSlot);
+
+  // Load the target in calleeReg.
+  masm.unboxObject(targetSlot, calleeReg);
+
+  // At this point, all preconditions for entering the trampoline are met:
+  // - calleeReg contains a pointer to the callee object
+  // - argcReg contains the number of actual args (now including bound args)
+  // - the arguments are on the stack with the correct alignment.
+  // Instead of generating more code, we can jump back to the entry point
+  // of the trampoline to call the bound target.
+  masm.jump(entry);
 }
 
 void CodeGenerator::visitCallKnown(LCallKnown* call) {
@@ -13948,6 +14241,12 @@ bool CodeGenerator::link(JSContext* cx, const WarpSnapshot* snapshot) {
   vtune::MarkScript(code, script, "ion");
 #endif
 
+  // Set a Ion counter hint for this script.
+  if (cx->runtime()->jitRuntime()->hasJitHintsMap()) {
+    JitHintsMap* jitHints = cx->runtime()->jitRuntime()->getJitHintsMap();
+    jitHints->recordIonCompilation(script);
+  }
+
   // for marking during GC.
   if (safepointIndices_.length()) {
     ionScript->copySafepointIndices(&safepointIndices_[0]);
@@ -16928,14 +17227,35 @@ void CodeGenerator::visitWasmTrapIfNull(LWasmTrapIfNull* lir) {
   masm.bind(&nonNull);
 }
 
-void CodeGenerator::visitWasmGcObjectIsSubtypeOfAbstract(
-    LWasmGcObjectIsSubtypeOfAbstract* ins) {
+static void BranchWasmRefIsSubtype(MacroAssembler& masm, Register ref,
+                                   const wasm::RefType& sourceType,
+                                   const wasm::RefType& destType, Label* label,
+                                   Register superSuperTypeVector,
+                                   Register scratch1, Register scratch2) {
+  if (destType.isAnyHierarchy()) {
+    masm.branchWasmRefIsSubtypeAny(ref, sourceType, destType, label,
+                                   /*onSuccess=*/true, superSuperTypeVector,
+                                   scratch1, scratch2);
+  } else if (destType.isFuncHierarchy()) {
+    masm.branchWasmRefIsSubtypeFunc(ref, sourceType, destType, label,
+                                    /*onSuccess=*/true, superSuperTypeVector,
+                                    scratch1, scratch2);
+  } else if (destType.isExternHierarchy()) {
+    masm.branchWasmRefIsSubtypeExtern(ref, sourceType, destType, label,
+                                      /*onSuccess=*/true);
+  } else {
+    MOZ_CRASH("could not generate casting code for unknown type hierarchy");
+  }
+}
+
+void CodeGenerator::visitWasmRefIsSubtypeOfAbstract(
+    LWasmRefIsSubtypeOfAbstract* ins) {
   MOZ_ASSERT(gen->compilingWasm());
 
-  const MWasmGcObjectIsSubtypeOfAbstract* mir = ins->mir();
+  const MWasmRefIsSubtypeOfAbstract* mir = ins->mir();
   MOZ_ASSERT(!mir->destType().isTypeRef());
 
-  Register object = ToRegister(ins->object());
+  Register ref = ToRegister(ins->ref());
   Register superSuperTypeVector = Register::Invalid();
   Register scratch1 = ToTempRegisterOrInvalid(ins->temp0());
   Register scratch2 = Register::Invalid();
@@ -16943,9 +17263,8 @@ void CodeGenerator::visitWasmGcObjectIsSubtypeOfAbstract(
   Label onSuccess;
   Label onFail;
   Label join;
-  masm.branchWasmGcObjectIsRefType(
-      object, mir->sourceType(), mir->destType(), &onSuccess,
-      /*onSuccess=*/true, superSuperTypeVector, scratch1, scratch2);
+  BranchWasmRefIsSubtype(masm, ref, mir->sourceType(), mir->destType(),
+                         &onSuccess, superSuperTypeVector, scratch1, scratch2);
   masm.bind(&onFail);
   masm.xor32(result, result);
   masm.jump(&join);
@@ -16954,23 +17273,22 @@ void CodeGenerator::visitWasmGcObjectIsSubtypeOfAbstract(
   masm.bind(&join);
 }
 
-void CodeGenerator::visitWasmGcObjectIsSubtypeOfConcrete(
-    LWasmGcObjectIsSubtypeOfConcrete* ins) {
+void CodeGenerator::visitWasmRefIsSubtypeOfConcrete(
+    LWasmRefIsSubtypeOfConcrete* ins) {
   MOZ_ASSERT(gen->compilingWasm());
 
-  const MWasmGcObjectIsSubtypeOfConcrete* mir = ins->mir();
+  const MWasmRefIsSubtypeOfConcrete* mir = ins->mir();
   MOZ_ASSERT(mir->destType().isTypeRef());
 
-  Register object = ToRegister(ins->object());
+  Register ref = ToRegister(ins->ref());
   Register superSuperTypeVector = ToRegister(ins->superSuperTypeVector());
   Register scratch1 = ToRegister(ins->temp0());
   Register scratch2 = ToTempRegisterOrInvalid(ins->temp1());
   Register result = ToRegister(ins->output());
   Label onSuccess;
   Label join;
-  masm.branchWasmGcObjectIsRefType(
-      object, mir->sourceType(), mir->destType(), &onSuccess,
-      /*onSuccess=*/true, superSuperTypeVector, scratch1, scratch2);
+  BranchWasmRefIsSubtype(masm, ref, mir->sourceType(), mir->destType(),
+                         &onSuccess, superSuperTypeVector, scratch1, scratch2);
   masm.move32(Imm32(0), result);
   masm.jump(&join);
   masm.bind(&onSuccess);
@@ -16978,32 +17296,39 @@ void CodeGenerator::visitWasmGcObjectIsSubtypeOfConcrete(
   masm.bind(&join);
 }
 
-void CodeGenerator::visitWasmGcObjectIsSubtypeOfAbstractAndBranch(
-    LWasmGcObjectIsSubtypeOfAbstractAndBranch* ins) {
+void CodeGenerator::visitWasmRefIsSubtypeOfAbstractAndBranch(
+    LWasmRefIsSubtypeOfAbstractAndBranch* ins) {
   MOZ_ASSERT(gen->compilingWasm());
-  Register object = ToRegister(ins->object());
+  Register ref = ToRegister(ins->ref());
   Register scratch1 = ToTempRegisterOrInvalid(ins->temp0());
   Label* onSuccess = getJumpLabelForBranch(ins->ifTrue());
   Label* onFail = getJumpLabelForBranch(ins->ifFalse());
-  masm.branchWasmGcObjectIsRefType(
-      object, ins->sourceType(), ins->destType(), onSuccess,
-      /*onSuccess=*/true, Register::Invalid(), scratch1, Register::Invalid());
+  BranchWasmRefIsSubtype(masm, ref, ins->sourceType(), ins->destType(),
+                         onSuccess, Register::Invalid(), scratch1,
+                         Register::Invalid());
   masm.jump(onFail);
 }
 
-void CodeGenerator::visitWasmGcObjectIsSubtypeOfConcreteAndBranch(
-    LWasmGcObjectIsSubtypeOfConcreteAndBranch* ins) {
+void CodeGenerator::visitWasmRefIsSubtypeOfConcreteAndBranch(
+    LWasmRefIsSubtypeOfConcreteAndBranch* ins) {
   MOZ_ASSERT(gen->compilingWasm());
-  Register object = ToRegister(ins->object());
+  Register ref = ToRegister(ins->ref());
   Register superSuperTypeVector = ToRegister(ins->superSuperTypeVector());
   Register scratch1 = ToRegister(ins->temp0());
   Register scratch2 = ToTempRegisterOrInvalid(ins->temp1());
   Label* onSuccess = getJumpLabelForBranch(ins->ifTrue());
   Label* onFail = getJumpLabelForBranch(ins->ifFalse());
-  masm.branchWasmGcObjectIsRefType(
-      object, ins->sourceType(), ins->destType(), onSuccess,
-      /*onSuccess=*/true, superSuperTypeVector, scratch1, scratch2);
+  BranchWasmRefIsSubtype(masm, ref, ins->sourceType(), ins->destType(),
+                         onSuccess, superSuperTypeVector, scratch1, scratch2);
   masm.jump(onFail);
+}
+
+void CodeGenerator::visitWasmHeapReg(LWasmHeapReg* ins) {
+#ifdef WASM_HAS_HEAPREG
+  masm.movePtr(HeapReg, ToRegister(ins->output()));
+#else
+  MOZ_CRASH();
+#endif
 }
 
 void CodeGenerator::visitWasmBoundsCheck(LWasmBoundsCheck* ins) {

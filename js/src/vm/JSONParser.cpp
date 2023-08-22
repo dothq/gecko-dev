@@ -39,12 +39,12 @@
 #include "util/StringBuffer.h"  // JSStringBuilder
 #include "vm/ArrayObject.h"     // ArrayObject
 #include "vm/ErrorReporting.h"  // ReportCompileErrorLatin1, ErrorMetadata
-#include "vm/JSAtom.h"          // AtomizeChars
+#include "vm/JSAtomUtils.h"     // AtomizeChars
 #include "vm/JSContext.h"       // JSContext
 #include "vm/PlainObject.h"     // NewPlainObjectWithMaybeDuplicateKeys
 #include "vm/StringType.h"  // JSString, JSAtom, JSLinearString, NewStringCopyN, NameToId
 
-#include "vm/JSAtom-inl.h"  // AtomToId
+#include "vm/JSAtomUtils-inl.h"  // AtomToId
 
 using namespace js;
 
@@ -1041,8 +1041,8 @@ static void ReportJSONSyntaxError(FrontendContext* fc, ErrorMetadata&& metadata,
   va_list args;
   va_start(args, errorNumber);
 
-  js::ReportCompileErrorLatin1(fc, std::move(metadata), nullptr, errorNumber,
-                               &args);
+  js::ReportCompileErrorLatin1VA(fc, std::move(metadata), nullptr, errorNumber,
+                                 &args);
 
   va_end(args);
 }

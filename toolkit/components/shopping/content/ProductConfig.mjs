@@ -2,13 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const ANALYSIS_API =
-  "https://staging-trustwerty.fakespot.io/api/v1/fx/analysis";
-const ANALYSIS_SCHEMA = "chrome://global/content/shopping/analysis.schema.json";
+const ANALYSIS_API = "https://staging.trustwerty.com/api/v1/fx/analysis";
+const ANALYSIS_RESPONSE_SCHEMA =
+  "chrome://global/content/shopping/analysis_response.schema.json";
+const ANALYSIS_REQUEST_SCHEMA =
+  "chrome://global/content/shopping/analysis_request.schema.json";
 const RECOMMENDATIONS_API =
   "https://staging-affiliates.fakespot.io/v1/fx/sp_search";
-const RECOMMENDATIONS_SCHEMA =
-  "chrome://global/content/shopping/recommendations.schema.json";
+const RECOMMENDATIONS_RESPONSE_SCHEMA =
+  "chrome://global/content/shopping/recommendations_response.schema.json";
+const RECOMMENDATIONS_REQUEST_SCHEMA =
+  "chrome://global/content/shopping/recommendations_request.schema.json";
 
 const ProductConfig = {
   amazon: {
@@ -31,8 +35,10 @@ Object.freeze(ProductConfig);
 
 export {
   ANALYSIS_API,
-  ANALYSIS_SCHEMA,
+  ANALYSIS_RESPONSE_SCHEMA,
+  ANALYSIS_REQUEST_SCHEMA,
   RECOMMENDATIONS_API,
-  RECOMMENDATIONS_SCHEMA,
+  RECOMMENDATIONS_RESPONSE_SCHEMA,
+  RECOMMENDATIONS_REQUEST_SCHEMA,
   ProductConfig,
 };

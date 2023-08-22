@@ -275,6 +275,14 @@ rust_pgo_flags := -C profile-use=$(PGO_PROFILE_PATH)
 endif
 endif
 
+# Work around https://github.com/rust-lang/rust/issues/112480
+ifdef MOZ_DEBUG_RUST
+ifneq (,$(filter i686-pc-windows-%,$(RUST_TARGET)))
+RUSTFLAGS += -Zmir-enable-passes=-CheckAlignment
+RUSTC_BOOTSTRAP := 1
+endif
+endif
+
 $(target_rust_ltoable): RUSTFLAGS:=$(rustflags_override) $(rustflags_sancov) $(RUSTFLAGS) $(rust_pgo_flags) \
 								$(if $(MOZ_LTO_RUST_CROSS),\
 								    -Clinker-plugin-lto \
@@ -447,7 +455,7 @@ ifeq ($(OS_ARCH), Linux)
 ifeq (,$(rustflags_sancov)$(MOZ_ASAN)$(MOZ_TSAN)$(MOZ_UBSAN))
 ifndef MOZ_LTO_RUST_CROSS
 ifneq (,$(filter -Clto,$(cargo_rustc_flags)))
-	$(call py_action,check_binary,--target --networking $@)
+	$(call py_action,check_binary,--networking $@)
 endif
 endif
 endif

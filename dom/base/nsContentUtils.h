@@ -2475,14 +2475,6 @@ class nsContentUtils {
                                                  int32_t aOldChildCount);
 
   /**
-   * Returns true if the content is in a document and contains a plugin
-   * which we don't control event dispatch for, i.e. do any plugins in this
-   * doc tree receive key events outside of our control? This always returns
-   * false on MacOSX.
-   */
-  static bool HasPluginWithUncontrolledEventDispatch(nsIContent* aContent);
-
-  /**
    * Returns the in-process subtree root document in a document hierarchy.
    * This could be a chrome document.
    */
@@ -2778,6 +2770,34 @@ class nsContentUtils {
    * Checks whether the  header value contains any forbidden method
    */
   static bool ContainsForbiddenMethod(const nsACString& headerValue);
+
+  class ParsedRange {
+   public:
+    explicit ParsedRange(mozilla::Maybe<uint32_t> aStart,
+                         mozilla::Maybe<uint32_t> aEnd)
+        : mStart(aStart), mEnd(aEnd) {}
+
+    mozilla::Maybe<uint32_t> Start() const { return mStart; }
+    mozilla::Maybe<uint32_t> End() const { return mEnd; }
+
+    bool operator==(const ParsedRange& aOther) const {
+      return Start() == aOther.Start() && End() == aOther.End();
+    }
+
+   private:
+    mozilla::Maybe<uint32_t> mStart;
+    mozilla::Maybe<uint32_t> mEnd;
+  };
+
+  /**
+   * Parse a single range request and return a pair containing the resulting
+   * start and end of the range.
+   *
+   * See https://fetch.spec.whatwg.org/#simple-range-header-value
+   */
+  static mozilla::Maybe<ParsedRange> ParseSingleRangeRequest(
+      const nsACString& aHeaderValue, bool aAllowWhitespace);
+
   /**
    * Returns whether a given header has characters that aren't permitted
    */
@@ -2800,6 +2820,12 @@ class nsContentUtils {
    * allowed for a non-CORS XHR or fetch request.
    */
   static bool IsAllowedNonCorsLanguage(const nsACString& aHeaderValue);
+
+  /**
+   * Returns whether a given Range header value is allowed for a non-CORS XHR or
+   * fetch request.
+   */
+  static bool IsAllowedNonCorsRange(const nsACString& aHeaderValue);
 
   /**
    * Returns whether a given header and value is a CORS-safelisted request

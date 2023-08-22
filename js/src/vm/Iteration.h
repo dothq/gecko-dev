@@ -17,6 +17,7 @@
 #include "builtin/SelfHostingDefines.h"
 #include "gc/Barrier.h"
 #include "vm/NativeObject.h"
+#include "vm/TypedArrayObject.h"
 
 /*
  * [SMDOC] For-in enumeration
@@ -760,11 +761,15 @@ class WrapForValidIteratorObject : public NativeObject {
  public:
   static const JSClass class_;
 
-  enum { IteratedSlot, SlotCount };
+  enum { IteratorSlot, NextMethodSlot, SlotCount };
 
   static_assert(
-      IteratedSlot == ITERATED_SLOT,
-      "IteratedSlot must match self-hosting define for iterated object slot.");
+      IteratorSlot == WRAP_FOR_VALID_ITERATOR_ITERATOR_SLOT,
+      "IteratedSlot must match self-hosting define for iterator object slot.");
+
+  static_assert(
+      NextMethodSlot == WRAP_FOR_VALID_ITERATOR_NEXT_METHOD_SLOT,
+      "NextMethodSlot must match self-hosting define for next method slot.");
 };
 
 WrapForValidIteratorObject* NewWrapForValidIterator(JSContext* cx);
@@ -794,6 +799,13 @@ IteratorHelperObject* NewIteratorHelper(JSContext* cx);
 
 bool IterableToArray(JSContext* cx, HandleValue iterable,
                      MutableHandle<ArrayObject*> array);
+
+// Typed arrays and classes with an enumerate hook can have extra properties not
+// included in the shape's property map or the object's dense elements.
+static inline bool ClassCanHaveExtraEnumeratedProperties(const JSClass* clasp) {
+  return IsTypedArrayClass(clasp) || clasp->getNewEnumerate() ||
+         clasp->getEnumerate();
+}
 
 } /* namespace js */
 

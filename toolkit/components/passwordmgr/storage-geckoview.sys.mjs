@@ -6,8 +6,6 @@
  * LoginManagerStorage implementation for GeckoView
  */
 
-import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
-
 import { LoginManagerStorage_json } from "resource://gre/modules/storage-json.sys.mjs";
 
 const lazy = {};
@@ -69,16 +67,12 @@ export class LoginManagerStorage extends LoginManagerStorage_json {
     );
   }
 
-  getAllLogins() {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
-  }
-
   /**
    * Returns a promise resolving to an array of all saved logins that can be decrypted.
    *
    * @resolve {nsILoginInfo[]}
    */
-  getAllLoginsAsync(includeDeleted) {
+  getAllLogins(includeDeleted) {
     return this._getLoginsAsync({}, includeDeleted);
   }
 
@@ -245,7 +239,7 @@ export class LoginManagerStorage extends LoginManagerStorage_json {
   }
 }
 
-XPCOMUtils.defineLazyGetter(LoginManagerStorage.prototype, "log", () => {
+ChromeUtils.defineLazyGetter(LoginManagerStorage.prototype, "log", () => {
   let logger = lazy.LoginHelper.createLogger("Login storage");
   return logger.log.bind(logger);
 });

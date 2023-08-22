@@ -5,12 +5,12 @@
 import {
   getExpression,
   getExpressions,
-  getSelectedFrame,
-  getSelectedFrameId,
   getSelectedSource,
   getSelectedScopeMappings,
   getSelectedFrameBindings,
   getIsPaused,
+  getSelectedFrame,
+  getCurrentThread,
   isMapScopesEnabled,
 } from "../selectors";
 import { PROMISE } from "./utils/middleware/promise";
@@ -20,10 +20,9 @@ import { features } from "../utils/prefs";
 /**
  * Add expression for debugger to watch
  *
- * @param {object} cx
  * @param {string} input
  */
-export function addExpression(cx, input) {
+export function addExpression(input) {
   return async ({ dispatch, getState, parserWorker }) => {
     if (!input) {
       return null;
@@ -45,18 +44,20 @@ export function addExpression(cx, input) {
       }
     }
 
-    return dispatch(evaluateExpression(cx, expression));
+    return dispatch(evaluateExpression(expression));
   };
 }
 
-export function autocomplete(cx, input, cursor) {
+export function autocomplete(input, cursor) {
   return async ({ dispatch, getState, client }) => {
     if (!input) {
       return;
     }
-    const frameId = getSelectedFrameId(getState(), cx.thread);
-    const result = await client.autocomplete(input, cursor, frameId);
-    dispatch({ type: "AUTOCOMPLETE", cx, input, result });
+    const thread = getCurrentThread(getState());
+    const selectedFrame = getSelectedFrame(getState(), thread);
+    const result = await client.autocomplete(input, cursor, selectedFrame?.id);
+    // Pass both selectedFrame and thread in case selectedFrame is null
+    dispatch({ type: "AUTOCOMPLETE", selectedFrame, thread, input, result });
   };
 }
 
@@ -68,8 +69,8 @@ export function clearExpressionError() {
   return { type: "CLEAR_EXPRESSION_ERROR" };
 }
 
-export function updateExpression(cx, input, expression) {
-  return async ({ dispatch, parserWorker }) => {
+export function updateExpression(input, expression) {
+  return async ({ getState, dispatch, parserWorker }) => {
     if (!input) {
       return;
     }
@@ -82,7 +83,7 @@ export function updateExpression(cx, input, expression) {
       expressionError,
     });
 
-    await dispatch(evaluateExpressions(cx));
+    await dispatch(evaluateExpressionsForCurrentContext());
   };
 }
 
@@ -98,62 +99,89 @@ export function deleteExpression(expression) {
   };
 }
 
-/**
- * Update all the current expression evaluations.
- *
- * @param {object} cx
- */
-export function evaluateExpressions(cx) {
-  return async function ({ dispatch, getState, client }) {
-    const expressions = getExpressions(getState());
-    const inputs = expressions.map(({ input }) => input);
-    const frameId = getSelectedFrameId(getState(), cx.thread);
-    const results = await client.evaluateExpressions(inputs, {
-      frameId,
-      threadId: cx.thread,
-    });
-    dispatch({ type: "EVALUATE_EXPRESSIONS", cx, inputs, results });
+export function evaluateExpressionsForCurrentContext() {
+  return async ({ getState, dispatch }) => {
+    const thread = getCurrentThread(getState());
+    const selectedFrame = getSelectedFrame(getState(), thread);
+    await dispatch(evaluateExpressions(selectedFrame));
   };
 }
 
-function evaluateExpression(cx, expression) {
+/**
+ * Update all the expressions by querying the server for updated values.
+ *
+ * @param {object} selectedFrame
+ *        If defined, will evaluate the expression against this given frame,
+ *        otherwise it will use the global scope of the thread.
+ */
+export function evaluateExpressions(selectedFrame) {
+  return async function ({ dispatch, getState, client }) {
+    const expressions = getExpressions(getState());
+    const inputs = expressions.map(({ input }) => input);
+    // Fallback to global scope of the current thread when selectedFrame is null
+    const thread = selectedFrame?.thread || getCurrentThread(getState());
+    const results = await client.evaluateExpressions(inputs, {
+      // We will only have a specific frame when passing a Selected frame context.
+      frameId: selectedFrame?.id,
+      threadId: thread,
+    });
+    // Pass both selectedFrame and thread in case selectedFrame is null
+    dispatch({
+      type: "EVALUATE_EXPRESSIONS",
+
+      selectedFrame,
+      // As `selectedFrame` can be null, pass `thread` to help
+      // the reducer know what is the related thread of this action.
+      thread,
+
+      inputs,
+      results,
+    });
+  };
+}
+
+function evaluateExpression(expression) {
   return async function (thunkArgs) {
-    if (!expression.input) {
+    let { input } = expression;
+    if (!input) {
       console.warn("Expressions should not be empty");
       return null;
     }
+
     const { dispatch, getState, client } = thunkArgs;
-    let { input } = expression;
-    const frame = getSelectedFrame(getState(), cx.thread);
+    const thread = getCurrentThread(getState());
+    const selectedFrame = getSelectedFrame(getState(), thread);
 
-    if (frame) {
-      const selectedSource = getSelectedSource(getState());
-
-      if (
-        selectedSource &&
-        frame.location.source.isOriginal &&
-        selectedSource.isOriginal
-      ) {
-        const mapResult = await getMappedExpression(
-          input,
-          cx.thread,
-          thunkArgs
-        );
-        if (mapResult) {
-          input = mapResult.expression;
-        }
+    const selectedSource = getSelectedSource(getState());
+    // Only map when we are paused and if the currently selected source is original,
+    // and the paused location is also original.
+    if (
+      selectedFrame &&
+      selectedSource &&
+      selectedFrame.location.source.isOriginal &&
+      selectedSource.isOriginal
+    ) {
+      const mapResult = await getMappedExpression(
+        input,
+        selectedFrame.thread,
+        thunkArgs
+      );
+      if (mapResult) {
+        input = mapResult.expression;
       }
     }
 
-    const frameId = getSelectedFrameId(getState(), cx.thread);
-
+    // Pass both selectedFrame and thread in case selectedFrame is null
     return dispatch({
       type: "EVALUATE_EXPRESSION",
-      cx,
-      thread: cx.thread,
+      selectedFrame,
+      // When we aren't passing a frame, we have to pass a thread to the pause reducer
+      thread: selectedFrame ? null : thread,
       input: expression.input,
       [PROMISE]: client.evaluate(wrapExpression(input), {
-        frameId,
+        // When evaluating against the global scope (when not paused)
+        // frameId will be null here.
+        frameId: selectedFrame?.id,
       }),
     });
   };

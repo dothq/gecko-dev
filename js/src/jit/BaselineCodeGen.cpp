@@ -756,7 +756,6 @@ bool BaselineCodeGen<Handler>::callVMInternal(VMFunctionId id,
 #endif
     masm.pushFrameDescriptor(FrameType::BaselineJS);
   }
-  MOZ_ASSERT(fun.expectTailCall == NonTailCall);
   // Perform the call.
   masm.call(code);
   uint32_t callOffset = masm.currentOffset();
@@ -1477,7 +1476,7 @@ bool BaselineCompilerCodeGen::emitWarmUpCounterIncrement() {
 
   const OptimizationInfo* info =
       IonOptimizations.get(OptimizationLevel::Normal);
-  uint32_t warmUpThreshold = info->compilerWarmUpThreshold(script, pc);
+  uint32_t warmUpThreshold = info->compilerWarmUpThreshold(cx, script, pc);
   masm.branch32(Assembler::LessThan, countReg, Imm32(warmUpThreshold), &done);
 
   // Don't trigger Warp compilations from trial-inlined scripts.
@@ -6820,7 +6819,7 @@ JitCode* JitRuntime::generateDebugTrapHandler(JSContext* cx,
   }
 #ifdef JS_CODEGEN_ARM
   regs.takeUnchecked(BaselineSecondScratchReg);
-  masm.setSecondScratchReg(BaselineSecondScratchReg);
+  AutoNonDefaultSecondScratchRegister andssr(masm, BaselineSecondScratchReg);
 #endif
   Register scratch1 = regs.takeAny();
   Register scratch2 = regs.takeAny();
