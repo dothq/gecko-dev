@@ -3773,9 +3773,9 @@ var gCSSProperties = {
     domProp: "transformBox",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: ["border-box"],
-    other_values: ["fill-box", "view-box"],
-    invalid_values: ["content-box", "padding-box", "stroke-box", "margin-box"],
+    initial_values: ["view-box"],
+    other_values: ["fill-box", "border-box"],
+    invalid_values: ["padding-box", "margin-box"],
   },
   "transform-origin": {
     domProp: "transformOrigin",
@@ -5783,8 +5783,30 @@ var gCSSProperties = {
     applies_to_placeholder: true,
     applies_to_cue: true,
     initial_values: ["none"],
-    other_values: ["0.3", "0.5", "0.7", "0.0", "0", "3"],
-    invalid_values: ["-0.3", "-1"],
+    other_values: [
+      "0.7",
+      "0.0",
+      "0",
+      "3",
+      "from-font",
+      "cap-height 0.8",
+      "ch-width 0.4",
+      "ic-width 0.4",
+      "ic-height 0.9",
+      "ch-width from-font",
+    ],
+    invalid_values: [
+      "-0.3",
+      "-1",
+      "normal",
+      "none none",
+      "cap-height none",
+      "none from-font",
+      "from-font none",
+      "0.5 from-font",
+      "0.5 cap-height",
+      "cap-height, 0.8",
+    ],
   },
   "font-stretch": {
     domProp: "fontStretch",
@@ -5829,6 +5851,7 @@ var gCSSProperties = {
       "font-synthesis-weight",
       "font-synthesis-style",
       "font-synthesis-small-caps",
+      "font-synthesis-position",
     ],
     applies_to_first_letter: true,
     applies_to_first_line: true,
@@ -5836,24 +5859,37 @@ var gCSSProperties = {
     applies_to_placeholder: true,
     applies_to_cue: true,
     initial_values: [
-      "weight style small-caps",
-      "weight small-caps style",
-      "small-caps weight style",
-      "small-caps style weight",
-      "style weight small-caps",
-      "style small-caps weight",
+      "weight style small-caps position",
+      "weight small-caps style position",
+      "small-caps weight position style",
+      "small-caps style position weight",
+      "style position weight small-caps",
+      "style position small-caps weight",
     ],
     other_values: [
       "none",
       "weight",
       "style",
       "small-caps",
+      "position",
       "weight style",
       "style weight",
       "weight small-caps",
       "small-caps weight",
+      "weight position",
+      "position weight",
       "style small-caps",
       "small-caps style",
+      "style position",
+      "position style",
+      "small-caps position",
+      "position small-caps",
+      "weight style small-caps",
+      "small-caps weight style",
+      "weight style position",
+      "position weight style",
+      "weight small-caps position",
+      "position weight small-caps",
     ],
     invalid_values: [
       "10px",
@@ -5866,6 +5902,8 @@ var gCSSProperties = {
       "style style",
       "small-caps none",
       "small-caps small-caps",
+      "position none",
+      "position position",
     ],
   },
   "font-synthesis-weight": {
@@ -5906,6 +5944,19 @@ var gCSSProperties = {
     initial_values: ["auto"],
     other_values: ["none"],
     invalid_values: ["auto none", "small-caps", "normal", "0"],
+  },
+  "font-synthesis-position": {
+    domProp: "fontSynthesisPosition",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_marker: true,
+    applies_to_placeholder: true,
+    applies_to_cue: true,
+    initial_values: ["auto"],
+    other_values: ["none"],
+    invalid_values: ["auto none", "position", "normal", "0"],
   },
   "font-variant": {
     domProp: "fontVariant",
@@ -11945,6 +11996,15 @@ if (IsCSSPropertyPrefEnabled("layout.css.individual-transform.enabled")) {
   };
 }
 
+if (
+  IsCSSPropertyPrefEnabled("layout.css.transform-box-content-stroke.enabled")
+) {
+  gCSSProperties["transform-box"]["other_values"].push(
+    "content-box",
+    "stroke-box"
+  );
+}
+
 gCSSProperties["touch-action"] = {
   domProp: "touchAction",
   inherited: false,
@@ -13535,6 +13595,10 @@ if (IsCSSPropertyPrefEnabled("layout.css.motion-path.enabled")) {
     );
   }
 
+  if (IsCSSPropertyPrefEnabled("layout.css.motion-path-url.enabled")) {
+    gCSSProperties["offset-path"]["other_values"].push("url(#svgPath)");
+  }
+
   gCSSProperties["offset-distance"] = {
     domProp: "offsetDistance",
     inherited: false,
@@ -13590,9 +13654,9 @@ if (
     domProp: "offsetPosition",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
-    initial_values: ["auto"],
+    initial_values: ["normal"],
     other_values: [
-      "normal",
+      "auto",
       "left bottom",
       "center center",
       "calc(20% + 10px) center",
@@ -13645,18 +13709,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.backdrop-filter.enabled")) {
     initial_values: ["none"],
     other_values: gCSSProperties["filter"].other_values,
     invalid_values: gCSSProperties["filter"].invalid_values,
-  };
-}
-
-if (IsCSSPropertyPrefEnabled("layout.css.zoom-transform-hack.enabled")) {
-  gCSSProperties["zoom"] = {
-    domProp: "zoom",
-    inherited: false,
-    type: CSS_TYPE_LEGACY_SHORTHAND,
-    subproperties: ["transform", "transform-origin"],
-    initial_values: ["normal", "1.0", "0", "0%", "100%"],
-    other_values: ["10%", "2", "2.5"],
-    invalid_values: ["0 0", "foo", "10px"],
   };
 }
 

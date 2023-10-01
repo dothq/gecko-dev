@@ -2650,10 +2650,13 @@ mozilla::ipc::IPCResult ContentChild::RecvRemoteType(
   } else if (aRemoteType == PRIVILEGEDMOZILLA_REMOTE_TYPE) {
     SetProcessName("Privileged Mozilla"_ns, nullptr, &aProfile);
   } else if (remoteTypePrefix == WITH_COOP_COEP_REMOTE_TYPE) {
+    // The profiler can sanitize out the eTLD+1
+    nsDependentCSubstring etld =
+        Substring(aRemoteType, WITH_COOP_COEP_REMOTE_TYPE.Length() + 1);
 #ifdef NIGHTLY_BUILD
-    SetProcessName("WebCOOP+COEP Content"_ns, nullptr, &aProfile);
+    SetProcessName("WebCOOP+COEP Content"_ns, &etld, &aProfile);
 #else
-    SetProcessName("Isolated Web Content"_ns, nullptr,
+    SetProcessName("Isolated Web Content"_ns, &etld,
                    &aProfile);  // to avoid confusing people
 #endif
   } else if (remoteTypePrefix == FISSION_WEB_REMOTE_TYPE) {
@@ -2717,7 +2720,7 @@ mozilla::ipc::IPCResult ContentChild::RecvInitBlobURLs(
 
     BlobURLProtocolHandler::AddDataEntry(
         registration.url(), registration.principal(),
-        registration.agentClusterId(), blobImpl);
+        registration.agentClusterId(), registration.partitionKey(), blobImpl);
     // If we have received an already-revoked blobURL, we have to keep it alive
     // for a while (see BlobURLProtocolHandler) in order to support pending
     // operations such as navigation, download and so on.
@@ -3288,12 +3291,12 @@ ContentChild::RecvNotifyPushSubscriptionModifiedObservers(
 
 mozilla::ipc::IPCResult ContentChild::RecvBlobURLRegistration(
     const nsCString& aURI, const IPCBlob& aBlob, nsIPrincipal* aPrincipal,
-    const Maybe<nsID>& aAgentClusterId) {
+    const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey) {
   RefPtr<BlobImpl> blobImpl = IPCBlobUtils::Deserialize(aBlob);
   MOZ_ASSERT(blobImpl);
 
   BlobURLProtocolHandler::AddDataEntry(aURI, aPrincipal, aAgentClusterId,
-                                       blobImpl);
+                                       aPartitionKey, blobImpl);
   return IPC_OK();
 }
 
@@ -4281,14 +4284,10 @@ mozilla::ipc::IPCResult ContentChild::RecvScriptError(
 }
 
 mozilla::ipc::IPCResult ContentChild::RecvReportFrameTimingData(
-    const mozilla::Maybe<LoadInfoArgs>& loadInfoArgs, const nsString& entryName,
+    const LoadInfoArgs& loadInfoArgs, const nsString& entryName,
     const nsString& initiatorType, UniquePtr<PerformanceTimingData>&& aData) {
   if (!aData) {
     return IPC_FAIL(this, "aData should not be null");
-  }
-
-  if (loadInfoArgs.isNothing()) {
-    return IPC_FAIL(this, "loadInfoArgs should not be null");
   }
 
   nsCOMPtr<nsILoadInfo> loadInfo;

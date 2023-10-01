@@ -1380,7 +1380,7 @@ bool MWasmFloatConstant::congruentTo(const MDefinition* ins) const {
 }
 
 HashNumber MWasmNullConstant::valueHash() const {
-  return ConstantValueHash(MIRType::RefOrNull, 0);
+  return ConstantValueHash(MIRType::WasmAnyRef, 0);
 }
 
 #ifdef JS_JITSPEW
@@ -3414,6 +3414,17 @@ bool MGuardArgumentsObjectFlags::congruentTo(const MDefinition* ins) const {
 AliasSet MGuardArgumentsObjectFlags::getAliasSet() const {
   // The flags are packed with the length in a fixed private slot.
   return AliasSet::Load(AliasSet::FixedSlot);
+}
+
+MDefinition* MIdToStringOrSymbol::foldsTo(TempAllocator& alloc) {
+  if (idVal()->isBox()) {
+    MIRType idType = idVal()->toBox()->input()->type();
+    if (idType == MIRType::String || idType == MIRType::Symbol) {
+      return idVal();
+    }
+  }
+
+  return this;
 }
 
 MDefinition* MReturnFromCtor::foldsTo(TempAllocator& alloc) {
@@ -5880,6 +5891,23 @@ MWasmCallUncatchable* MWasmCallUncatchable::NewBuiltinInstanceMethodCall(
   return call;
 }
 
+MWasmReturnCall* MWasmReturnCall::New(TempAllocator& alloc,
+                                      const wasm::CallSiteDesc& desc,
+                                      const wasm::CalleeDesc& callee,
+                                      const Args& args,
+                                      uint32_t stackArgAreaSizeUnaligned,
+                                      MDefinition* tableIndexOrRef) {
+  MWasmReturnCall* call =
+      new (alloc) MWasmReturnCall(desc, callee, stackArgAreaSizeUnaligned);
+
+  MOZ_ASSERT_IF(callee.isTable() || callee.isFuncRef(), tableIndexOrRef);
+  if (!call->initWithArgs(alloc, call, args, tableIndexOrRef)) {
+    return nullptr;
+  }
+
+  return call;
+}
+
 void MSqrt::trySpecializeFloat32(TempAllocator& alloc) {
   if (EnsureFloatConsumersAndInputOrConvert(this, alloc)) {
     setResultType(MIRType::Float32);
@@ -6660,6 +6688,16 @@ MDefinition* MCheckIsObj::foldsTo(TempAllocator& alloc) {
 
   return this;
 }
+
+AliasSet MCheckIsObj::getAliasSet() const {
+  return AliasSet::Store(AliasSet::ExceptionState);
+}
+
+#ifdef JS_PUNBOX64
+AliasSet MCheckScriptedProxyGetResult::getAliasSet() const {
+  return AliasSet::Store(AliasSet::ExceptionState);
+}
+#endif
 
 static bool IsBoxedObject(MDefinition* def) {
   MOZ_ASSERT(def->type() == MIRType::Value);

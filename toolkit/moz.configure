@@ -732,7 +732,6 @@ def ffmpeg(value, target):
 
 set_config("MOZ_FFMPEG", ffmpeg)
 set_define("MOZ_FFMPEG", ffmpeg)
-imply_option("--enable-fmp4", ffmpeg, "--enable-ffmpeg")
 
 # AV1 Video Codec Support
 # ==============================================================
@@ -776,53 +775,11 @@ def jxl(value, is_nightly):
 set_config("MOZ_JXL", jxl)
 set_define("MOZ_JXL", jxl)
 
-# Built-in fragmented MP4 support.
-# ==============================================================
-option(
-    "--disable-fmp4",
-    env="MOZ_FMP4",
-    help="Disable support for in built Fragmented MP4 parsing",
-)
+set_config("MOZ_SAMPLE_TYPE_FLOAT32", True)
+set_define("MOZ_SAMPLE_TYPE_FLOAT32", True)
 
-
-@depends("--disable-fmp4", target, wmf, applemedia)
-def fmp4(value, target, wmf, applemedia):
-    enabled = bool(value)
-    if value.origin == "default":
-        # target.os == 'Android' includes all B2G versions
-        enabled = wmf or applemedia or target.os == "Android"
-    if enabled:
-        return True
-
-
-set_config("MOZ_FMP4", fmp4)
-set_define("MOZ_FMP4", fmp4)
-
-
-@depends(target)
-def sample_type_is_s16(target):
-    # Use integers over floats for audio on Android regardless of the CPU
-    # architecture, because audio backends for Android don't support floats.
-    # We also use integers on ARM because it's more efficient.
-    if target.os == "Android" or target.cpu == "arm":
-        return True
-
-
-@depends(sample_type_is_s16)
-def sample_type_is_float(t):
-    if not t:
-        return True
-
-
-set_config("MOZ_SAMPLE_TYPE_S16", sample_type_is_s16)
-set_define("MOZ_SAMPLE_TYPE_S16", sample_type_is_s16)
-set_config("MOZ_SAMPLE_TYPE_FLOAT32", sample_type_is_float)
-set_define("MOZ_SAMPLE_TYPE_FLOAT32", sample_type_is_float)
-
-set_define("MOZ_VORBIS", sample_type_is_float)
-set_config("MOZ_VORBIS", sample_type_is_float)
-set_define("MOZ_TREMOR", sample_type_is_s16)
-set_config("MOZ_TREMOR", sample_type_is_s16)
+set_define("MOZ_VORBIS", True)
+set_config("MOZ_VORBIS", True)
 
 option(
     "--disable-real-time-tracing",
@@ -882,12 +839,6 @@ option(
     when=eme_choices,
     help="{Enable|Disable} support for Encrypted Media Extensions",
 )
-
-
-@depends("--enable-eme", fmp4, when=eme_choices)
-def eme(enabled, fmp4):
-    if enabled and enabled.origin != "default" and not fmp4:
-        die("Encrypted Media Extension support requires " "Fragmented MP4 support")
 
 
 @depends("--enable-eme", when=eme_choices)
@@ -1626,7 +1577,7 @@ with only_when("--enable-compile-environment"):
                 # Older versions of readelf don't know about DT_RELR but will
                 # still display the tag number.
                 if 0x23 in tags:
-                    needed = [l for l in dyn if l.split()[1] == "(NEEDED)"]
+                    needed = [l for l in dyn if l.split()[1:2] == ["(NEEDED)"]]
                     is_glibc = any(l.endswith("[libc.so.6]") for l in needed)
                     # The mold linker doesn't add a GLIBC_ABI_DT_RELR version
                     # dependency, which ld.so doesn't like.
@@ -2712,6 +2663,22 @@ def new_notification_store(milestone):
 
 set_config("MOZ_NEW_NOTIFICATION_STORE", True, when=new_notification_store)
 set_define("MOZ_NEW_NOTIFICATION_STORE", True, when=new_notification_store)
+
+
+# Auxiliary files persistence on application close
+# ==============================================================
+
+option(
+    "--enable-disk-remnant-avoidance",
+    help="Prevent persistence of auxiliary files on application close",
+)
+
+
+set_config(
+    "MOZ_AVOID_DISK_REMNANT_ON_CLOSE",
+    True,
+    when="--enable-disk-remnant-avoidance",
+)
 
 
 # Glean SDK Integration Crate

@@ -1680,6 +1680,35 @@ extensions.quarantinedDomains:
     record_in_processes:
       - main
 
+  listhash:
+    bug_numbers:
+      - 1841683
+    description: >
+      SHA1 cryptographic hash of the quarantined domains string pref.
+    kind: string
+    expires: "123"
+    notification_emails:
+      - addons-dev-internal@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+  remotehash:
+    bug_numbers:
+      - 1840615
+    description: >
+      SHA1 cryptographic hash of the quarantined domains string pref as it was
+      set based on the value got synced from the RemoteSettings collection.
+    kind: string
+    expires: "123"
+    notification_emails:
+      - addons-dev-internal@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
 extensions.startupCache:
   write_byteLength:
     bug_numbers:
@@ -5503,7 +5532,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5538,7 +5568,8 @@ browser.search.content:
     bug_numbers:
       - 1779471
     description: >
-      Records counts for in-content searches where the search was most likely started from the urlbar after the search term was shown in the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the urlbar after the search term was shown in the urlbar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     kind: uint
     keyed: true
@@ -5559,7 +5590,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the urlbar in search mode. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the urlbar in search mode. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5580,7 +5612,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the search bar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the search bar. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5601,7 +5634,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the about:home. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the about:home. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5622,7 +5656,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the about:newtab. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the about:newtab. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5643,7 +5678,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the context menu. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the context menu. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5664,7 +5700,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from a webextension. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from a webextension. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5685,7 +5722,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was most likely started from the system, e.g. command line. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was most likely started from the system, e.g. command line. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5702,7 +5740,8 @@ browser.search.content:
     bug_numbers:
       - 1634564
     description: >
-      Records counts for in-content searches where the search was loaded from the tab history. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was loaded from the tab history. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5719,7 +5758,8 @@ browser.search.content:
     bug_numbers:
       - 1634564
     description: >
-      Records counts for in-content searches where the search was loaded by reloading the page. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was loaded by reloading the page. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5740,7 +5780,8 @@ browser.search.content:
       - 1545172
       - 1634564
     description: >
-      Records counts for in-content searches where the search was started from a place that could not be determined or not categorized by the other scalars. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|none]
+      Records counts for in-content searches where the search was started from a place that could not be determined or not categorized by the other scalars. The key format is <provider>:[tagged|tagged-follow-on|organic]:[code|other|none]
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5759,6 +5800,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5794,6 +5836,7 @@ browser.search.withads:
       - 1779471
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the urlbar after the search term was shown in the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     kind: uint
     keyed: true
@@ -5811,6 +5854,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the urlbar in search mode. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5828,6 +5872,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the search bar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5845,6 +5890,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from about:home. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5862,6 +5908,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from about:newtab. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5879,6 +5926,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the context menu. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5896,6 +5944,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from a webextension. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5913,6 +5962,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from the system, e.g. command line. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5930,6 +5980,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was loaded from the tab history. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5947,6 +5998,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was loaded by reloading the page. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5964,6 +6016,7 @@ browser.search.withads:
       - 1664847
     description: >
       Records counts of SERP pages with adverts displayed where the search was started from a place not categorized by the other scalars. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -5982,6 +6035,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6017,6 +6071,7 @@ browser.search.adclicks:
       - 1779471
     description: >
       Records clicks of adverts on SERP pages where the search was started from the urlbar after the search term was shown in the urlbar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     kind: uint
     keyed: true
@@ -6034,6 +6089,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the urlbar in search mode. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6051,6 +6107,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the search bar. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6068,6 +6125,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from about:home. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6085,6 +6143,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from about:newtab. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6102,6 +6161,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the context menu. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6119,6 +6179,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from a webextension. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6136,6 +6197,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from the system, e.g. command line. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6153,6 +6215,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was loaded from the tab history. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6170,6 +6233,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was loaded by reloading the page. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6187,6 +6251,7 @@ browser.search.adclicks:
       - 1664847
     description: >
       Records clicks of adverts on SERP pages where the search was started from a place not categorized by the other scalars. The key format is ‘<provider>:<tagged|organic>’
+      See https://firefox-source-docs.mozilla.org/browser/search/telemetry.html#browser-search-content
     expires: never
     keyed: true
     kind: uint
@@ -6230,10 +6295,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of secure (i.e., using https) OpenSearch search
       engines a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6248,10 +6314,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of insecure (i.e., using http) OpenSearch search
       engines a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6266,10 +6333,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of OpenSearch search engines with secure updates
       enabled (i.e., using https) a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -6284,10 +6352,11 @@ browser.searchinit:
     bug_numbers:
       - 1789438
       - 1811158
+      - 1846899
     description: >
       Records the number of OpenSearch search engines with insecure updates
       enabled (i.e., using http) a given user has installed
-    expires: "119"
+    expires: "126"
     keyed: false
     kind: uint
     notification_emails:
@@ -7047,6 +7116,22 @@ policies:
     kind: boolean
     notification_emails:
       - mkaply@mozilla.com
+    release_channel_collection: opt-out
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+
+urlbar.trending:
+  block:
+    bug_numbers:
+      - 1848048
+    description: >-
+      User has blocked seeing trending results.
+    expires: never
+    kind: uint
+    notification_emails:
+      - fx-search-telemetry@mozilla.com
     release_channel_collection: opt-out
     products:
       - 'firefox'
@@ -8969,6 +9054,64 @@ contextual.services.quicksuggest:
       - 'firefox'
     record_in_processes:
       - main
+
+shopping:
+  nimbus_disabled:
+    bug_numbers:
+      - 1847231
+    description: >
+      Indicates if Nimbus has disabled the use of the shopping component.
+      This scalar is mirroring the Glean metric named
+      shopping.settings.nimbus_disabled_shopping, which is defined in
+      toolkit/components/shopping/metrics.yaml.
+    expires: "122"
+    kind: boolean
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+      - content
+  component_opted_out:
+    bug_numbers:
+      - 1847231
+    description: >
+      Indicates if the user has opted out of using the shopping component.
+      Set during shopping component init and updated when changed in browser.
+      This scalar is mirroring the Glean metric named
+      shopping.settings.component_opted_out, which is defined in
+      toolkit/components/shopping/metrics.yaml.
+    expires: "122"
+    kind: boolean
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+      - content
+  has_onboarded:
+    bug_numbers:
+      - 1847231
+    description: >
+      Indicates if the user has completed the Shopping product Onboarding
+      experience. Set during shopping component init and updated when changed
+      in browser. This scalar is mirroring the Glean metric named
+      shopping.settings.has_onboarded, which is defined in
+      toolkit/components/shopping/metrics.yaml.
+    expires: "122"
+    kind: boolean
+    notification_emails:
+      - betling@mozilla.com
+      - fx-desktop-shopping-eng@mozilla.com
+    products:
+      - 'firefox'
+    record_in_processes:
+      - main
+      - content
 
 power:
   cpu_time_bogus_values:

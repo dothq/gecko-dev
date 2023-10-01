@@ -254,11 +254,10 @@ export class TranslationsParent extends JSWindowActorParent {
   static #translationsWasmRemoteClient = null;
 
   /**
-   * If "browser.translations.autoTranslate" is set to "true" then the page will
-   * auto-translate. A user can restore the page to the original UI. This flag indicates
-   * that an auto-translate should be skipped.
+   * The page may auto-translate due to user settings. On a page restore, always
+   * skip the page restore logic.
    */
-  static #isPageRestoredForAutoTranslate = false;
+  static #isPageRestored = false;
 
   /**
    * Allows the actor's behavior to be changed when the translations engine is mocked via
@@ -420,6 +419,14 @@ export class TranslationsParent extends JSWindowActorParent {
     if (this.shouldNeverTranslateSite()) {
       lazy.console.log(
         "maybeOfferTranslations - Should never translate site.",
+        documentURI.spec
+      );
+      return;
+    }
+
+    if (detectedLanguages.docLangTag === detectedLanguages.userLangTag) {
+      lazy.console.error(
+        "maybeOfferTranslations - The document and user lang tag are the same, not offering a translation.",
         documentURI.spec
       );
       return;
@@ -590,6 +597,14 @@ export class TranslationsParent extends JSWindowActorParent {
         // The user hasn't customized their accept languages, this means that English
         // is always provided as a fallback language, even if it is not available.
         TranslationsParent.#webContentLanguages.delete("en");
+      }
+
+      if (TranslationsParent.#webContentLanguages.size === 0) {
+        // The user has removed all of their web content languages, default to the
+        // app locale.
+        TranslationsParent.#webContentLanguages.add(
+          new Intl.Locale(Services.locale.appLocaleAsBCP47).language
+        );
       }
     }
 
@@ -797,24 +812,24 @@ export class TranslationsParent extends JSWindowActorParent {
    * Returns true if translations should auto-translate from the given
    * language, otherwise returns false.
    *
-   * @param {string} langTag - A BCP-47 language tag
+   * @param {LangTags} langTags
    * @returns {boolean}
    */
-  static #maybeAutoTranslate(langTag) {
-    if (
-      // The user has not marked this language as always translate.
-      !TranslationsParent.shouldAlwaysTranslateLanguage(langTag) &&
-      // The pref to always auto-translate is off.
-      !lazy.autoTranslatePagePref
-    ) {
+  static #maybeAutoTranslate(langTags) {
+    if (TranslationsParent.#isPageRestored) {
+      // The user clicked the restore button. Respect it for one page load.
+      TranslationsParent.#isPageRestored = false;
+
+      // Skip this auto-translation.
       return false;
     }
 
-    if (TranslationsParent.#isPageRestoredForAutoTranslate) {
-      // The user clicked the restore button. Respect it for one page load.
-      TranslationsParent.#isPageRestoredForAutoTranslate = false;
-
-      // Skip this auto-translation.
+    if (
+      // The user has not marked this language as always translate.
+      !TranslationsParent.shouldAlwaysTranslateLanguage(langTags) &&
+      // The pref to always auto-translate is off.
+      !lazy.autoTranslatePagePref
+    ) {
       return false;
     }
 
@@ -1169,8 +1184,19 @@ export class TranslationsParent extends JSWindowActorParent {
       return [];
     }
     const retrievedRecords = await remoteSettingsClient.get({
-      // Pull the records from the network.
+      // Pull the records from the network if empty.
       syncIfEmpty: true,
+      // Do not load the JSON dump if it is newer.
+      //
+      // The JSON dump comes from the Prod RemoteSettings channel
+      // so we shouldn't ever have an issue with the Prod server
+      // being older than the JSON dump itself (this is good).
+      //
+      // However, setting this to true will prevent us from
+      // testing RemoteSettings on the Dev and Stage
+      // environments if they happen to be older than the
+      // most recent JSON dump from Prod.
+      loadDumpIfNewer: false,
       // Don't verify the signature if the client is mocked.
       verifySignature: VERIFY_SIGNATURES_FROM_FS,
       // Apply any filters for retrieving the records.
@@ -1843,6 +1869,20 @@ export class TranslationsParent extends JSWindowActorParent {
    *   an auto-translate.
    */
   translate(fromLanguage, toLanguage, reportAsAutoTranslate) {
+    if (fromLanguage === toLanguage) {
+      lazy.console.error(
+        "A translation was requested where the from and to language match.",
+        { fromLanguage, toLanguage, reportAsAutoTranslate }
+      );
+      return;
+    }
+    if (!fromLanguage || !toLanguage) {
+      lazy.console.error(
+        "A translation was requested but the fromLanguage or toLanguage was not set.",
+        { fromLanguage, toLanguage, reportAsAutoTranslate }
+      );
+      return;
+    }
     if (this.languageState.requestedTranslationPair) {
       // This page has already been translated, restore it and translate it
       // again once the actor has been recreated.
@@ -1875,18 +1915,11 @@ export class TranslationsParent extends JSWindowActorParent {
 
   /**
    * Restore the page to the original language by doing a hard reload.
-   *
-   * @param {string} fromLanguage A BCP-47 language tag
    */
-  restorePage(fromLanguage) {
+  restorePage() {
     TranslationsParent.telemetry().onRestorePage();
-    if (
-      lazy.autoTranslatePagePref ||
-      TranslationsParent.shouldAlwaysTranslateLanguage(fromLanguage)
-    ) {
-      // Skip auto-translate for one page load.
-      TranslationsParent.#isPageRestoredForAutoTranslate = true;
-    }
+    // Skip auto-translate for one page load.
+    TranslationsParent.#isPageRestored = true;
     this.languageState.requestedTranslationPair = null;
     TranslationsParent.#previousDetectedLanguages =
       this.languageState.detectedLanguages;
@@ -1964,7 +1997,7 @@ export class TranslationsParent extends JSWindowActorParent {
       langTags.docLangTag &&
       langTags.userLangTag &&
       langTags.isDocLangTagSupported &&
-      TranslationsParent.#maybeAutoTranslate(langTags.docLangTag) &&
+      TranslationsParent.#maybeAutoTranslate(langTags) &&
       !TranslationsParent.shouldNeverTranslateLanguage(langTags.docLangTag) &&
       !this.shouldNeverTranslateSite()
     ) {
@@ -2147,14 +2180,30 @@ export class TranslationsParent extends JSWindowActorParent {
   }
 
   /**
+   * The pref for if we can always offer a translation when it's available.
+   */
+  static shouldAlwaysOfferTranslations() {
+    return lazy.automaticallyPopupPref;
+  }
+
+  /**
    * Returns true if the given language tag is present in the always-translate
    * languages preference, otherwise false.
    *
-   * @param {string} langTag - A BCP-47 language tag
+   * @param {LangTags} langTags
    * @returns {boolean}
    */
-  static shouldAlwaysTranslateLanguage(langTag) {
-    return lazy.alwaysTranslateLangTags.has(langTag);
+  static shouldAlwaysTranslateLanguage(langTags) {
+    const { docLangTag, userLangTag } = langTags;
+    if (docLangTag === userLangTag || !userLangTag) {
+      // Do not auto-translate when the docLangTag matches the userLangTag, or when
+      // the userLangTag is not set. The "always translate" is exposed via about:confg.
+      // In case of users putting in non-sensical things here, we don't want to break
+      // the experience. This behavior can lead to a "language degradation machine"
+      // where we go from a source language -> pivot language -> source language.
+      return false;
+    }
+    return lazy.alwaysTranslateLangTags.has(docLangTag);
   }
 
   /**
@@ -2220,22 +2269,48 @@ export class TranslationsParent extends JSWindowActorParent {
    * Toggles the always-translate language preference by adding the language
    * to the pref list if it is not present, or removing it if it is present.
    *
-   * @param {string} langTag - A BCP-47 language tag
+   * @param {LangTags} langTags
    * @returns {boolean}
    *  True if always-translate was enabled for this language.
    *  False if always-translate was disabled for this language.
    */
-  static toggleAlwaysTranslateLanguagePref(langTag) {
-    if (TranslationsParent.shouldAlwaysTranslateLanguage(langTag)) {
+  static toggleAlwaysTranslateLanguagePref(langTags) {
+    const { docLangTag, appLangTag } = langTags;
+
+    if (appLangTag === docLangTag) {
+      // In case somehow the user attempts to toggle this when the app and doc language
+      // are the same, just remove the lang tag.
+      this.#removeLangTagFromPref(appLangTag, ALWAYS_TRANSLATE_LANGS_PREF);
+      return false;
+    }
+
+    if (TranslationsParent.shouldAlwaysTranslateLanguage(langTags)) {
       // The pref was toggled off for this langTag
-      this.#removeLangTagFromPref(langTag, ALWAYS_TRANSLATE_LANGS_PREF);
+      this.#removeLangTagFromPref(docLangTag, ALWAYS_TRANSLATE_LANGS_PREF);
       return false;
     }
 
     // The pref was toggled on for this langTag
-    this.#addLangTagToPref(langTag, ALWAYS_TRANSLATE_LANGS_PREF);
-    this.#removeLangTagFromPref(langTag, NEVER_TRANSLATE_LANGS_PREF);
+    this.#addLangTagToPref(docLangTag, ALWAYS_TRANSLATE_LANGS_PREF);
+    this.#removeLangTagFromPref(docLangTag, NEVER_TRANSLATE_LANGS_PREF);
     return true;
+  }
+
+  /**
+   * Toggle the automatically popup pref, which will either
+   * enable or disable translations being offered to the user.
+   *
+   * @returns {boolean}
+   *  True if offering translations was enabled by this call.
+   *  False if offering translations was disabled by this call.
+   */
+  static toggleAutomaticallyPopupPref() {
+    const prefValueBeforeToggle = lazy.automaticallyPopupPref;
+    Services.prefs.setBoolPref(
+      "browser.translations.automaticallyPopup",
+      !prefValueBeforeToggle
+    );
+    return !prefValueBeforeToggle;
   }
 
   /**

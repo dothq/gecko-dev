@@ -63,7 +63,7 @@
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/Unused.h"
 #include "AccessCheck.h"
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowInner.h"
 #include "nsAboutProtocolUtils.h"
 
 #include "GeckoProfiler.h"
@@ -781,12 +781,8 @@ static mozilla::Atomic<bool> sShadowRealmsEnabled(false);
 #ifdef NIGHTLY_BUILD
 static mozilla::Atomic<bool> sArrayGroupingEnabled(false);
 static mozilla::Atomic<bool> sWellFormedUnicodeStringsEnabled(false);
+static mozilla::Atomic<bool> sNewSetMethodsEnabled(false);
 static mozilla::Atomic<bool> sArrayBufferTransferEnabled(false);
-#endif
-static mozilla::Atomic<bool> sChangeArrayByCopyEnabled(false);
-static mozilla::Atomic<bool> sArrayFromAsyncEnabled(true);
-#ifdef ENABLE_NEW_SET_METHODS
-static mozilla::Atomic<bool> sEnableNewSetMethods(false);
 #endif
 
 static JS::WeakRefSpecifier GetWeakRefsEnabled() {
@@ -814,12 +810,8 @@ void xpc::SetPrefableRealmOptions(JS::RealmOptions& options) {
 #ifdef NIGHTLY_BUILD
       .setArrayGroupingEnabled(sArrayGroupingEnabled)
       .setWellFormedUnicodeStringsEnabled(sWellFormedUnicodeStringsEnabled)
+      .setNewSetMethodsEnabled(sNewSetMethodsEnabled)
       .setArrayBufferTransferEnabled(sArrayBufferTransferEnabled)
-#endif
-      .setChangeArrayByCopyEnabled(sChangeArrayByCopyEnabled)
-      .setArrayFromAsyncEnabled(sArrayFromAsyncEnabled)
-#ifdef ENABLE_NEW_SET_METHODS
-      .setNewSetMethodsEnabled(sEnableNewSetMethods)
 #endif
       ;
 }
@@ -848,7 +840,7 @@ void xpc::SetPrefableContextOptions(JS::ContextOptions& options) {
       .setWasmBaseline(
           Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_baselinejit"))
 #define WASM_FEATURE(NAME, LOWER_NAME, STAGE, COMPILE_PRED, COMPILER_PRED, \
-                     FLAG_PRED, FLAG_FORCE_ON, SHELL, PREF)                \
+                     FLAG_PRED, FLAG_FORCE_ON, FLAG_FUZZ_ON, SHELL, PREF)  \
   .setWasm##NAME(Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_" PREF))
           JS_FOR_WASM_FEATURES(WASM_FEATURE)
 #undef WASM_FEATURE
@@ -1023,16 +1015,10 @@ static void ReloadPrefsCallback(const char* pref, void* aXpccx) {
       Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.array_grouping");
   sWellFormedUnicodeStringsEnabled = Preferences::GetBool(
       JS_OPTIONS_DOT_STR "experimental.well_formed_unicode_strings");
+  sNewSetMethodsEnabled =
+      Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.new_set_methods");
   sArrayBufferTransferEnabled = Preferences::GetBool(
       JS_OPTIONS_DOT_STR "experimental.arraybuffer_transfer");
-#endif
-  sChangeArrayByCopyEnabled = Preferences::GetBool(
-      JS_OPTIONS_DOT_STR "experimental.enable_change_array_by_copy");
-  sArrayFromAsyncEnabled = Preferences::GetBool(
-      JS_OPTIONS_DOT_STR "experimental.enable_array_from_async");
-#ifdef ENABLE_NEW_SET_METHODS
-  sEnableNewSetMethods =
-      Preferences::GetBool(JS_OPTIONS_DOT_STR "experimental.new_set_methods");
 #endif
 
 #ifdef JS_GC_ZEAL

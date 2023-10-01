@@ -31,6 +31,7 @@ use fxhash::FxHashMap;
 use crate::media_queries::Device;
 use crate::parser::ParserContext;
 use crate::selector_parser::PseudoElement;
+use crate::stylist::Stylist;
 #[cfg(feature = "servo")] use servo_config::prefs;
 use style_traits::{CssWriter, KeywordsCollectFn, ParseError, ParsingMode};
 use style_traits::{SpecifiedValueInfo, StyleParseErrorKind, ToCss};
@@ -1188,10 +1189,17 @@ bitflags! {
         /* The following flags are currently not used in Rust code, they
          * only need to be listed in corresponding properties so that
          * they can be checked in the C++ side via ServoCSSPropList.h. */
+
         /// This property can be animated on the compositor.
         const CAN_ANIMATE_ON_COMPOSITOR = 0;
         /// This shorthand property is accessible from getComputedStyle.
         const SHORTHAND_IN_GETCS = 0;
+        /// See data.py's documentation about the affects_flags.
+        const AFFECTS_LAYOUT = 0;
+        #[allow(missing_docs)]
+        const AFFECTS_OVERFLOW = 0;
+        #[allow(missing_docs)]
+        const AFFECTS_PAINT = 0;
     }
 }
 
@@ -1917,13 +1925,13 @@ impl CountedUnknownProperty {
     /// Parse the counted unknown property, for testing purposes only.
     pub fn parse_for_testing(property_name: &str) -> Option<Self> {
         ascii_case_insensitive_phf_map! {
-            unknown_id -> CountedUnknownProperty = {
+            unknown_ids -> CountedUnknownProperty = {
                 % for property in data.counted_unknown_properties:
                 "${property.name}" => CountedUnknownProperty::${property.camel_case},
                 % endfor
             }
         }
-        unknown_id(property_name).cloned()
+        unknown_ids::get(property_name).cloned()
     }
 
     /// Returns the underlying index, used for use counter.
@@ -1970,7 +1978,7 @@ impl PropertyId {
             CountedUnknown(CountedUnknownProperty),
         }
         ascii_case_insensitive_phf_map! {
-            static_id -> StaticId = {
+            static_ids -> StaticId = {
                 % for (kind, properties) in [("Longhand", data.longhands), ("Shorthand", data.shorthands)]:
                 % for property in properties:
                 "${property.name}" => StaticId::${kind}(${kind}Id::${property.camel_case}),
@@ -1992,22 +2000,10 @@ impl PropertyId {
             }
         }
 
-        if let Some(id) = static_id(property_name) {
+        if let Some(id) = static_ids::get(property_name) {
             return Ok(match *id {
                 StaticId::Longhand(id) => PropertyId::Longhand(id),
-                StaticId::Shorthand(id) => {
-                    #[cfg(feature = "gecko")]
-                    {
-                        // We want to count `zoom` even if disabled.
-                        if matches!(id, ShorthandId::Zoom) {
-                            if let Some(counters) = use_counters {
-                                counters.non_custom_properties.record(id.into());
-                            }
-                        }
-                    }
-
-                    PropertyId::Shorthand(id)
-                },
+                StaticId::Shorthand(id) => PropertyId::Shorthand(id),
                 StaticId::LonghandAlias(id, alias) => PropertyId::LonghandAlias(id, alias),
                 StaticId::ShorthandAlias(id, alias) => PropertyId::ShorthandAlias(id, alias),
                 StaticId::CountedUnknown(unknown_prop) => {
@@ -2400,22 +2396,6 @@ impl PropertyDeclaration {
             PropertyDeclaration::Custom(..) =>
                 unreachable!("Serializing a custom property as part of shorthand?"),
             _ => true,
-        }
-    }
-
-    /// Return whether the value is stored as it was in the CSS source,
-    /// preserving whitespace (as opposed to being parsed into a more abstract
-    /// data structure).
-    ///
-    /// This is the case of custom properties and values that contain
-    /// unsubstituted variables.
-    pub fn value_is_unparsed(&self) -> bool {
-        match *self {
-            PropertyDeclaration::WithVariables(..) => true,
-            PropertyDeclaration::Custom(ref declaration) => {
-                matches!(declaration.value, CustomDeclarationValue::Value(..))
-            }
-            _ => false,
         }
     }
 
@@ -2996,6 +2976,7 @@ pub struct ComputedValuesInner {
         ${style_struct.ident}: Arc<style_structs::${style_struct.name}>,
     % endfor
     custom_properties: Option<Arc<crate::custom_properties::CustomPropertiesMap>>,
+
     /// The writing mode of this computed values struct.
     pub writing_mode: WritingMode,
 
@@ -3615,6 +3596,10 @@ pub struct StyleBuilder<'a> {
     /// This provides access to viewport unit ratios, etc.
     pub device: &'a Device,
 
+    /// The stylist we're using to compute style except for media queries.
+    /// device is used in media queries instead.
+    pub stylist: Option<<&'a Stylist>,
+
     /// The style we're inheriting from.
     ///
     /// This is effectively
@@ -3662,6 +3647,7 @@ impl<'a> StyleBuilder<'a> {
     /// Trivially construct a `StyleBuilder`.
     pub(super) fn new(
         device: &'a Device,
+        stylist: Option<<&'a Stylist>,
         parent_style: Option<<&'a ComputedValues>,
         pseudo: Option<<&'a PseudoElement>,
         rules: Option<StrongRuleNode>,
@@ -3675,6 +3661,7 @@ impl<'a> StyleBuilder<'a> {
 
         StyleBuilder {
             device,
+            stylist,
             inherited_style,
             reset_style,
             pseudo,
@@ -3703,6 +3690,7 @@ impl<'a> StyleBuilder<'a> {
     /// used for animations.
     pub fn for_animation(
         device: &'a Device,
+        stylist: Option<<&'a Stylist>,
         style_to_derive_from: &'a ComputedValues,
         parent_style: Option<<&'a ComputedValues>,
     ) -> Self {
@@ -3710,6 +3698,7 @@ impl<'a> StyleBuilder<'a> {
         let inherited_style = parent_style.unwrap_or(reset_style);
         StyleBuilder {
             device,
+            stylist,
             inherited_style,
             reset_style,
             pseudo: None,
@@ -3817,6 +3806,7 @@ impl<'a> StyleBuilder<'a> {
     /// computed values that need to be provided as well.
     pub fn for_inheritance(
         device: &'a Device,
+        stylist: Option<<&'a Stylist>,
         parent: Option<<&'a ComputedValues>,
         pseudo: Option<<&'a PseudoElement>,
     ) -> Self {
@@ -3829,6 +3819,7 @@ impl<'a> StyleBuilder<'a> {
             parent.visited_style().map(|style| {
                 Self::for_inheritance(
                     device,
+                    stylist,
                     Some(style),
                     pseudo,
                 ).build()
@@ -3836,6 +3827,7 @@ impl<'a> StyleBuilder<'a> {
         });
         let mut ret = Self::new(
             device,
+            stylist,
             parent,
             pseudo,
             /* rules = */ None,

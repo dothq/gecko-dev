@@ -79,6 +79,7 @@
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/ErrorResult.h"
 #include "nsHTMLDocument.h"
+#include "nsGlobalWindowInner.h"
 #include "mozilla/dom/HTMLBodyElement.h"
 #include "imgIContainer.h"
 #include "nsComputedDOMStyle.h"
@@ -811,8 +812,7 @@ void nsGenericHTMLElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
       }
     } else if ((aName == nsGkAtoms::inputmode &&
                 StaticPrefs::dom_forms_inputmode()) ||
-               (aName == nsGkAtoms::enterkeyhint &&
-                StaticPrefs::dom_forms_enterkeyhint())) {
+               aName == nsGkAtoms::enterkeyhint) {
       nsPIDOMWindowOuter* window = OwnerDoc()->GetWindow();
       if (window && window->GetFocusedElement() == this) {
         if (IMEContentObserver* observer =
@@ -3447,10 +3447,13 @@ void nsGenericHTMLElement::FocusPreviousElementAfterHidingPopover() {
     return;
   }
 
-  // Run the focusing steps for previouslyFocusedElement
-  FocusOptions options;
-  options.mPreventScroll = true;
-  control->Focus(options, CallerType::NonSystem, IgnoreErrors());
+  // Run the focusing steps for previouslyFocusedElement if focus is within the
+  // popover hierarchy.
+  if (IsShadowIncludingInclusiveDescendantOf(control)) {
+    FocusOptions options;
+    options.mPreventScroll = true;
+    control->Focus(options, CallerType::NonSystem, IgnoreErrors());
+  }
 }
 
 // https://html.spec.whatwg.org/multipage/popover.html#dom-togglepopover

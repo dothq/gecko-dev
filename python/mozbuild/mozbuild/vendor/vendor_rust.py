@@ -96,8 +96,6 @@ TOLERATED_DUPES = {
     # and hasn't been updated in 1.5 years (an hypothetical update is
     # expected to remove the dependency on time altogether).
     "time": 2,
-    # Transition is underway from syn 1.x to 2.x. (bug 1835053)
-    "syn": 2,
 }
 
 
@@ -948,4 +946,15 @@ a pull request upstream to ignore those files when publishing.""".format(
                     size=cumulative_added_size
                 ),
             )
+        if "MOZ_AUTOMATION" in os.environ:
+            changed = self.repository.get_changed_files(mode="staged")
+            for file in changed:
+                self.log(
+                    logging.ERROR,
+                    "vendor-change",
+                    {"file": file},
+                    "File was modified by vendor: {file}",
+                )
+            if changed:
+                return False
         return True

@@ -116,7 +116,7 @@
 #include "mozilla/dom/SVGImageElement.h"
 #include "mozilla/dom/TextMetrics.h"
 #include "mozilla/FloatingPoint.h"
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowInner.h"
 #include "nsDeviceContext.h"
 #include "nsFontMetrics.h"
 #include "nsLayoutUtils.h"
@@ -129,6 +129,7 @@
 #include "mozilla/layers/WebRenderUserData.h"
 #include "mozilla/layers/WebRenderCanvasRenderer.h"
 #include "WindowRenderer.h"
+#include "GeckoBindings.h"
 
 #undef free  // apparently defined by some windows header, clashing with a
              // free() method in SkTypes.h
@@ -1424,7 +1425,7 @@ bool CanvasRenderingContext2D::BorrowTarget(const IntRect& aPersistedRect,
   // acceleration, then we skip trying to use this provider so that it will be
   // recreated by EnsureTarget later.
   if (!mBufferProvider || mBufferProvider->RequiresRefresh() ||
-      (mBufferProvider->IsAccelerated() && mWillReadFrequently)) {
+      (mBufferProvider->IsAccelerated() && GetEffectiveWillReadFrequently())) {
     return false;
   }
   mTarget = mBufferProvider->BorrowDrawTarget(aPersistedRect);
@@ -1646,7 +1647,7 @@ bool CanvasRenderingContext2D::TryAcceleratedTarget(
   }
   // Don't try creating an accelerate DrawTarget if either acceleration failed
   // previously or if the application expects acceleration to be slow.
-  if (!mAllowAcceleration || mWillReadFrequently) {
+  if (!mAllowAcceleration || GetEffectiveWillReadFrequently()) {
     return false;
   }
   aOutDT = DrawTargetWebgl::Create(GetSize(), GetSurfaceFormat());
@@ -1682,8 +1683,9 @@ bool CanvasRenderingContext2D::TrySharedTarget(
     return false;
   }
 
-  aOutProvider =
-      renderer->CreatePersistentBufferProvider(GetSize(), GetSurfaceFormat());
+  aOutProvider = renderer->CreatePersistentBufferProvider(
+      GetSize(), GetSurfaceFormat(),
+      !mAllowAcceleration || GetEffectiveWillReadFrequently());
 
   if (!aOutProvider) {
     return false;
@@ -2738,6 +2740,32 @@ void CanvasRenderingContext2D::SetWordSpacing(const nsACString& aWordSpacing) {
                CurrentState().wordSpacingStr);
 }
 
+static GeckoFontMetrics GetFontMetricsFromCanvas(void* aContext) {
+  auto* ctx = static_cast<CanvasRenderingContext2D*>(aContext);
+  auto* fontGroup = ctx->GetCurrentFontStyle();
+  if (!fontGroup) {
+    // Shouldn't happen, but just in case... return plausible values for a
+    // 10px font (canvas default size).
+    return {Length::FromPixels(5.0),
+            Length::FromPixels(5.0),
+            Length::FromPixels(8.0),
+            Length::FromPixels(10.0),
+            Length::FromPixels(8.0),
+            Length::FromPixels(10.0),
+            0.0f,
+            0.0f};
+  }
+  auto metrics = fontGroup->GetMetricsForCSSUnits(nsFontMetrics::eHorizontal);
+  return {Length::FromPixels(metrics.xHeight),
+          Length::FromPixels(metrics.zeroWidth),
+          Length::FromPixels(metrics.capHeight),
+          Length::FromPixels(metrics.ideographicWidth),
+          Length::FromPixels(metrics.maxAscent),
+          Length::FromPixels(fontGroup->GetStyle()->size),
+          0.0f,
+          0.0f};
+}
+
 void CanvasRenderingContext2D::ParseSpacing(const nsACString& aSpacing,
                                             float* aValue,
                                             nsACString& aNormalized) {
@@ -2751,7 +2779,8 @@ void CanvasRenderingContext2D::ParseSpacing(const nsACString& aSpacing,
     return;
   }
   float value;
-  if (!Servo_ParseAbsoluteLength(&normalized, &value)) {
+  if (!Servo_ParseLengthWithoutStyleContext(&normalized, &value,
+                                            GetFontMetricsFromCanvas, this)) {
     if (!GetPresShell()) {
       return;
     }
@@ -3379,7 +3408,7 @@ void CanvasRenderingContext2D::Arc(double aX, double aY, double aR,
     return aError.ThrowIndexSizeError("Negative radius");
   }
   if (aStartAngle == aEndAngle) {
-    mPathPruned = true;
+    LineTo(aX + aR * cos(aStartAngle), aY + aR * sin(aStartAngle));
     return;
   }
 
@@ -3605,10 +3634,6 @@ void CanvasRenderingContext2D::Ellipse(double aX, double aY, double aRadiusX,
                                        ErrorResult& aError) {
   if (aRadiusX < 0.0 || aRadiusY < 0.0) {
     return aError.ThrowIndexSizeError("Negative radius");
-  }
-  if (aStartAngle == aEndAngle) {
-    mPathPruned = true;
-    return;
   }
 
   EnsureWritablePath();
@@ -4722,8 +4747,8 @@ TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
         fontMetrics.maxAscent - baselineAnchor,   // fontBBAscent
         fontMetrics.maxDescent + baselineAnchor,  // fontBBDescent
         actualBoundingBoxAscent, actualBoundingBoxDescent,
-        fontMetrics.emAscent - baselineAnchor,    // emHeightAscent
-        -fontMetrics.emDescent - baselineAnchor,  // emHeightDescent
+        fontMetrics.emAscent - baselineAnchor,   // emHeightAscent
+        fontMetrics.emDescent + baselineAnchor,  // emHeightDescent
         baselines.mHanging - baselineAnchor,
         baselines.mAlphabetic - baselineAnchor,
         baselines.mIdeographic - baselineAnchor);
@@ -5059,6 +5084,7 @@ static void ClipImageDimension(double& aSourceCoord, double& aSourceSize,
     aDestSize = destEnd - aDestCoord;
     aSourceSize += relativeCoord;
     aSourceCoord = aClipOriginCoord;
+    relativeCoord = 0.0;
   }
   double delta = aClipSize - (relativeCoord + aSourceSize);
   if (delta < 0.0) {
@@ -6311,6 +6337,11 @@ void CanvasRenderingContext2D::SetWriteOnly() {
   }
 }
 
+bool CanvasRenderingContext2D::GetEffectiveWillReadFrequently() const {
+  return StaticPrefs::gfx_canvas_willreadfrequently_enabled_AtStartup() &&
+         mWillReadFrequently;
+}
+
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(CanvasPath, mParent)
 
 CanvasPath::CanvasPath(nsISupports* aParent) : mParent(aParent) {
@@ -6533,7 +6564,7 @@ void CanvasPath::Arc(double aX, double aY, double aRadius, double aStartAngle,
     return aError.ThrowIndexSizeError("Negative radius");
   }
   if (aStartAngle == aEndAngle) {
-    mPruned = true;
+    LineTo(aX + aRadius * cos(aStartAngle), aY + aRadius * sin(aStartAngle));
     return;
   }
 
@@ -6551,10 +6582,6 @@ void CanvasPath::Ellipse(double x, double y, double radiusX, double radiusY,
                          bool anticlockwise, ErrorResult& aError) {
   if (radiusX < 0.0 || radiusY < 0.0) {
     return aError.ThrowIndexSizeError("Negative radius");
-  }
-  if (startAngle == endAngle) {
-    mPruned = true;
-    return;
   }
 
   EnsurePathBuilder();

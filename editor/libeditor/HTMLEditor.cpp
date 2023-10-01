@@ -1341,8 +1341,7 @@ nsresult HTMLEditor::HandleKeyPressEvent(WidgetKeyboardEvent* aKeyboardEvent) {
       // insert a horizontal tabulation.
       if (IsPlaintextMailComposer()) {
         if (aKeyboardEvent->IsShift() || aKeyboardEvent->IsControl() ||
-            aKeyboardEvent->IsAlt() || aKeyboardEvent->IsMeta() ||
-            aKeyboardEvent->IsOS()) {
+            aKeyboardEvent->IsAlt() || aKeyboardEvent->IsMeta()) {
           return NS_OK;
         }
 
@@ -1357,7 +1356,7 @@ nsresult HTMLEditor::HandleKeyPressEvent(WidgetKeyboardEvent* aKeyboardEvent) {
       // Otherwise, e.g., we're an embedding editor in chrome, we can handle
       // "Tab" key as an input.
       if (aKeyboardEvent->IsControl() || aKeyboardEvent->IsAlt() ||
-          aKeyboardEvent->IsMeta() || aKeyboardEvent->IsOS()) {
+          aKeyboardEvent->IsMeta()) {
         return NS_OK;
       }
 
@@ -1449,7 +1448,21 @@ nsresult HTMLEditor::HandleKeyPressEvent(WidgetKeyboardEvent* aKeyboardEvent) {
     return NS_OK;
   }
   aKeyboardEvent->PreventDefault();
-  nsAutoString str(aKeyboardEvent->mCharCode);
+  // If we dispatch 2 keypress events for a surrogate pair and we set only
+  // first `.key` value to the surrogate pair, the preceding one has it and the
+  // other has empty string.  In this case, we should handle only the first one
+  // with the key value.
+  if (!StaticPrefs::dom_event_keypress_dispatch_once_per_surrogate_pair() &&
+      !StaticPrefs::dom_event_keypress_key_allow_lone_surrogate() &&
+      aKeyboardEvent->mKeyValue.IsEmpty() &&
+      IS_SURROGATE(aKeyboardEvent->mCharCode)) {
+    return NS_OK;
+  }
+  nsAutoString str(aKeyboardEvent->mKeyValue);
+  if (str.IsEmpty()) {
+    str.Assign(static_cast<char16_t>(aKeyboardEvent->mCharCode));
+  }
+  // FYI: DIfferent from TextEditor, we can treat \r (CR) as-is in HTMLEditor.
   nsresult rv = OnInputText(str);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "EditorBase::OnInputText() failed");
   return rv;
@@ -4545,6 +4558,24 @@ MOZ_CAN_RUN_SCRIPT_BOUNDARY void HTMLEditor::ContentRemoved(
         NS_SUCCEEDED(rv),
         "HTMLEditor::OnDocumentModified() failed, but ignored");
   }
+}
+
+MOZ_CAN_RUN_SCRIPT_BOUNDARY void HTMLEditor::CharacterDataChanged(
+    nsIContent* aContent, const CharacterDataChangeInfo& aInfo) {
+  if (!mInlineSpellChecker || !aContent->IsEditable() ||
+      !IsInObservedSubtree(aContent) ||
+      GetTopLevelEditSubAction() != EditSubAction::eNone) {
+    return;
+  }
+
+  nsIContent* parent = aContent->GetParent();
+  if (!parent || !parent->InclusiveDescendantMayNeedSpellchecking(this)) {
+    return;
+  }
+
+  RefPtr<nsRange> range = nsRange::Create(aContent);
+  range->SelectNodesInContainer(parent, aContent, aContent);
+  DebugOnly<nsresult> rvIgnored = mInlineSpellChecker->SpellCheckRange(range);
 }
 
 nsresult HTMLEditor::SelectEntireDocument() {

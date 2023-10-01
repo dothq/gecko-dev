@@ -236,6 +236,7 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["browser.startup.homepage", { what: RECORD_PREF_STATE }],
   ["browser.startup.page", { what: RECORD_PREF_VALUE }],
   ["browser.tabs.firefox-view", { what: RECORD_PREF_VALUE }],
+  ["browser.tabs.firefox-view-next", { what: RECORD_PREF_VALUE }],
   ["browser.urlbar.autoFill", { what: RECORD_DEFAULTPREF_VALUE }],
   [
     "browser.urlbar.autoFill.adaptiveHistory.enabled",
@@ -300,7 +301,6 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["layers.acceleration.force-enabled", { what: RECORD_PREF_VALUE }],
   ["layers.async-pan-zoom.enabled", { what: RECORD_PREF_VALUE }],
   ["layers.async-video-oop.enabled", { what: RECORD_PREF_VALUE }],
-  ["layers.async-video.enabled", { what: RECORD_PREF_VALUE }],
   ["layers.d3d11.disable-warp", { what: RECORD_PREF_VALUE }],
   ["layers.d3d11.force-warp", { what: RECORD_PREF_VALUE }],
   [
@@ -340,6 +340,8 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["places.history.enabled", { what: RECORD_PREF_VALUE }],
   ["privacy.firstparty.isolate", { what: RECORD_PREF_VALUE }],
   ["privacy.resistFingerprinting", { what: RECORD_PREF_VALUE }],
+  ["privacy.fingerprintingProtection", { what: RECORD_PREF_VALUE }],
+  ["privacy.fingerprintingProtection.pbmode", { what: RECORD_PREF_VALUE }],
   ["privacy.trackingprotection.enabled", { what: RECORD_PREF_VALUE }],
   ["privacy.donottrackheader.enabled", { what: RECORD_PREF_VALUE }],
   ["security.enterprise_roots.auto-enabled", { what: RECORD_PREF_VALUE }],

@@ -18,6 +18,7 @@
 #include "ds/LifoAlloc.h"                 // LifoAlloc
 #include "frontend/CompilationStencil.h"  // CompilationStencil, ExtensibleCompilationStencil
 #include "frontend/ScriptIndex.h"  // ScriptIndex
+#include "js/ColumnNumber.h"       // JS::ColumnNumberZeroOrigin
 #include "vm/Scope.h"              // SizeOfParserScopeData
 #include "vm/StencilEnums.h"       // js::ImmutableScriptFlagsEnum
 
@@ -601,7 +602,7 @@ template <XDRMode mode>
   MOZ_TRY(xdr->codeUint32(stencil.importName.rawDataRef()));
   MOZ_TRY(xdr->codeUint32(stencil.exportName.rawDataRef()));
   MOZ_TRY(xdr->codeUint32(&stencil.lineno));
-  MOZ_TRY(xdr->codeUint32(&stencil.column));
+  MOZ_TRY(xdr->codeUint32(stencil.column.addressOfValueForTranscode()));
 
   return Ok();
 }
@@ -1216,7 +1217,7 @@ XDRResult StencilXDR::codeSourceData(XDRState<mode>* const xdr,
 template <XDRMode mode>
 /* static */
 XDRResult StencilXDR::codeSource(XDRState<mode>* xdr,
-                                 const JS::DecodeOptions* maybeOptions,
+                                 const JS::ReadOnlyDecodeOptions* maybeOptions,
                                  RefPtr<ScriptSource>& source) {
   FrontendContext* fc = xdr->fc();
 
@@ -1304,15 +1305,15 @@ XDRResult StencilXDR::codeSource(XDRState<mode>* xdr,
   }
 
   MOZ_TRY(xdr->codeUint32(&source->startLine_));
-  MOZ_TRY(xdr->codeUint32(&source->startColumn_));
+  MOZ_TRY(xdr->codeUint32(source->startColumn_.addressOfValueForTranscode()));
 
   // The introduction info doesn't persist across encode/decode.
   if (mode == XDR_DECODE) {
     source->introductionType_ = maybeOptions->introductionType;
     source->setIntroductionOffset(maybeOptions->introductionOffset);
-    if (maybeOptions->introducerFilename) {
+    if (maybeOptions->introducerFilename()) {
       if (!source->setIntroducerFilename(
-              fc, maybeOptions->introducerFilename.c_str())) {
+              fc, maybeOptions->introducerFilename().c_str())) {
         return xdr->fail(JS::TranscodeResult::Throw);
       }
     }
@@ -1326,12 +1327,12 @@ XDRResult StencilXDR::codeSource(XDRState<mode>* xdr,
 template /* static */
     XDRResult
     StencilXDR::codeSource(XDRState<XDR_ENCODE>* xdr,
-                           const JS::DecodeOptions* maybeOptions,
+                           const JS::ReadOnlyDecodeOptions* maybeOptions,
                            RefPtr<ScriptSource>& holder);
 template /* static */
     XDRResult
     StencilXDR::codeSource(XDRState<XDR_DECODE>* xdr,
-                           const JS::DecodeOptions* maybeOptions,
+                           const JS::ReadOnlyDecodeOptions* maybeOptions,
                            RefPtr<ScriptSource>& holder);
 
 JS_PUBLIC_API bool JS::GetScriptTranscodingBuildId(
@@ -1477,7 +1478,8 @@ bool StencilIncrementalEncoderPtr::addDelazification(
 }
 
 XDRResult XDRStencilDecoder::codeStencil(
-    const JS::DecodeOptions& options, frontend::CompilationStencil& stencil) {
+    const JS::ReadOnlyDecodeOptions& options,
+    frontend::CompilationStencil& stencil) {
 #ifdef DEBUG
   auto sanityCheck = mozilla::MakeScopeExit(
       [&] { MOZ_ASSERT(validateResultCode(fc(), resultCode())); });

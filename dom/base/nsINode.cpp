@@ -103,7 +103,7 @@
 #include "nsWrapperCacheInlines.h"
 #include "WrapperFactory.h"
 #include <algorithm>
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowInner.h"
 #include "GeometryUtils.h"
 #include "nsIAnimationObserver.h"
 #include "nsChildContentList.h"
@@ -3450,6 +3450,9 @@ already_AddRefed<nsINode> nsINode::CloneAndAdopt(
       EventListenerManager* elm = aNode->GetExistingListenerManager();
       if (elm) {
         window->SetMutationListeners(elm->MutationListenerBits());
+        if (elm->MayHaveDOMActivateListeners()) {
+          window->SetHasDOMActivateEventListeners();
+        }
         if (elm->MayHavePaintEventListener()) {
           window->SetHasPaintEventListeners();
         }

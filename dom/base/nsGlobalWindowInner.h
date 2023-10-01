@@ -79,8 +79,6 @@ class nsWindowSizes;
 
 class IdleRequestExecutor;
 
-class DialogValueHolder;
-
 class PromiseDocumentFlushedResolver;
 
 namespace mozilla {
@@ -112,7 +110,6 @@ class ContentMediaController;
 enum class ImageBitmapFormat : uint8_t;
 class IdleRequest;
 class IdleRequestCallback;
-class IncrementalRunnable;
 class InstallTriggerImpl;
 class IntlUtils;
 class MediaQueryList;
@@ -140,16 +137,6 @@ class CacheStorage;
 class IDBFactory;
 }  // namespace dom
 }  // namespace mozilla
-
-extern already_AddRefed<nsIScriptTimeoutHandler> NS_CreateJSTimeoutHandler(
-    JSContext* aCx, nsGlobalWindowInner* aWindow,
-    mozilla::dom::Function& aFunction,
-    const mozilla::dom::Sequence<JS::Value>& aArguments,
-    mozilla::ErrorResult& aError);
-
-extern already_AddRefed<nsIScriptTimeoutHandler> NS_CreateJSTimeoutHandler(
-    JSContext* aCx, nsGlobalWindowInner* aWindow, const nsAString& aExpression,
-    mozilla::ErrorResult& aError);
 
 extern const JSClass OuterWindowProxyClass;
 
@@ -408,6 +395,9 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   static bool CachesEnabled(JSContext* aCx, JSObject*);
 
   static bool IsSizeToContentEnabled(JSContext*, JSObject*);
+
+  // WebIDL permission Func for whether Glean APIs are permitted.
+  static bool IsGleanNeeded(JSContext*, JSObject*);
 
   bool DoResolve(
       JSContext* aCx, JS::Handle<JSObject*> aObj, JS::Handle<jsid> aId,
@@ -863,8 +853,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
       const nsAString& aOptions,
       const mozilla::dom::Sequence<JS::Value>& aExtraArgument,
       mozilla::ErrorResult& aError);
-  void UpdateCommands(const nsAString& anAction, mozilla::dom::Selection* aSel,
-                      int16_t aReason);
+  void UpdateCommands(const nsAString& anAction);
 
   void GetContent(JSContext* aCx, JS::MutableHandle<JSObject*> aRetval,
                   mozilla::dom::CallerType aCallerType,
@@ -911,20 +900,6 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   already_AddRefed<mozilla::dom::Promise> PromiseDocumentFlushed(
       mozilla::dom::PromiseDocumentFlushedCallback& aCallback,
       mozilla::ErrorResult& aError);
-
-  void GetReturnValueOuter(JSContext* aCx,
-                           JS::MutableHandle<JS::Value> aReturnValue,
-                           nsIPrincipal& aSubjectPrincipal,
-                           mozilla::ErrorResult& aError);
-  void GetReturnValue(JSContext* aCx, JS::MutableHandle<JS::Value> aReturnValue,
-                      nsIPrincipal& aSubjectPrincipal,
-                      mozilla::ErrorResult& aError);
-  void SetReturnValueOuter(JSContext* aCx, JS::Handle<JS::Value> aReturnValue,
-                           nsIPrincipal& aSubjectPrincipal,
-                           mozilla::ErrorResult& aError);
-  void SetReturnValue(JSContext* aCx, JS::Handle<JS::Value> aReturnValue,
-                      nsIPrincipal& aSubjectPrincipal,
-                      mozilla::ErrorResult& aError);
 
   void GetInterface(JSContext* aCx, JS::Handle<JS::Value> aIID,
                     JS::MutableHandle<JS::Value> aRetval,
@@ -1489,10 +1464,8 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   static bool sMouseDown;
   static bool sDragServiceDisabled;
 
-  friend class nsDOMScriptableHelper;
   friend class nsDOMWindowUtils;
   friend class mozilla::dom::PostMessageEvent;
-  friend class DesktopNotification;
   friend class mozilla::dom::TimeoutManager;
   friend class IdleRequestExecutor;
   friend class nsGlobalWindowOuter;

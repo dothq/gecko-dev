@@ -226,8 +226,6 @@ exports.CSS_PROPERTIES = {
       "button-arrow-previous",
       "button-arrow-up",
       "checkbox",
-      "checkbox-container",
-      "checkbox-label",
       "checkmenuitem",
       "dialog",
       "dualbutton",
@@ -246,8 +244,6 @@ exports.CSS_PROPERTIES = {
       "progress-bar",
       "progresschunk",
       "radio",
-      "radio-container",
-      "radio-label",
       "range",
       "range-thumb",
       "revert",
@@ -1481,8 +1477,6 @@ exports.CSS_PROPERTIES = {
       "button-arrow-previous",
       "button-arrow-up",
       "checkbox",
-      "checkbox-container",
-      "checkbox-label",
       "checkmenuitem",
       "dialog",
       "dualbutton",
@@ -1501,8 +1495,6 @@ exports.CSS_PROPERTIES = {
       "progress-bar",
       "progresschunk",
       "radio",
-      "radio-container",
-      "radio-label",
       "range",
       "range-thumb",
       "revert",
@@ -3059,6 +3051,7 @@ exports.CSS_PROPERTIES = {
       "font-synthesis-weight",
       "font-synthesis-style",
       "font-synthesis-small-caps",
+      "font-synthesis-position",
       "font-stretch",
       "font-kerning",
       "font-variant-alternates",
@@ -3519,8 +3512,6 @@ exports.CSS_PROPERTIES = {
       "button-arrow-previous",
       "button-arrow-up",
       "checkbox",
-      "checkbox-container",
-      "checkbox-label",
       "checkmenuitem",
       "dialog",
       "dualbutton",
@@ -3539,8 +3530,6 @@ exports.CSS_PROPERTIES = {
       "progress-bar",
       "progresschunk",
       "radio",
-      "radio-container",
-      "radio-label",
       "range",
       "range-thumb",
       "revert",
@@ -7136,6 +7125,7 @@ exports.CSS_PROPERTIES = {
     "values": [
       "cap-height",
       "ch-width",
+      "from-font",
       "ic-height",
       "ic-width",
       "inherit",
@@ -7191,19 +7181,37 @@ exports.CSS_PROPERTIES = {
     "subproperties": [
       "font-synthesis-weight",
       "font-synthesis-style",
-      "font-synthesis-small-caps"
+      "font-synthesis-small-caps",
+      "font-synthesis-position"
     ],
     "supports": [],
     "values": [
       "inherit",
       "initial",
       "none",
+      "position",
       "revert",
       "revert-layer",
       "small-caps",
       "style",
       "unset",
       "weight"
+    ]
+  },
+  "font-synthesis-position": {
+    "isInherited": true,
+    "subproperties": [
+      "font-synthesis-position"
+    ],
+    "supports": [],
+    "values": [
+      "auto",
+      "inherit",
+      "initial",
+      "none",
+      "revert",
+      "revert-layer",
+      "unset"
     ]
   },
   "font-synthesis-small-caps": {
@@ -9373,6 +9381,7 @@ exports.CSS_PROPERTIES = {
       "stroke-box",
       "top",
       "unset",
+      "url",
       "view-box",
       "xywh"
     ]
@@ -9436,6 +9445,7 @@ exports.CSS_PROPERTIES = {
       "revert-layer",
       "stroke-box",
       "unset",
+      "url",
       "view-box",
       "xywh"
     ]
@@ -11884,11 +11894,13 @@ exports.CSS_PROPERTIES = {
     "supports": [],
     "values": [
       "border-box",
+      "content-box",
       "fill-box",
       "inherit",
       "initial",
       "revert",
       "revert-layer",
+      "stroke-box",
       "unset",
       "view-box"
     ]
@@ -12311,27 +12323,3 @@ exports.CSS_PROPERTIES = {
     ]
   }
 };
-
-/**
- * A list of the pseudo elements.
- */
-exports.PSEUDO_ELEMENTS = [
-  "::after",
-  "::before",
-  "::marker",
-  "::backdrop",
-  "::cue",
-  "::first-letter",
-  "::first-line",
-  "::highlight",
-  "::selection",
-  "::-moz-focus-inner",
-  "::-moz-progress-bar",
-  "::-moz-range-track",
-  "::-moz-range-progress",
-  "::-moz-range-thumb",
-  "::-moz-meter-bar",
-  "::placeholder",
-  "::-moz-color-swatch",
-  "::file-selector-button"
-];

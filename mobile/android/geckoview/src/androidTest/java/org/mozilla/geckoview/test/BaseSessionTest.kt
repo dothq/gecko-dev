@@ -20,6 +20,7 @@ import org.junit.rules.RuleChain
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule
+import org.mozilla.geckoview.test.util.TestServer
 import kotlin.reflect.KClass
 
 /**
@@ -29,6 +30,7 @@ import kotlin.reflect.KClass
 open class BaseSessionTest(
     noErrorCollector: Boolean = false,
     serverCustomHeaders: Map<String, String>? = null,
+    responseModifiers: Map<String, TestServer.ResponseModifier>? = null,
 ) {
     companion object {
         const val RESUBMIT_CONFIRM = "/assets/www/resubmit.html"
@@ -131,6 +133,7 @@ open class BaseSessionTest(
         const val COLOR_ORANGE_BACKGROUND_HTML_PATH = "/assets/www/color_orange_background.html"
         const val TRACEMONKEY_PDF_PATH = "/assets/www/tracemonkey.pdf"
         const val HELLO_PDF_WORLD_PDF_PATH = "/assets/www/helloPDFWorld.pdf"
+        const val ORANGE_PDF_PATH = "/assets/www/orange.pdf"
         const val NO_META_VIEWPORT_HTML_PATH = "/assets/www/no-meta-viewport.html"
 
         const val TEST_ENDPOINT = GeckoSessionTestRule.TEST_ENDPOINT
@@ -138,7 +141,7 @@ open class BaseSessionTest(
         const val TEST_PORT = GeckoSessionTestRule.TEST_PORT
     }
 
-    val sessionRule = GeckoSessionTestRule(serverCustomHeaders)
+    val sessionRule = GeckoSessionTestRule(serverCustomHeaders, responseModifiers)
 
     // Override this to include more `evaluate` rules in the chain
     @get:Rule

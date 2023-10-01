@@ -528,7 +528,8 @@ public class GeckoSession {
             "GeckoView:CookieBannerEvent:Detected",
             "GeckoView:CookieBannerEvent:Handled",
             "GeckoView:SavePdf",
-            "GeckoView:GetNimbusFeature"
+            "GeckoView:GetNimbusFeature",
+            "GeckoView:OnProductUrl",
           }) {
         @Override
         public void handleMessage(
@@ -627,6 +628,8 @@ public class GeckoSession {
               callback.sendError(
                   "No Nimbus data for the feature " + featureId + ": conversion failed.");
             }
+          } else if ("GeckoView:OnProductUrl".equals(event)) {
+            delegate.onProductUrl(GeckoSession.this);
           }
         }
       };
@@ -830,6 +833,95 @@ public class GeckoSession {
                       }
                       mEventDispatcher.dispatch("GeckoView:DotPrintFinish", bundle);
                       Log.e(LOGTAG, "Could not complete DotPrintRequest.", e);
+                      return null;
+                    });
+          }
+        }
+      };
+
+  private final GeckoSessionHandler<ExperimentDelegate> mExperimentHandler =
+      new GeckoSessionHandler<ExperimentDelegate>(
+          "GeckoViewExperiment",
+          this,
+          new String[] {
+            "GeckoView:GetExperimentFeature",
+            "GeckoView:RecordExposure",
+            "GeckoView:RecordExperimentExposure",
+            "GeckoView:RecordMalformedConfig"
+          }) {
+        @Override
+        public void handleMessage(
+            final ExperimentDelegate delegate,
+            final String event,
+            final GeckoBundle message,
+            final EventCallback callback) {
+
+          if (delegate == null) {
+            if (callback != null) {
+              callback.sendError("No experiment delegate registered.");
+            }
+            Log.w(LOGTAG, "No experiment delegate registered.");
+            return;
+          }
+          final String feature = message.getString("feature", "");
+          if ("GeckoView:GetExperimentFeature".equals(event) && callback != null) {
+            final GeckoResult<JSONObject> result = delegate.onGetExperimentFeature(feature);
+            result
+                .accept(
+                    json -> {
+                      try {
+                        callback.sendSuccess(GeckoBundle.fromJSONObject(json));
+                      } catch (final JSONException e) {
+                        callback.sendError("An error occured when serializing the feature data.");
+                      }
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError("An error occurred while retrieving feature data.");
+                      return null;
+                    });
+
+          } else if ("GeckoView:RecordExposure".equals(event) && callback != null) {
+            final GeckoResult<Void> result = delegate.onRecordExposureEvent(feature);
+            result
+                .accept(
+                    a -> {
+                      callback.sendSuccess(true);
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError("An error occurred while recording feature.");
+                      return null;
+                    });
+
+          } else if ("GeckoView:RecordExperimentExposure".equals(event) && callback != null) {
+            final String slug = message.getString("slug", "");
+            final GeckoResult<Void> result =
+                delegate.onRecordExperimentExposureEvent(feature, slug);
+            result
+                .accept(
+                    a -> {
+                      callback.sendSuccess(true);
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError("An error occurred while recording experiment feature.");
+                      return null;
+                    });
+
+          } else if ("GeckoView:RecordMalformedConfig".equals(event) && callback != null) {
+            final String part = message.getString("part", "");
+            final GeckoResult<Void> result =
+                delegate.onRecordMalformedConfigurationEvent(feature, part);
+            result
+                .accept(
+                    a -> {
+                      callback.sendSuccess(true);
+                    })
+                .exceptionally(
+                    e -> {
+                      callback.sendError(
+                          "An error occurred while recording malformed feature config.");
                       return null;
                     });
           }
@@ -1143,7 +1235,8 @@ public class GeckoSession {
         mScrollHandler,
         mSelectionActionDelegate,
         mContentBlockingHandler,
-        mMediaSessionHandler
+        mMediaSessionHandler,
+        mExperimentHandler
       };
 
   private static class PermissionCallback
@@ -1444,7 +1537,6 @@ public class GeckoSession {
                     addMarker.run();
                   },
                   ex -> {
-                    // This is incredibly ugly and unreadable because checkstyle sucks.
                     res.complete(false);
                     addMarker.run();
                   });
@@ -1648,6 +1740,7 @@ public class GeckoSession {
     mId = id;
     mWindow = new Window(runtime, this, mNativeQueue);
     mWebExtensionController.setRuntime(runtime);
+    mExperimentHandler.setDelegate(getRuntimeExperimentDelegate(), this);
 
     onWindowChanged(WINDOW_OPEN, /* inProgress */ true);
 
@@ -2899,6 +2992,47 @@ public class GeckoSession {
     return mEventDispatcher.queryBoolean("GeckoView:ContainsFormData");
   }
 
+  /**
+   * Request analysis of product's reviews for a given product URL.
+   *
+   * @param url The URL of the product page.
+   * @return a {@link GeckoResult} result of review analysis object.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<ReviewAnalysis> requestAnalysis(@NonNull final String url) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("url", url);
+    return mEventDispatcher
+        .queryBundle("GeckoView:RequestAnalysis", bundle)
+        .map(analysisBundle -> new ReviewAnalysis(analysisBundle.getBundle("analysis")));
+  }
+
+  /**
+   * Request product recommendations given a specific product url.
+   *
+   * @param url The URL of the product page.
+   * @return a {@link GeckoResult} result of product recommendations.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<List<Recommendation>> requestRecommendations(
+      @NonNull final String url) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("url", url);
+    return mEventDispatcher
+        .queryBundle("GeckoView:RequestRecommendations", bundle)
+        .map(
+            recommendationsBundle -> {
+              final GeckoBundle[] bundles = recommendationsBundle.getBundleArray("recommendations");
+              final ArrayList<Recommendation> recArray = new ArrayList<>(bundles.length);
+              if (recArray != null) {
+                for (final GeckoBundle b : bundles) {
+                  recArray.add(new Recommendation(b));
+                }
+              }
+              return recArray;
+            });
+  }
+
   // This is the GeckoDisplay acquired via acquireDisplay(), if any.
   private GeckoDisplay mDisplay;
 
@@ -3392,6 +3526,162 @@ public class GeckoSession {
     }
   }
 
+  /** Contains information about the analysis of a product's reviews. */
+  @AnyThread
+  public static class ReviewAnalysis {
+    /** Analysis URL. */
+    @Nullable public final String analysisURL;
+
+    /** Product identifier (ASIN/SKU). */
+    @Nullable public final String productId;
+
+    /** Reliability grade for the product's reviews. */
+    @Nullable public final String grade;
+
+    /** Product rating adjusted to exclude untrusted reviews. */
+    @NonNull public final Double adjustedRating;
+
+    /** Boolean indicating if the analysis is stale. */
+    public final boolean needsAnalysis;
+
+    /** Object containing highlights for product. */
+    @Nullable public final Highlight highlights;
+
+    /** Time since the last analysis was performed. */
+    public final long lastAnalysisTime;
+
+    /** Boolean indicating if reported that this product has been deleted. */
+    public final boolean deletedProductReported;
+
+    /** Boolean indicating if this product is now deleted. */
+    public final boolean deletedProduct;
+
+    /* package */ ReviewAnalysis(final GeckoBundle message) {
+      analysisURL = message.getString("analysis_url");
+      productId = message.getString("product_id");
+      grade = message.getString("grade");
+      adjustedRating = message.getDouble("adjusted_rating");
+      needsAnalysis = message.getBoolean("needs_analysis", true);
+      if (message.getBundle("highlights") == null) {
+        highlights = null;
+      } else {
+        highlights = new Highlight(message.getBundle("highlights"));
+      }
+      lastAnalysisTime = message.getLong("last_analysis_time");
+      deletedProductReported = message.getBoolean("deleted_product_reported");
+      deletedProduct = message.getBoolean("deleted_product");
+    }
+
+    /** Empty constructor for tests. */
+    protected ReviewAnalysis() {
+      analysisURL = "";
+      productId = "";
+      grade = null;
+      adjustedRating = 0.0;
+      needsAnalysis = false;
+      highlights = null;
+      lastAnalysisTime = 0;
+      deletedProductReported = false;
+      deletedProduct = false;
+    }
+
+    /** Contains information about highlights of a product's reviews. */
+    public class Highlight {
+      /** Highlights about the quality of a product. */
+      @Nullable public final String[] quality;
+
+      /** Highlights about the price of a product. */
+      @Nullable public final String[] price;
+
+      /** Highlights about the shipping of a product. */
+      @Nullable public final String[] shipping;
+
+      /** Highlights about the appearance of a product. */
+      @Nullable public final String[] appearance;
+
+      /** Highlights about the competitiveness of a product. */
+      @Nullable public final String[] competitiveness;
+
+      /* package */ Highlight(final GeckoBundle message) {
+        quality = message.getStringArray("quality");
+        price = message.getStringArray("price");
+        shipping = message.getStringArray("shipping");
+        appearance = message.getStringArray("appearance");
+        competitiveness = message.getStringArray("competitiveness");
+      }
+
+      /** Empty constructor for tests. */
+      protected Highlight() {
+        quality = null;
+        price = null;
+        shipping = null;
+        appearance = null;
+        competitiveness = null;
+      }
+    }
+  }
+
+  /** Contains information about a product recommendation. */
+  @AnyThread
+  public static class Recommendation {
+    /** Analysis URL. */
+    @Nullable public final String analysisUrl;
+
+    /** Adjusted rating. */
+    @Nullable public final Double adjustedRating;
+
+    /** Whether or not it is a sponsored recommendation. */
+    @Nullable public final Boolean sponsored;
+
+    /** Url of product recommendation image. */
+    @Nullable public final String imageUrl;
+
+    /** Unique identifier for the ad entity. */
+    @Nullable public final String aid;
+
+    /** Url of recommended product. */
+    @Nullable public final String url;
+
+    /** Name of recommended product. */
+    @Nullable public final String name;
+
+    /** Grade of recommended product. */
+    @Nullable public final String grade;
+
+    /** Price of recommended product. */
+    @Nullable public final String price;
+
+    /** Currency of recommended product. */
+    @Nullable public final String currency;
+
+    /* package */ Recommendation(@NonNull final GeckoBundle message) {
+      analysisUrl = message.getString("analysis_url");
+      adjustedRating = message.getDouble("adjusted_rating");
+      sponsored = message.getBoolean("sponsored");
+      imageUrl = message.getString("image_url");
+      aid = message.getString("aid");
+      url = message.getString("url");
+      name = message.getString("name");
+      grade = message.getString("grade");
+      price = message.getString("price");
+      currency = message.getString("currency");
+    }
+
+    /** Empty constructor for tests. */
+    protected Recommendation() {
+      analysisUrl = "";
+      adjustedRating = 0.0;
+      sponsored = false;
+      imageUrl = "";
+      aid = "";
+      url = "";
+      name = "";
+      grade = "";
+      price = "";
+      currency = "";
+    }
+  }
+
   public interface ContentDelegate {
     /**
      * A page title was discovered in the content or updated after the content loaded.
@@ -3450,6 +3740,14 @@ public class GeckoSession {
     @UiThread
     default void onMetaViewportFitChange(
         @NonNull final GeckoSession session, @NonNull final String viewportFit) {}
+
+    /**
+     * Session is on a product url.
+     *
+     * @param session The GeckoSession that initiated the callback.
+     */
+    @UiThread
+    default void onProductUrl(@NonNull final GeckoSession session) {}
 
     /** Element details for onContextMenu callbacks. */
     public static class ContextElement {
@@ -3701,13 +3999,18 @@ public class GeckoSession {
     default void onCookieBannerHandled(@NonNull final GeckoSession session) {}
 
     /**
-     * This method is called when GeckoView is requesting a specific Nimbus feature in using message
-     * `GeckoView:GetNimbusFeature`.
+     * This method is scheduled for deprecation, see Bug 1846074 for details. Please switch to the
+     * [ExperimentDelegate.onGetExperimentFeature] for the same functionality.
+     *
+     * <p>This method is called when GeckoView is requesting a specific Nimbus feature in using
+     * message `GeckoView:GetNimbusFeature`.
      *
      * @param session GeckoSession that initiated the callback.
      * @param featureId Nimbus feature id of the collected data.
      * @return A {@link JSONObject} with the feature.
      */
+    @Deprecated
+    @DeprecationSchedule(version = 122, id = "session-nimbus")
     @AnyThread
     default @Nullable JSONObject onGetNimbusFeature(
         @NonNull final GeckoSession session, @NonNull final String featureId) {
@@ -4591,17 +4894,26 @@ public class GeckoSession {
           /** The id of the provider. */
           public final int id;
 
+          /** The domain of the provider */
+          public final @NonNull String domain;
+
           /**
            * Creates a new {@link Provider} with the given parameters.
            *
            * @param id The identification for this prompt.
            * @param icon A string base64 icon.
            * @param name The name of the {@link Provider}.
+           * @param domain The domain of the {@link Provider}.
            */
-          public Provider(final int id, final @NonNull String name, final @Nullable String icon) {
+          public Provider(
+              final int id,
+              final @NonNull String name,
+              final @Nullable String icon,
+              final @NonNull String domain) {
             this.id = id;
             this.icon = icon;
             this.name = name;
+            this.domain = domain;
           }
 
           /* package */
@@ -4609,7 +4921,8 @@ public class GeckoSession {
             final int id = bundle.getInt("providerIndex");
             final String icon = bundle.getString("icon");
             final String name = bundle.getString("name");
-            return new Provider(id, name, icon);
+            final String domain = bundle.getString("domain");
+            return new Provider(id, name, icon, domain);
           }
         }
       }
@@ -4622,17 +4935,25 @@ public class GeckoSession {
         /** The accounts from which the user could select. */
         public final @NonNull Account[] accounts;
 
+        /** The name of the provider the user is trying to login with */
+        public final @NonNull Provider provider;
+
         /**
          * Creates a new {@link AccountSelectorPrompt} with the given parameters.
          *
          * @param id The identification for this prompt.
          * @param accounts The accounts from which the user could select.
+         * @param provider The provider on which the user is trying to log in.
          * @param observer A callback to notify when the prompt has been completed.
          */
         public AccountSelectorPrompt(
-            @NonNull final String id, @NonNull final Account[] accounts, final Observer observer) {
+            @NonNull final String id,
+            @NonNull final Account[] accounts,
+            @NonNull final Provider provider,
+            final Observer observer) {
           super(id, null, observer);
           this.accounts = accounts;
+          this.provider = provider;
         }
 
         /**
@@ -4652,7 +4973,7 @@ public class GeckoSession {
         /** A representation of an Identity Credential Provider Accounts. */
         public static class ProviderAccounts {
           /** The name of the provider. */
-          public final @Nullable String provider;
+          public final @Nullable Provider provider;
 
           /** The accounts available for this provider. */
           public final @NonNull Account[] accounts;
@@ -4668,7 +4989,7 @@ public class GeckoSession {
            * @param accounts The list of {@link Account}s available for this provider.
            */
           public ProviderAccounts(
-              final int id, @Nullable final String provider, @NonNull final Account[] accounts) {
+              final int id, @Nullable final Provider provider, @NonNull final Account[] accounts) {
             this.id = id;
             this.provider = provider;
             this.accounts = accounts;
@@ -4677,7 +4998,8 @@ public class GeckoSession {
           /* package */
           static @NonNull ProviderAccounts fromBundle(final @NonNull GeckoBundle bundle) {
             final int id = bundle.getInt("accountIndex");
-            final String provider = bundle.getString("provider");
+            final Provider provider = Provider.fromBundle(bundle.getBundle("provider"));
+
             final GeckoBundle[] accountsBundle = bundle.getBundleArray("accounts");
             if (accountsBundle == null) {
               return new ProviderAccounts(id, provider, new Account[0]);
@@ -4731,6 +5053,42 @@ public class GeckoSession {
             final String name = bundle.getString("name");
             final String email = bundle.getString("email");
             return new Account(id, email, name, icon);
+          }
+        }
+
+        /** A representation of an Identity Credential Provider for an Account Selector Prompt */
+        public static class Provider {
+          /** The name of the provider */
+          public final @NonNull String name;
+
+          /** The domain of the provider */
+          public final @NonNull String domain;
+
+          /** A base64 string for given icon for the provider; may be null. */
+          public final @Nullable String icon;
+
+          /**
+           * Creates a new {@link Provider} with the given parameters
+           *
+           * @param name the name of the Provider
+           * @param favicon A string base64 icon for the provider
+           * @param domain A string base64 icon for the provider
+           */
+          public Provider(
+              @NonNull final String name,
+              @NonNull final String domain,
+              @Nullable final String favicon) {
+            this.name = name;
+            this.domain = domain;
+            this.icon = favicon;
+          }
+
+          /* package */
+          static @NonNull Provider fromBundle(final @NonNull GeckoBundle bundle) {
+            final String name = bundle.getString("name");
+            final String domain = bundle.getString("domain");
+            final String icon = bundle.getString("icon");
+            return new Provider(name, domain, icon);
           }
         }
       }
@@ -7285,26 +7643,13 @@ public class GeckoSession {
   private @NonNull GeckoResult<InputStream> saveAsPdfByBrowsingContext(
       final @Nullable Long browsingContextId) {
     final GeckoResult<InputStream> geckoResult = new GeckoResult<>();
-    final GeckoSession self = this;
-    this.isPdfJs()
-        .then(
-            new GeckoResult.OnValueListener<Boolean, Void>() {
-              @Override
-              public GeckoResult<Void> onValue(final Boolean isPdfJs) {
-                if (!isPdfJs) {
-                  if (browsingContextId == null) {
-                    self.mWindow.printToPdf(geckoResult);
-                  } else {
-                    self.mWindow.printToPdf(geckoResult, browsingContextId);
-                  }
-                } else {
-                  geckoResult.completeFrom(
-                      self.getPdfFileSaver().save().map(result -> result.body));
-                }
-                return null;
-              }
-            });
-
+    if (browsingContextId == null) {
+      // Ensures the canonical browsing context is available
+      setFocused(true);
+      this.mWindow.printToPdf(geckoResult);
+    } else {
+      this.mWindow.printToPdf(geckoResult, browsingContextId);
+    }
     return geckoResult;
   }
 
@@ -7428,6 +7773,45 @@ public class GeckoSession {
   @AnyThread
   public void setPrintDelegate(final @Nullable PrintDelegate delegate) {
     mPrintHandler.setDelegate(delegate, this);
+  }
+
+  /**
+   * Gets the experiment delegate for this session.
+   *
+   * @return The current {@link ExperimentDelegate} for this session, if any.
+   */
+  @AnyThread
+  public @Nullable ExperimentDelegate getExperimentDelegate() {
+    return mExperimentHandler.getDelegate();
+  }
+
+  /**
+   * Gets the experiment delegate from the runtime.
+   *
+   * @return The current {@link ExperimentDelegate} for the runtime or null.
+   */
+  @AnyThread
+  private @Nullable ExperimentDelegate getRuntimeExperimentDelegate() {
+    final GeckoRuntime runtime = this.getRuntime();
+    if (runtime != null) {
+      final GeckoRuntimeSettings runtimeSettings = runtime.getSettings();
+      if (runtimeSettings != null) {
+        return runtimeSettings.getExperimentDelegate();
+      }
+    }
+    Log.w(LOGTAG, "Could not retrieve experiment delegate from runtime.");
+    return null;
+  }
+
+  /**
+   * Sets the experiment delegate for this session. Default is set to the runtime experiment
+   * delegate.
+   *
+   * @param delegate An instance of {@link ExperimentDelegate}.
+   */
+  @AnyThread
+  public void setExperimentDelegate(final @Nullable ExperimentDelegate delegate) {
+    mExperimentHandler.setDelegate(delegate, this);
   }
 
   /** Thrown when failure occurs when printing from a website. */

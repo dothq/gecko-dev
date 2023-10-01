@@ -15,7 +15,6 @@ const REMOTE_SETTINGS_DATA = [
         title: "Array.prototype.filter()",
         description:
           "The filter() method creates a shallow copy of a portion of a given array, filtered down to just the elements from the given array that pass the test implemented by the provided function.",
-        is_top_pick: true,
         keywords: ["array filter"],
       },
       {
@@ -23,7 +22,6 @@ const REMOTE_SETTINGS_DATA = [
         title: "<input>: The Input (Form Input) element",
         description:
           "The <input> HTML element is used to create interactive controls for web-based forms in order to accept data from the user; a wide variety of types of input data and control widgets are available, depending on the device and user agent. The <input> element is one of the most powerful and complex in all of HTML due to the sheer number of combinations of input types and attributes.",
-        is_top_pick: false,
         keywords: ["input"],
       },
       {
@@ -193,10 +191,18 @@ function makeExpectedResult({
   suggestion,
   source = "remote-settings",
 } = {}) {
-  const isTopPick = !!suggestion.is_top_pick;
+  const url = new URL(suggestion.url);
+  url.searchParams.set("utm_medium", "firefox-desktop");
+  url.searchParams.set("utm_source", "firefox-suggest");
+  url.searchParams.set(
+    "utm_campaign",
+    "firefox-mdn-web-docs-suggestion-experiment"
+  );
+  url.searchParams.set("utm_content", "treatment");
+
   return {
-    isBestMatch: isTopPick,
-    suggestedIndex: isTopPick ? 1 : -1,
+    isBestMatch: true,
+    suggestedIndex: 1,
     type: UrlbarUtils.RESULT_TYPE.URL,
     source: UrlbarUtils.RESULT_SOURCE.OTHER_NETWORK,
     heuristic: false,
@@ -205,11 +211,13 @@ function makeExpectedResult({
       provider: source == "remote-settings" ? "MDNSuggestions" : "mdn",
       telemetryType: "mdn",
       title: suggestion.title,
-      url: suggestion.url,
-      displayUrl: suggestion.url.replace(/^https:\/\//, ""),
-      description: isTopPick ? suggestion.description : "",
+      url: url.href,
+      originalUrl: suggestion.url,
+      displayUrl: url.href.replace(/^https:\/\//, ""),
+      description: suggestion.description,
       icon: "chrome://global/skin/icons/mdn.svg",
       shouldShowUrl: true,
+      bottomTextL10n: { id: "firefox-suggest-mdn-bottom-text" },
     },
   };
 }

@@ -43,7 +43,6 @@
 #include "mozilla/fallible.h"
 #include "mozilla/gfx/Point.h"
 #include "nsCOMPtr.h"
-#include "nsHashtablesFwd.h"
 #include "nsIContentPolicy.h"
 #include "nsINode.h"
 #include "nsIScriptError.h"
@@ -118,16 +117,12 @@ class nsParser;
 class nsPIWindowRoot;
 class nsPresContext;
 class nsStringBuffer;
-class nsStringHashKey;
 class nsTextFragment;
 class nsView;
 class nsWrapperCache;
 
 struct JSContext;
 struct nsPoint;
-
-template <class T>
-class nsRefPtrHashKey;
 
 namespace IPC {
 class Message;
@@ -242,9 +237,6 @@ struct EventNameMapping {
   int32_t mType;
   mozilla::EventMessage mMessage;
   mozilla::EventClassID mEventClassID;
-  // True if mAtom is possibly used by special SVG/SMIL events, but
-  // mMessage is eUnidentifiedEvent. See EventNameList.h
-  bool mMaybeSpecialSVGorSMILEvent;
 };
 
 namespace mozilla {
@@ -525,15 +517,6 @@ class nsContentUtils {
    */
   static Element* GetCommonFlattenedTreeAncestorForStyle(Element* aElement1,
                                                          Element* aElement2);
-
-  /**
-   * Returns the common ancestor under interactive content, if any.
-   * If neither one has interactive content as ancestor, common ancestor will be
-   * returned. If only one has interactive content as ancestor, null will be
-   * returned. If the nodes are the same, that node is returned.
-   */
-  static nsINode* GetCommonAncestorUnderInteractiveContent(nsINode* aNode1,
-                                                           nsINode* aNode2);
 
   /**
    * Returns the common BrowserParent ancestor, if any, for two given
@@ -1705,6 +1688,11 @@ class nsContentUtils {
   static EventMessage GetEventMessage(nsAtom* aName);
 
   /**
+   * Return the event type atom for a given event message.
+   */
+  static nsAtom* GetEventTypeFromMessage(EventMessage aEventMessage);
+
+  /**
    * Returns the EventMessage and nsAtom to be used for event listener
    * registration.
    */
@@ -2486,8 +2474,7 @@ class nsContentUtils {
 
   static void GetShiftText(nsAString& text);
   static void GetControlText(nsAString& text);
-  static void GetMetaText(nsAString& text);
-  static void GetOSText(nsAString& text);
+  static void GetCommandOrWinText(nsAString& text);
   static void GetAltText(nsAString& text);
   static void GetModifierSeparatorText(nsAString& text);
 
@@ -2773,20 +2760,20 @@ class nsContentUtils {
 
   class ParsedRange {
    public:
-    explicit ParsedRange(mozilla::Maybe<uint32_t> aStart,
-                         mozilla::Maybe<uint32_t> aEnd)
+    explicit ParsedRange(mozilla::Maybe<uint64_t> aStart,
+                         mozilla::Maybe<uint64_t> aEnd)
         : mStart(aStart), mEnd(aEnd) {}
 
-    mozilla::Maybe<uint32_t> Start() const { return mStart; }
-    mozilla::Maybe<uint32_t> End() const { return mEnd; }
+    mozilla::Maybe<uint64_t> Start() const { return mStart; }
+    mozilla::Maybe<uint64_t> End() const { return mEnd; }
 
     bool operator==(const ParsedRange& aOther) const {
       return Start() == aOther.Start() && End() == aOther.End();
     }
 
    private:
-    mozilla::Maybe<uint32_t> mStart;
-    mozilla::Maybe<uint32_t> mEnd;
+    mozilla::Maybe<uint64_t> mStart;
+    mozilla::Maybe<uint64_t> mEnd;
   };
 
   /**
@@ -3447,6 +3434,33 @@ class nsContentUtils {
 
   static bool IsExternalProtocol(nsIURI* aURI);
 
+  /**
+   * Add an element to a list, keeping the list sorted by tree order.
+   * Can take a potential ancestor of the elements in order to speed up
+   * tree-order comparisons, if such an ancestor exists.
+   * Returns true if the element is appended to the end of the list.
+   */
+  template <typename ElementType, typename ElementPtr>
+  static bool AddElementToListByTreeOrder(nsTArray<ElementType>& aList,
+                                          ElementPtr aChild,
+                                          nsIContent* aCommonAncestor);
+
+  /**
+   * Compares the position of aContent1 and aContent2 in the document
+   * @param aContent1 First content to compare.
+   * @param aContent2 Second content to compare.
+   * @param aCommonAncestor Potential ancestor of the contents, if one exists.
+   *                        This is only a hint; if it's not an ancestor of
+   *                        aContent1 or aContent2, this function will still
+   *                        work, but it will be slower than normal.
+   * @return < 0 if aContent1 is before aContent2,
+   *         > 0 if aContent1 is after aContent2,
+   *         0 otherwise
+   */
+  static int32_t CompareTreePosition(nsIContent* aContent1,
+                                     nsIContent* aContent2,
+                                     const nsIContent* aCommonAncestor);
+
  private:
   static bool InitializeEventTable();
 
@@ -3510,10 +3524,6 @@ class nsContentUtils {
 
   static nsIConsoleService* sConsoleService;
 
-  static nsTHashMap<nsRefPtrHashKey<nsAtom>, EventNameMapping>* sAtomEventTable;
-  static nsTHashMap<nsStringHashKey, EventNameMapping>* sStringEventTable;
-  static nsTArray<RefPtr<nsAtom>>* sUserDefinedEvents;
-
   static nsIStringBundleService* sStringBundleService;
   class nsContentUtilsReporter;
 
@@ -3552,8 +3562,7 @@ class nsContentUtils {
 
   static nsString* sShiftText;
   static nsString* sControlText;
-  static nsString* sMetaText;
-  static nsString* sOSText;
+  static nsString* sCommandOrWinText;
   static nsString* sAltText;
   static nsString* sModifierSeparator;
 

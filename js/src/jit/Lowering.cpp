@@ -972,13 +972,13 @@ void LIRGenerator::visitTest(MTest* test) {
       return;
     }
 
-    // Compare and branch Int32, Symbol, Object, or RefOrNull pointers.
+    // Compare and branch Int32, Symbol, Object, or WasmAnyRef pointers.
     if (comp->isInt32Comparison() ||
         comp->compareType() == MCompare::Compare_UInt32 ||
         comp->compareType() == MCompare::Compare_UIntPtr ||
         comp->compareType() == MCompare::Compare_Object ||
         comp->compareType() == MCompare::Compare_Symbol ||
-        comp->compareType() == MCompare::Compare_RefOrNull) {
+        comp->compareType() == MCompare::Compare_WasmAnyRef) {
       JSOp op = ReorderComparison(comp->jsop(), &left, &right);
       LAllocation lhs = useRegister(left);
       LAllocation rhs;
@@ -1350,7 +1350,7 @@ void LIRGenerator::visitCompare(MCompare* comp) {
       comp->compareType() == MCompare::Compare_UIntPtr ||
       comp->compareType() == MCompare::Compare_Object ||
       comp->compareType() == MCompare::Compare_Symbol ||
-      comp->compareType() == MCompare::Compare_RefOrNull) {
+      comp->compareType() == MCompare::Compare_WasmAnyRef) {
     JSOp op = ReorderComparison(comp->jsop(), &left, &right);
     LAllocation lhs = useRegister(left);
     LAllocation rhs;
@@ -3069,8 +3069,9 @@ void LIRGenerator::visitWasmBuiltinTruncateToInt32(
   lowerWasmBuiltinTruncateToInt32(truncate);
 }
 
-void LIRGenerator::visitWasmBoxValue(MWasmBoxValue* ins) {
-  LWasmBoxValue* lir = new (alloc()) LWasmBoxValue(useBox(ins->input()));
+void LIRGenerator::visitWasmAnyRefFromJSValue(MWasmAnyRefFromJSValue* ins) {
+  LWasmAnyRefFromJSValue* lir =
+      new (alloc()) LWasmAnyRefFromJSValue(useBox(ins->input()), tempDouble());
   define(lir, ins);
   assignSafepoint(lir, ins);
 }
@@ -3078,6 +3079,22 @@ void LIRGenerator::visitWasmBoxValue(MWasmBoxValue* ins) {
 void LIRGenerator::visitWasmAnyRefFromJSObject(MWasmAnyRefFromJSObject* ins) {
   LWasmAnyRefFromJSObject* lir =
       new (alloc()) LWasmAnyRefFromJSObject(useRegisterAtStart(ins->input()));
+  define(lir, ins);
+}
+
+void LIRGenerator::visitWasmAnyRefFromJSString(MWasmAnyRefFromJSString* ins) {
+  LWasmAnyRefFromJSString* lir =
+      new (alloc()) LWasmAnyRefFromJSString(useRegisterAtStart(ins->input()));
+  define(lir, ins);
+}
+
+void LIRGenerator::visitWasmNewI31Ref(MWasmNewI31Ref* ins) {
+  LWasmNewI31Ref* lir = new (alloc()) LWasmNewI31Ref(useRegister(ins->input()));
+  define(lir, ins);
+}
+
+void LIRGenerator::visitWasmI31RefGet(MWasmI31RefGet* ins) {
+  LWasmI31RefGet* lir = new (alloc()) LWasmI31RefGet(useRegister(ins->input()));
   define(lir, ins);
 }
 
@@ -3179,6 +3196,11 @@ void LIRGenerator::visitRegExpSearcher(MRegExpSearcher* ins) {
   assignSafepoint(lir, ins);
 }
 
+void LIRGenerator::visitRegExpSearcherLastLimit(MRegExpSearcherLastLimit* ins) {
+  auto* lir = new (alloc()) LRegExpSearcherLastLimit(temp());
+  define(lir, ins);
+}
+
 void LIRGenerator::visitRegExpExecMatch(MRegExpExecMatch* ins) {
   MOZ_ASSERT(ins->regexp()->type() == MIRType::Object);
   MOZ_ASSERT(ins->string()->type() == MIRType::String);
@@ -3198,6 +3220,17 @@ void LIRGenerator::visitRegExpExecTest(MRegExpExecTest* ins) {
       LRegExpExecTest(useFixedAtStart(ins->regexp(), RegExpExecTestRegExpReg),
                       useFixedAtStart(ins->string(), RegExpExecTestStringReg));
   defineReturn(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitRegExpHasCaptureGroups(MRegExpHasCaptureGroups* ins) {
+  MOZ_ASSERT(ins->regexp()->type() == MIRType::Object);
+  MOZ_ASSERT(ins->input()->type() == MIRType::String);
+  MOZ_ASSERT(ins->type() == MIRType::Boolean);
+
+  auto* lir = new (alloc()) LRegExpHasCaptureGroups(useRegister(ins->regexp()),
+                                                    useRegister(ins->input()));
+  define(lir, ins);
   assignSafepoint(lir, ins);
 }
 
@@ -3406,7 +3439,7 @@ void LIRGenerator::visitWasmTrap(MWasmTrap* ins) {
 }
 
 void LIRGenerator::visitWasmTrapIfNull(MWasmTrapIfNull* ins) {
-  auto* lir = new (alloc()) LWasmTrapIfNull(useRegister(ins->value()));
+  auto* lir = new (alloc()) LWasmTrapIfNull(useRegister(ins->ref()));
   add(lir, ins);
 }
 
@@ -4389,6 +4422,21 @@ void LIRGenerator::visitStoreTypedArrayElementHole(
   }
 }
 
+void LIRGenerator::visitLoadScriptedProxyHandler(
+    MLoadScriptedProxyHandler* ins) {
+  LLoadScriptedProxyHandler* lir = new (alloc())
+      LLoadScriptedProxyHandler(useRegisterAtStart(ins->object()));
+  defineBox(lir, ins);
+}
+
+void LIRGenerator::visitIdToStringOrSymbol(MIdToStringOrSymbol* ins) {
+  LIdToStringOrSymbol* lir =
+      new (alloc()) LIdToStringOrSymbol(useBoxAtStart(ins->idVal()), temp());
+  assignSnapshot(lir, ins->bailoutKind());
+  defineBox(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
 void LIRGenerator::visitLoadFixedSlot(MLoadFixedSlot* ins) {
   MDefinition* obj = ins->object();
   MOZ_ASSERT(obj->type() == MIRType::Object);
@@ -4869,6 +4917,15 @@ void LIRGenerator::visitGuardIsTypedArray(MGuardIsTypedArray* ins) {
 
   auto* lir =
       new (alloc()) LGuardIsTypedArray(useRegister(ins->object()), temp());
+  assignSnapshot(lir, ins->bailoutKind());
+  add(lir, ins);
+  redefine(ins, ins->object());
+}
+
+void LIRGenerator::visitGuardHasProxyHandler(MGuardHasProxyHandler* ins) {
+  MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+
+  auto* lir = new (alloc()) LGuardHasProxyHandler(useRegister(ins->object()));
   assignSnapshot(lir, ins->bailoutKind());
   add(lir, ins);
   redefine(ins, ins->object());
@@ -5450,7 +5507,7 @@ void LIRGenerator::visitWasmStoreInstance(MWasmStoreInstance* ins) {
                                         mozilla::Nothing()),
         ins);
   } else {
-    MOZ_ASSERT(value->type() != MIRType::RefOrNull);
+    MOZ_ASSERT(value->type() != MIRType::WasmAnyRef);
     LAllocation instance = useRegisterAtStart(ins->instance());
     LAllocation valueAlloc = useRegisterAtStart(value);
     add(new (alloc())
@@ -5579,7 +5636,7 @@ void LIRGenerator::visitWasmStoreInstanceDataField(
             LWasmStoreSlotI64(valueAlloc, instance, offs, mozilla::Nothing()),
         ins);
   } else {
-    MOZ_ASSERT(value->type() != MIRType::RefOrNull);
+    MOZ_ASSERT(value->type() != MIRType::WasmAnyRef);
     LAllocation instance = useRegisterAtStart(ins->instance());
     LAllocation valueAlloc = useRegisterAtStart(value);
     add(new (alloc()) LWasmStoreSlot(valueAlloc, instance, offs, value->type(),
@@ -5602,7 +5659,7 @@ void LIRGenerator::visitWasmStoreGlobalCell(MWasmStoreGlobalCell* ins) {
     add(new (alloc())
             LWasmStoreSlotI64(valueAlloc, cellPtr, offs, mozilla::Nothing()));
   } else {
-    MOZ_ASSERT(value->type() != MIRType::RefOrNull);
+    MOZ_ASSERT(value->type() != MIRType::WasmAnyRef);
     LAllocation cellPtr = useRegisterAtStart(ins->cellPtr());
     LAllocation valueAlloc = useRegisterAtStart(value);
     add(new (alloc()) LWasmStoreSlot(valueAlloc, cellPtr, offs, value->type(),
@@ -5620,7 +5677,7 @@ void LIRGenerator::visitWasmStoreStackResult(MWasmStoreStackResult* ins) {
         LWasmStoreSlotI64(useInt64Register(value), useRegister(stackResultArea),
                           offs, mozilla::Nothing());
   } else {
-    MOZ_ASSERT(value->type() != MIRType::RefOrNull);
+    MOZ_ASSERT(value->type() != MIRType::WasmAnyRef);
     lir = new (alloc())
         LWasmStoreSlot(useRegister(value), useRegister(stackResultArea), offs,
                        value->type(), MNarrowingOp::None, mozilla::Nothing());
@@ -5698,7 +5755,7 @@ void LIRGenerator::visitWasmParameter(MWasmParameter* ins) {
 #endif
     );
   } else {
-    MOZ_ASSERT(IsNumberType(ins->type()) || ins->type() == MIRType::RefOrNull
+    MOZ_ASSERT(IsNumberType(ins->type()) || ins->type() == MIRType::WasmAnyRef
 #ifdef ENABLE_WASM_SIMD
                || ins->type() == MIRType::Simd128
 #endif
@@ -5728,7 +5785,7 @@ void LIRGenerator::visitWasmReturn(MWasmReturn* ins) {
     returnReg = useFixed(rval, ReturnSimd128Reg);
 #endif
   } else if (rval->type() == MIRType::Int32 ||
-             rval->type() == MIRType::RefOrNull) {
+             rval->type() == MIRType::WasmAnyRef) {
     returnReg = useFixed(rval, ReturnReg);
   } else {
     MOZ_CRASH("Unexpected wasm return type");
@@ -5894,7 +5951,8 @@ void LIRGenerator::visitWasmCall(MWasmCallT ins) {
   // safepoint associated with them.  Create a second safepoint here; the node
   // otherwise does nothing, and codegen for it only marks the safepoint at the
   // node.
-  if (ins->callee().which() == wasm::CalleeDesc::WasmTable) {
+  if (ins->callee().which() == wasm::CalleeDesc::WasmTable &&
+      !ins->isWasmReturnCall()) {
     auto* adjunctSafepoint = new (alloc()) LWasmCallIndirectAdjunctSafepoint();
     add(adjunctSafepoint);
     assignWasmSafepoint(adjunctSafepoint);
@@ -5907,6 +5965,10 @@ void LIRGenerator::visitWasmCallCatchable(MWasmCallCatchable* ins) {
 }
 
 void LIRGenerator::visitWasmCallUncatchable(MWasmCallUncatchable* ins) {
+  visitWasmCall(ins);
+}
+
+void LIRGenerator::visitWasmReturnCall(MWasmReturnCall* ins) {
   visitWasmCall(ins);
 }
 
@@ -6073,6 +6135,21 @@ void LIRGenerator::visitCheckIsObj(MCheckIsObj* ins) {
   define(lir, ins);
   assignSafepoint(lir, ins);
 }
+
+#ifdef JS_PUNBOX64
+void LIRGenerator::visitCheckScriptedProxyGetResult(
+    MCheckScriptedProxyGetResult* ins) {
+  MDefinition* target = ins->target();
+  MDefinition* id = ins->id();
+  MDefinition* value = ins->value();
+
+  LCheckScriptedProxyGetResult* lir =
+      new (alloc()) LCheckScriptedProxyGetResult(useBox(target), useBox(id),
+                                                 useBox(value), temp(), temp());
+  add(lir, ins);
+  assignSafepoint(lir, ins);
+}
+#endif
 
 void LIRGenerator::visitCheckObjCoercible(MCheckObjCoercible* ins) {
   MDefinition* checkVal = ins->checkValue();

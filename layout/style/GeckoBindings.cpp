@@ -1389,6 +1389,7 @@ GeckoFontMetrics Gecko_GetFontMetrics(const nsPresContext* aPresContext,
           ToLength(NS_round(metrics.capHeight * d2a)),
           ToLength(NS_round(metrics.ideographicWidth * d2a)),
           ToLength(NS_round(metrics.maxAscent * d2a)),
+          ToLength(NS_round(fontGroup->GetStyle()->size * d2a)),
           scriptPercentScaleDown,
           scriptScriptPercentScaleDown};
 }
@@ -1603,7 +1604,7 @@ void Gecko_ReportUnexpectedCSSError(
   }
   nsDependentCSubstring sourceValue(source, sourceLen);
   nsDependentCSubstring selectorsValue(selectors, selectorsLen);
-  reporter.OutputError(sourceValue, selectorsValue, lineNumber, colNumber,
+  reporter.OutputError(sourceValue, selectorsValue, lineNumber + 1, colNumber,
                        aURI);
 }
 

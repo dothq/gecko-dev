@@ -496,6 +496,13 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   // with AutoDisableCompactingGC which uses this counter.
   js::ContextData<unsigned> compactingDisabledCount;
 
+  // Match limit result for the most recent call to RegExpSearcher.
+  js::ContextData<uint32_t> regExpSearcherLastLimit;
+
+  static constexpr size_t offsetOfRegExpSearcherLastLimit() {
+    return offsetof(JSContext, regExpSearcherLastLimit);
+  }
+
  private:
   // Pools used for recycling name maps and vectors when parsing and
   // emitting bytecode. Purged on GC when there are no active script
@@ -515,7 +522,7 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   bool isInUnsafeRegion() const { return bool(inUnsafeRegion); }
 
   // For JIT use.
-  void resetInUnsafeRegion() {
+  MOZ_NEVER_INLINE void resetInUnsafeRegion() {
     MOZ_ASSERT(inUnsafeRegion >= 0);
     inUnsafeRegion = 0;
   }
@@ -800,14 +807,6 @@ struct JS_PUBLIC_API JSContext : public JS::RootingContext,
   // all times except for the brief moment between being set in the
   // caller and read in the callee's prologue.
   js::ContextData<js::jit::ICScript*> inlinedICScript_;
-
-  // The following two fields are a pair of associated scripts. If they are
-  // non-null, the child has been inlined into the parent, and we have bailed
-  // out due to a MonomorphicInlinedStubFolding bailout. If it wasn't
-  // trial-inlined, we need to track for the parent if we attach a new case to
-  // the corresponding folded stub which belongs to the child.
-  js::ContextData<JSScript*> lastStubFoldingBailoutChild_;
-  js::ContextData<JSScript*> lastStubFoldingBailoutParent_;
 
  public:
   void* addressOfInterruptBits() { return &interruptBits_; }

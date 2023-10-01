@@ -250,8 +250,12 @@ OpKind wasm::Classify(OpBytes op) {
       return OpKind::TableSet;
     case Op::Call:
       return OpKind::Call;
+    case Op::ReturnCall:
+      return OpKind::ReturnCall;
     case Op::CallIndirect:
       return OpKind::CallIndirect;
+    case Op::ReturnCallIndirect:
+      return OpKind::ReturnCallIndirect;
     case Op::CallRef:
       WASM_FUNCTION_REFERENCES_OP(OpKind::CallRef);
     case Op::Return:
@@ -330,6 +334,10 @@ OpKind wasm::Classify(OpBytes op) {
           WASM_GC_OP(OpKind::ArrayLen);
         case GcOp::ArrayCopy:
           WASM_GC_OP(OpKind::ArrayCopy);
+        case GcOp::I31New:
+        case GcOp::I31GetS:
+        case GcOp::I31GetU:
+          WASM_GC_OP(OpKind::Conversion);
         case GcOp::RefTestV5:
           WASM_GC_OP(OpKind::RefTestV5);
         case GcOp::RefCastV5:

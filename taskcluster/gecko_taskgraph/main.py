@@ -60,7 +60,18 @@ def format_taskgraph_json(taskgraph):
 
 
 def format_taskgraph_yaml(taskgraph):
-    return yaml.safe_dump(taskgraph.to_json(), default_flow_style=False)
+    from mozbuild.util import ReadOnlyDict
+
+    class TGDumper(yaml.SafeDumper):
+        def ignore_aliases(self, data):
+            return True
+
+        def represent_ro_dict(self, data):
+            return self.represent_dict(dict(data))
+
+    TGDumper.add_representer(ReadOnlyDict, TGDumper.represent_ro_dict)
+
+    return yaml.dump(taskgraph.to_json(), Dumper=TGDumper, default_flow_style=False)
 
 
 def get_filtered_taskgraph(taskgraph, tasksregex, exclude_keys):
@@ -192,7 +203,7 @@ def generate_taskgraph(options, parameters, logdir):
         return
 
     futures = {}
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=options["max_workers"]) as executor:
         for spec in parameters:
             f = executor.submit(format_taskgraph, options, spec, logfile(spec))
             futures[f] = spec
@@ -335,6 +346,15 @@ def generate_taskgraph(options, parameters, logdir):
     help="Generate and diff the current taskgraph against another revision. "
     "Without args the base revision will be used. A revision specifier such as "
     "the hash or `.~1` (hg) or `HEAD~1` (git) can be used as well.",
+)
+@argument(
+    "-j",
+    "--max-workers",
+    dest="max_workers",
+    default=None,
+    type=int,
+    help="The maximum number of workers to use for parallel operations such as"
+    "when multiple parameters files are passed.",
 )
 def show_taskgraph(options):
     from mozversioncontrol import get_repository_object as get_repository

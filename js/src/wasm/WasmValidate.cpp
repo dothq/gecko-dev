@@ -214,6 +214,27 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
         CHECK(iter.readCallIndirect(&unusedIndex, &unusedIndex2, &nothing,
                                     &unusedArgs));
       }
+#ifdef ENABLE_WASM_TAIL_CALLS
+      case uint16_t(Op::ReturnCall): {
+        if (!env.tailCallsEnabled()) {
+          return iter.unrecognizedOpcode(&op);
+        }
+        uint32_t unusedIndex;
+        NothingVector unusedArgs{};
+        NothingVector unusedValues{};
+        CHECK(iter.readReturnCall(&unusedIndex, &unusedArgs, &unusedValues));
+      }
+      case uint16_t(Op::ReturnCallIndirect): {
+        if (!env.tailCallsEnabled()) {
+          return iter.unrecognizedOpcode(&op);
+        }
+        uint32_t unusedIndex, unusedIndex2;
+        NothingVector unusedArgs{};
+        NothingVector unusedValues{};
+        CHECK(iter.readReturnCallIndirect(&unusedIndex, &unusedIndex2, &nothing,
+                                          &unusedArgs, &unusedValues));
+      }
+#endif
 #ifdef ENABLE_WASM_FUNCTION_REFERENCES
       case uint16_t(Op::CallRef): {
         if (!env.functionReferencesEnabled()) {
@@ -635,6 +656,18 @@ static bool DecodeFunctionBodyExprs(const ModuleEnvironment& env,
             bool unusedBool;
             CHECK(iter.readArrayCopy(&unusedInt, &unusedBool, &nothing,
                                      &nothing, &nothing, &nothing, &nothing));
+          }
+          case uint32_t(GcOp::I31New): {
+            CHECK(iter.readConversion(ValType::I32, ValType(RefType::i31()),
+                                      &nothing));
+          }
+          case uint32_t(GcOp::I31GetS): {
+            CHECK(iter.readConversion(ValType(RefType::i31()), ValType::I32,
+                                      &nothing));
+          }
+          case uint32_t(GcOp::I31GetU): {
+            CHECK(iter.readConversion(ValType(RefType::i31()), ValType::I32,
+                                      &nothing));
           }
           case uint16_t(GcOp::RefTestV5): {
             RefType unusedSourceType;

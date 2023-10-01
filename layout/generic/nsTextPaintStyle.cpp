@@ -216,7 +216,7 @@ void nsTextPaintStyle::GetHighlightColors(nscolor* aForeColor,
   *aBackColor = NS_TRANSPARENT;
 }
 
-bool nsTextPaintStyle::GetCustomHighlightTextColor(const nsAtom* aHighlightName,
+bool nsTextPaintStyle::GetCustomHighlightTextColor(nsAtom* aHighlightName,
                                                    nscolor* aForeColor) {
   NS_ASSERTION(aForeColor, "aForeColor is null");
 
@@ -239,8 +239,8 @@ bool nsTextPaintStyle::GetCustomHighlightTextColor(const nsAtom* aHighlightName,
   return highlightStyle->HasAuthorSpecifiedTextColor();
 }
 
-bool nsTextPaintStyle::GetCustomHighlightBackgroundColor(
-    const nsAtom* aHighlightName, nscolor* aBackColor) {
+bool nsTextPaintStyle::GetCustomHighlightBackgroundColor(nsAtom* aHighlightName,
+                                                         nscolor* aBackColor) {
   NS_ASSERTION(aBackColor, "aBackColor is null");
   // non-existing highlights will be stored as `aHighlightName->nullptr`,
   // so subsequent calls only need a hashtable lookup and don't have
@@ -263,12 +263,9 @@ bool nsTextPaintStyle::GetCustomHighlightBackgroundColor(
 void nsTextPaintStyle::GetURLSecondaryColor(nscolor* aForeColor) {
   NS_ASSERTION(aForeColor, "aForeColor is null");
 
-  nscolor textColor = GetTextColor();
-  textColor = NS_RGBA(NS_GET_R(textColor), NS_GET_G(textColor),
-                      NS_GET_B(textColor), (uint8_t)(255 * 0.5f));
-  // Don't use true alpha color for readability.
-  InitCommonColors();
-  *aForeColor = NS_ComposeColors(mFrameBackgroundColor, textColor);
+  const nscolor textColor = GetTextColor();
+  *aForeColor = NS_RGBA(NS_GET_R(textColor), NS_GET_G(textColor),
+                        NS_GET_B(textColor), 127);
 }
 
 void nsTextPaintStyle::GetIMESelectionColors(int32_t aIndex,

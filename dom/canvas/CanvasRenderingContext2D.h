@@ -779,6 +779,8 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
     return CurrentState().font;
   }
 
+  bool GetEffectiveWillReadFrequently() const;
+
   // Member vars
   int32_t mWidth, mHeight;
 
@@ -926,10 +928,11 @@ class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
 
   // text
 
+ public:
+  gfxFontGroup* GetCurrentFontStyle();
+
  protected:
   enum class TextDrawOperation : uint8_t { FILL, STROKE, MEASURE };
-
-  gfxFontGroup* GetCurrentFontStyle();
 
   /**
    * Implementation of the fillText, strokeText, and measure functions with

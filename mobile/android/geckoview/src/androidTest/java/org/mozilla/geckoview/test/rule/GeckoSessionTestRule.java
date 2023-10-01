@@ -68,6 +68,7 @@ import org.mozilla.gecko.util.ThreadUtils;
 import org.mozilla.geckoview.Autocomplete;
 import org.mozilla.geckoview.Autofill;
 import org.mozilla.geckoview.ContentBlocking;
+import org.mozilla.geckoview.ExperimentDelegate;
 import org.mozilla.geckoview.GeckoDisplay;
 import org.mozilla.geckoview.GeckoResult;
 import org.mozilla.geckoview.GeckoRuntime;
@@ -867,6 +868,7 @@ public class GeckoSessionTestRule implements TestRule {
   protected boolean mIgnoreCrash;
 
   @Nullable private Map<String, String> mServerCustomHeaders = null;
+  @Nullable private Map<String, TestServer.ResponseModifier> mResponseModifiers = null;
 
   public GeckoSessionTestRule() {
     mDefaultSettings = new GeckoSessionSettings.Builder().build();
@@ -875,6 +877,14 @@ public class GeckoSessionTestRule implements TestRule {
   public GeckoSessionTestRule(@Nullable Map<String, String> mServerCustomHeaders) {
     this();
     this.mServerCustomHeaders = mServerCustomHeaders;
+  }
+
+  public GeckoSessionTestRule(
+      @Nullable Map<String, String> serverCustomHeaders,
+      @Nullable Map<String, TestServer.ResponseModifier> responseModifiers) {
+    this();
+    this.mServerCustomHeaders = serverCustomHeaders;
+    this.mResponseModifiers = responseModifiers;
   }
 
   /**
@@ -976,6 +986,11 @@ public class GeckoSessionTestRule implements TestRule {
 
   public void setTelemetryDelegate(final RuntimeTelemetry.Delegate delegate) {
     RuntimeCreator.setTelemetryDelegate(delegate);
+  }
+
+  /** Sets an experiment delegate on the runtime creator. */
+  public void setExperimentDelegate(final ExperimentDelegate delegate) {
+    RuntimeCreator.setExperimentDelegate(delegate);
   }
 
   public @Nullable GeckoDisplay getDisplay() {
@@ -1439,6 +1454,7 @@ public class GeckoSessionTestRule implements TestRule {
     mLastWaitEnd = 0;
     mTimeoutMillis = 0;
     RuntimeCreator.setTelemetryDelegate(null);
+    RuntimeCreator.setExperimentDelegate(null);
   }
 
   // These markers are used by runjunit.py to capture the logcat of a test
@@ -1474,7 +1490,8 @@ public class GeckoSessionTestRule implements TestRule {
         mServer =
             new TestServer(
                 InstrumentationRegistry.getInstrumentation().getTargetContext(),
-                mServerCustomHeaders);
+                mServerCustomHeaders,
+                mResponseModifiers);
 
         mInstrumentation.runOnMainSync(
             () -> {

@@ -5,6 +5,12 @@ const { sinon } = ChromeUtils.importESModule(
   "resource://testing-common/Sinon.sys.mjs"
 );
 
+const MOCK_UNPOPULATED_DATA = {
+  adjusted_rating: null,
+  grade: null,
+  highlights: null,
+};
+
 const MOCK_POPULATED_DATA = {
   adjusted_rating: 5,
   grade: "B",
@@ -39,6 +45,11 @@ const MOCK_POPULATED_DATA = {
         "I've avoided getting a smartwatch for so long due to short battery life on most of them.",
       ],
     },
+    "packaging/appearance": {
+      positive: ["Great cardboard box."],
+      negative: [],
+      neutral: [],
+    },
     shipping: {
       positive: [],
       negative: [],
@@ -62,3 +73,118 @@ const MOCK_INVALID_KEY_OBJ = {
     neutral: [],
   },
 };
+
+const MOCK_UNANALYZED_PRODUCT_RESPONSE = {
+  ...MOCK_UNPOPULATED_DATA,
+  product_id: null,
+  needs_analysis: true,
+};
+
+const MOCK_STALE_PRODUCT_RESPONSE = {
+  ...MOCK_POPULATED_DATA,
+  product_id: "ABCD123",
+  needs_analysis: true,
+};
+
+const MOCK_NOT_ENOUGH_REVIEWS_PRODUCT_RESPONSE = {
+  ...MOCK_UNPOPULATED_DATA,
+  product_id: "ABCD123",
+  needs_analysis: true,
+};
+
+const MOCK_ANALYZED_PRODUCT_RESPONSE = {
+  ...MOCK_POPULATED_DATA,
+  product_id: "ABCD123",
+  needs_analysis: false,
+};
+
+const MOCK_UNAVAILABLE_PRODUCT_RESPONSE = {
+  ...MOCK_POPULATED_DATA,
+  product_id: "ABCD123",
+  deleted_product: true,
+};
+
+const MOCK_UNAVAILABLE_PRODUCT_REPORTED_RESPONSE = {
+  ...MOCK_UNAVAILABLE_PRODUCT_RESPONSE,
+  deleted_product_reported: true,
+};
+
+function verifyAnalysisDetailsVisible(shoppingContainer) {
+  ok(
+    shoppingContainer.reviewReliabilityEl,
+    "review-reliability should be visible"
+  );
+  ok(shoppingContainer.adjustedRatingEl, "adjusted-rating should be visible");
+  ok(shoppingContainer.highlightsEl, "review-highlights should be visible");
+  ok(
+    shoppingContainer.analysisExplainerEl,
+    "analysis-explainer should be visible"
+  );
+}
+
+function verifyAnalysisDetailsHidden(shoppingContainer) {
+  ok(
+    !shoppingContainer.reviewReliabilityEl,
+    "review-reliability should not be visible"
+  );
+  ok(
+    !shoppingContainer.adjustedRatingEl,
+    "adjusted-rating should not be visible"
+  );
+  ok(
+    !shoppingContainer.highlightsEl,
+    "review-highlights should not be visible"
+  );
+  ok(
+    !shoppingContainer.analysisExplainerEl,
+    "analysis-explainer should not be visible"
+  );
+}
+
+function getAnalysisDetails(browser, data) {
+  return SpecialPowers.spawn(browser, [data], async mockData => {
+    let shoppingContainer =
+      content.document.querySelector("shopping-container").wrappedJSObject;
+    shoppingContainer.data = Cu.cloneInto(mockData, content);
+    await shoppingContainer.updateComplete;
+    let returnState = {};
+    for (let el of [
+      "unanalyzedProductEl",
+      "reviewReliabilityEl",
+      "analysisExplainerEl",
+      "adjustedRatingEl",
+      "highlightsEl",
+      "settingsEl",
+      "shoppingMessageBarEl",
+    ]) {
+      returnState[el] =
+        !!shoppingContainer[el] &&
+        ContentTaskUtils.is_visible(shoppingContainer[el]);
+    }
+    returnState.shoppingMessageBarType =
+      shoppingContainer.shoppingMessageBarEl?.getAttribute("type");
+    returnState.isOffline = shoppingContainer.isOffline;
+    return returnState;
+  });
+}
+
+function getSettingsDetails(browser, data) {
+  return SpecialPowers.spawn(browser, [data], async mockData => {
+    let shoppingContainer =
+      content.document.querySelector("shopping-container").wrappedJSObject;
+    shoppingContainer.data = Cu.cloneInto(mockData, content);
+    await shoppingContainer.updateComplete;
+    let shoppingSettings = shoppingContainer.settingsEl;
+    await shoppingSettings.updateComplete;
+    let returnState = {
+      settingsEl:
+        !!shoppingSettings && ContentTaskUtils.is_visible(shoppingSettings),
+    };
+    for (let el of ["recommendationsToggleEl", "optOutButtonEl"]) {
+      returnState[el] =
+        !!shoppingSettings[el] &&
+        ContentTaskUtils.is_visible(shoppingSettings[el]);
+    }
+    return returnState;
+  });
+}

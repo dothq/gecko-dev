@@ -63,6 +63,8 @@ const EndCode          = 0x0b;
 const ReturnCode       = 0x0f;
 const CallCode         = 0x10;
 const CallIndirectCode = 0x11;
+const ReturnCallCode   = 0x12;
+const ReturnCallIndirectCode = 0x13;
 const DelegateCode     = 0x18;
 const DropCode         = 0x1a;
 const SelectCode       = 0x1b;
@@ -119,21 +121,6 @@ const RefFuncCode      = 0xd2;
 // SIMD opcodes
 const V128LoadCode = 0x00;
 const V128StoreCode = 0x0b;
-const I32x4DotSI16x8Code = 0xba;
-const F32x4CeilCode = 0xd8;
-const F32x4FloorCode = 0xd9;
-const F32x4TruncCode = 0xda;
-const F32x4NearestCode = 0xdb;
-const F64x2CeilCode = 0xdc;
-const F64x2FloorCode = 0xdd;
-const F64x2TruncCode = 0xde;
-const F64x2NearestCode = 0xdf;
-const F32x4PMinCode = 0xea;
-const F32x4PMaxCode = 0xeb;
-const F64x2PMinCode = 0xf6;
-const F64x2PMaxCode = 0xf7;
-const V128Load32ZeroCode = 0xfc;
-const V128Load64ZeroCode = 0xfd;
 
 // Relaxed SIMD opcodes.
 const I8x16RelaxedSwizzleCode = 0x100;
@@ -173,6 +160,7 @@ const definedOpcodes =
      ...(wasmExceptionsEnabled() ? [0x06, 0x07, 0x08, 0x09] : []),
      0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
      0x10, 0x11,
+     ...(wasmTailCallsEnabled() ? [0x12, 0x13] : []),
      ...(wasmFunctionReferencesEnabled() ? [0x14] : []),
      ...(wasmExceptionsEnabled() ? [0x18, 0x19] : []),
      0x1a, 0x1b, 0x1c,

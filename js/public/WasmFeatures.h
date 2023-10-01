@@ -85,6 +85,11 @@
 #else
 #  define WASM_MEMORY_CONTROL_ENABLED 0
 #endif
+#ifdef ENABLE_WASM_TAIL_CALLS
+#  define WASM_TAIL_CALLS_ENABLED 1
+#else
+#  define WASM_TAIL_CALLS_ENABLED 0
+#endif
 #ifdef ENABLE_WASM_MOZ_INTGEMM
 #  define WASM_MOZ_INTGEMM_ENABLED 1
 #else
@@ -112,6 +117,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ true,                                      \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ true,                                      \
     /* shell flag         */ "extended-const",                          \
     /* preference name    */ "extended_const")                          \
   FEATURE(                                                              \
@@ -122,6 +128,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ true,                                      \
     /* shell flag         */ "exceptions",                              \
     /* preference name    */ "exceptions")                              \
   FEATURE(                                                              \
@@ -132,6 +139,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ WasmGcFlag(cx),                            \
+    /* flag fuzz enable   */ false,                                     \
     /* shell flag         */ "function-references",                     \
     /* preference name    */ "function_references")                     \
   FEATURE(                                                              \
@@ -142,6 +150,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ false,                                     \
     /* shell flag         */ "gc",                                      \
     /* preference name    */ "gc")                                      \
   FEATURE(                                                              \
@@ -152,6 +161,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ js::jit::JitSupportsWasmSimd(),            \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ true,                                      \
     /* shell flag         */ "relaxed-simd",                            \
     /* preference name    */ "relaxed_simd")                            \
   FEATURE(                                                              \
@@ -162,6 +172,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ true,                                      \
     /* shell flag         */ "memory64",                                \
     /* preference name    */ "memory64")                                \
   FEATURE(                                                              \
@@ -172,6 +183,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ false,                                     \
     /* shell flag         */ "memory-control",                          \
     /* preference name    */ "memory_control")                          \
   FEATURE(                                                              \
@@ -182,8 +194,20 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable  */  false,                                     \
     /* shell flag         */ "multi-memory",                            \
     /* preference name    */ "multi_memory")                            \
+  FEATURE(                                                              \
+    /* capitalized name   */ TailCalls,                                 \
+    /* lower case name    */ tailCalls,                                 \
+    /* stage              */ WasmFeatureStage::Experimental,            \
+    /* compile predicate  */ WASM_TAIL_CALLS_ENABLED,                   \
+    /* compiler predicate */ AnyCompilerAvailable(cx),                  \
+    /* flag predicate     */ true,                                      \
+    /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ true,                                      \
+    /* shell flag         */ "tail-calls",                              \
+    /* preference name    */ "tail_calls")                              \
   FEATURE(                                                              \
     /* capitalized name   */ MozIntGemm,                                \
     /* lower case name    */ mozIntGemm,                                \
@@ -192,6 +216,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ IsSimdPrivilegedContext(cx),               \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ false,                                     \
     /* shell flag         */ "moz-intgemm",                             \
     /* preference name    */ "moz_intgemm")                             \
   FEATURE(                                                              \
@@ -202,6 +227,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ IonAvailable(cx),                          \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ false,                                     \
     /* shell flag         */ "test-serialization",                      \
     /* preference name    */ "test-serialization")                      \
   FEATURE(                                                              \
@@ -212,6 +238,7 @@ enum class WasmFeatureStage {
     /* compiler predicate */ AnyCompilerAvailable(cx),                  \
     /* flag predicate     */ true,                                      \
     /* flag force enable  */ false,                                     \
+    /* flag fuzz enable   */ false,                                     \
     /* shell flag         */ "final-types",                             \
     /* preference name    */ "final_types")
 

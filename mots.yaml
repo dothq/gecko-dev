@@ -8,7 +8,7 @@
 # documentation and how to modify this file.
 repo: mozilla-central
 created_at: '2021-10-14T12:50:40.073465'
-updated_at: '2023-07-27T20:35:51.531194'
+updated_at: '2023-08-22T15:58:39.751800'
 export:
   path: ./docs/mots/index.rst
   format: rst
@@ -332,6 +332,10 @@ people:
     bmo_id: 496127
     name: Eric Rahm
     nick: erahm
+  - &ErichDonGubler
+    bmo_id: 713343
+    name: Erich Gubler
+    nick: ErichDonGubler
   - &evilpie
     bmo_id: 393835
     name: Tom S
@@ -481,6 +485,10 @@ people:
     bmo_id: 456498
     name: Jan-Ivar Bruaroey
     nick: jib
+  - &jimb
+    bmo_id: 298765
+    name: Jim Blandy
+    nick: jimb
   - &jimm
     bmo_id: 279663
     name: Jim Mathies
@@ -919,6 +927,10 @@ people:
     bmo_id: 586681
     name: Ted Campbell
     nick: tcampbell
+  - &teoxoy
+    bmo_id: 715425
+    name: Teodor Tanasoaia
+    nick: teoxoy
   - &teshaq
     bmo_id: 663555
     name: Tarik Eshaq
@@ -2747,16 +2759,28 @@ modules:
     description: WebGPU implementation
     includes:
       - dom/webgpu/**/*
+      - gfx/wgpu_bindings/**/*
+      - third_party/rust/naga/**/*
+      - third_party/rust/wgpu-core/**/*
+      - third_party/rust/wgpu-hal/**/*
+      - third_party/rust/wgpu-types/**/*
     meta:
       group: dev-platform
       url: https://wiki.mozilla.org/Platform/GFX/WebGPU
       components:
         - Core::Graphics::WebGPU
+      review_group: webgpu-reviewers
+      owners_emeritus:
+        - *kvark
+      peers_emeritus:
+        - *josh
     owners:
-      - *kvark
+      - *jimb
     peers:
-      - *josh
+      - *ErichDonGubler
       - *jgilbert
+      - *nical
+      - *teoxoy
     machine_name: core_webgpu_graphics_submodule
 
   - name: 'Core: WebRTC'
@@ -3198,6 +3222,10 @@ modules:
             - Asaf Romano
             - David Dahl
             - Shawn Wilsher
+          components:
+            - Firefox::Bookmarks & History
+            - Toolkit::Places
+          review_group: places-reviewers
         owners:
           - *mak
         peers:
@@ -3224,6 +3252,7 @@ modules:
           - *itielyn8
           - *sfoster
           - *amy
+          - *emilio
         machine_name: desktop_theme
 
       - name: Desktop UI
@@ -4130,5 +4159,5 @@ modules:
         - Ryan Tilder
       group: dev-platform
 hashes:
-  config: 52559b927657750e1cdbe61145f13aa7ac91c095
-  export: fbf81449f9e1885ce0f01cf58da1ea7171b84507
+  config: acde4a03bdcc4ad796839a5ad11ea939d58ecab4
+  export: 87c127c6e3af0eb35823a20acf445a33cbc0d9c0

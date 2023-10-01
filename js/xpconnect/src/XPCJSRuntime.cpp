@@ -74,7 +74,7 @@
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/Unused.h"
 #include "AccessCheck.h"
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowInner.h"
 #include "nsAboutProtocolUtils.h"
 
 #include "NodeUbiReporting.h"
@@ -1835,9 +1835,6 @@ static void ReportRealmStats(const JS::RealmStats& realmStats,
   ZRREPORT_BYTES(realmJSPathPrefix + "non-syntactic-lexical-scopes-table"_ns,
                  realmStats.nonSyntacticLexicalScopesTable,
                  "The non-syntactic lexical scopes table.");
-
-  ZRREPORT_BYTES(realmJSPathPrefix + "jit-realm"_ns, realmStats.jitRealm,
-                 "The JIT realm.");
 
   if (sundriesGCHeap > 0) {
     // We deliberately don't use ZRREPORT_GC_BYTES here.

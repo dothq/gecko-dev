@@ -36,6 +36,7 @@ const PREF_EM_STRICT_COMPATIBILITY = "extensions.strictCompatibility";
 const PREF_EM_CHECK_UPDATE_SECURITY = "extensions.checkUpdateSecurity";
 const PREF_SYS_ADDON_UPDATE_ENABLED = "extensions.systemAddon.update.enabled";
 const PREF_REMOTESETTINGS_DISABLED = "extensions.remoteSettings.disabled";
+const PREF_USE_REMOTE = "extensions.webextensions.remote";
 
 const PREF_MIN_WEBEXT_PLATFORM_VERSION =
   "extensions.webExtensionsMinPlatformVersion";
@@ -786,6 +787,14 @@ var AddonManagerInternal = {
       );
     }
 
+    Glean.extensions.useRemotePolicy.set(
+      WebExtensionPolicy.useRemoteWebExtensions
+    );
+    Glean.extensions.useRemotePref.set(
+      Services.prefs.getBoolPref(PREF_USE_REMOTE)
+    );
+    Services.prefs.addObserver(PREF_USE_REMOTE, this);
+
     logger.debug("Completed startup sequence");
     this.callManagerListeners("onStartup");
   },
@@ -1138,6 +1147,12 @@ var AddonManagerInternal = {
         } else {
           AMRemoteSettings.init();
         }
+        break;
+      }
+      case PREF_USE_REMOTE: {
+        Glean.extensions.useRemotePref.set(
+          Services.prefs.getBoolPref(PREF_USE_REMOTE)
+        );
         break;
       }
     }
@@ -4038,6 +4053,10 @@ export var AddonManager = {
     ["ERROR_INVALID_DOMAIN", -8],
     // Updates only: The downloaded add-on had a different version than expected.
     ["ERROR_UNEXPECTED_ADDON_VERSION", -9],
+    // The add-on is blocklisted.
+    ["ERROR_BLOCKLISTED", -10],
+    // The add-on is incompatible (w.r.t. the compatibility range).
+    ["ERROR_INCOMPATIBLE", -11],
   ]),
   // The update check timed out
   ERROR_TIMEOUT: -1,
@@ -4657,6 +4676,12 @@ AMRemoteSettings = {
           default:
             throw new Error(`Unexpected type ${typeof prefValue}`);
         }
+
+        // Notify observers about the pref set from AMRemoteSettings.
+        Services.obs.notifyObservers(
+          { entryId, groupName, prefName, prefValue },
+          "am-remote-settings-setpref"
+        );
       } catch (e) {
         logger.error(
           `Failed to process AddonManager RemoteSettings "${entryId}" - "${groupName}": ${prefName}`,

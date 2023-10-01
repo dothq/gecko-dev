@@ -29,7 +29,6 @@
 #include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
-#include "nsGlobalWindowInner.h"
 #include "nsIPrincipal.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/Maybe.h"
@@ -129,7 +128,7 @@ nsresult ModuleLoader::StartFetch(ModuleLoadRequest* aRequest) {
 }
 
 void ModuleLoader::OnModuleLoadComplete(ModuleLoadRequest* aRequest) {
-  MOZ_ASSERT(aRequest->IsReadyToRun());
+  MOZ_ASSERT(aRequest->IsFinished());
 
   if (aRequest->IsTopLevel()) {
     if (aRequest->GetScriptLoadContext()->mIsInline &&
@@ -138,7 +137,7 @@ void ModuleLoader::OnModuleLoadComplete(ModuleLoadRequest* aRequest) {
       GetScriptLoader()->RunScriptWhenSafe(aRequest);
     } else {
       GetScriptLoader()->MaybeMoveToLoadedList(aRequest);
-      GetScriptLoader()->ProcessPendingRequests();
+      GetScriptLoader()->ProcessPendingRequestsAsync();
     }
   }
 

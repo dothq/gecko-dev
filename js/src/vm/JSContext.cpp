@@ -30,6 +30,7 @@
 #include "jsexn.h"
 #include "jstypes.h"
 
+#include "builtin/RegExp.h"  // js::RegExpSearcherLastLimitSentinel
 #include "frontend/FrontendContext.h"
 #include "gc/GC.h"
 #include "irregexp/RegExpAPI.h"
@@ -57,9 +58,8 @@
 #include "vm/JSObject.h"
 #include "vm/PlainObject.h"  // js::PlainObject
 #include "vm/Realm.h"
-#include "vm/StringType.h"     // StringToNewUTF8CharsZ
-#include "vm/ToSource.h"       // js::ValueToSource
-#include "vm/WellKnownAtom.h"  // js_*_str
+#include "vm/StringType.h"  // StringToNewUTF8CharsZ
+#include "vm/ToSource.h"    // js::ValueToSource
 
 #include "vm/Compartment-inl.h"
 #include "vm/Stack-inl.h"
@@ -278,7 +278,7 @@ void JSContext::onOutOfMemory() {
     return;
   }
 
-  RootedValue oomMessage(this, StringValue(names().outOfMemory));
+  RootedValue oomMessage(this, StringValue(names().out_of_memory_));
   setPendingException(oomMessage, nullptr);
   MOZ_ASSERT(status == JS::ExceptionStatus::Throwing);
   status = JS::ExceptionStatus::OutOfMemory;
@@ -290,6 +290,10 @@ JS_PUBLIC_API void js::ReportOutOfMemory(JSContext* cx) {
   MaybeReportOutOfMemoryForDifferentialTesting();
 
   cx->onOutOfMemory();
+}
+
+JS_PUBLIC_API void js::ReportLargeOutOfMemory(JSContext* cx) {
+  js::ReportOutOfMemory(cx);
 }
 
 JS_PUBLIC_API void js::ReportOutOfMemory(FrontendContext* fc) {
@@ -475,7 +479,7 @@ static void PrintSingleError(FILE* file, JS::ConstUTF8CharsZ toStringResult,
 
   if (report->lineno) {
     prefix = JS_smprintf("%s%u:%u ", prefix ? prefix.get() : "", report->lineno,
-                         report->column);
+                         report->column.oneOriginValue());
   }
 
   if (kind != PrintErrorKind::Error) {
@@ -570,7 +574,7 @@ void js::ReportIsNotDefined(JSContext* cx, Handle<PropertyName*> name) {
 
 const char* NullOrUndefinedToCharZ(HandleValue v) {
   MOZ_ASSERT(v.isNullOrUndefined());
-  return v.isNull() ? js_null_str : js_undefined_str;
+  return v.isNull() ? "null" : "undefined";
 }
 
 void js::ReportIsNullOrUndefinedForPropertyAccess(JSContext* cx, HandleValue v,
@@ -589,8 +593,8 @@ void js::ReportIsNullOrUndefinedForPropertyAccess(JSContext* cx, HandleValue v,
     return;
   }
 
-  if (strcmp(bytes.get(), js_undefined_str) == 0 ||
-      strcmp(bytes.get(), js_null_str) == 0) {
+  if (strcmp(bytes.get(), "undefined") == 0 ||
+      strcmp(bytes.get(), "null") == 0) {
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_NO_PROPERTIES,
                              bytes.get());
   } else {
@@ -631,8 +635,8 @@ void js::ReportIsNullOrUndefinedForPropertyAccess(JSContext* cx, HandleValue v,
     return;
   }
 
-  if (strcmp(bytes.get(), js_undefined_str) == 0 ||
-      strcmp(bytes.get(), js_null_str) == 0) {
+  if (strcmp(bytes.get(), "undefined") == 0 ||
+      strcmp(bytes.get(), "null") == 0) {
     JS_ReportErrorNumberUTF8(cx, GetErrorMessage, nullptr, JSMSG_PROPERTY_FAIL,
                              keyStr.get(), bytes.get());
     return;
@@ -700,7 +704,7 @@ JSObject* js::CreateErrorNotesArray(JSContext* cx, JSErrorReport* report) {
     if (!DefineDataProperty(cx, noteObj, cx->names().lineNumber, linenoVal)) {
       return nullptr;
     }
-    RootedValue columnVal(cx, Int32Value(note->column));
+    RootedValue columnVal(cx, Int32Value(note->column.oneOriginValue()));
     if (!DefineDataProperty(cx, noteObj, cx->names().columnNumber, columnVal)) {
       return nullptr;
     }
@@ -983,6 +987,11 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
       inUnsafeRegion(this, 0),
       generationalDisabled(this, 0),
       compactingDisabledCount(this, 0),
+#ifdef DEBUG
+      regExpSearcherLastLimit(this, RegExpSearcherLastLimitSentinel),
+#else
+      regExpSearcherLastLimit(this, 0),
+#endif
       frontendCollectionPool_(this),
       suppressProfilerSampling(false),
       tempLifoAlloc_(this, (size_t)TEMP_LIFO_ALLOC_PRIMARY_CHUNK_SIZE),
@@ -1009,8 +1018,6 @@ JSContext::JSContext(JSRuntime* runtime, const JS::ContextOptions& options)
       interruptCallbackDisabled(this, false),
       interruptBits_(0),
       inlinedICScript_(this, nullptr),
-      lastStubFoldingBailoutChild_(this, nullptr),
-      lastStubFoldingBailoutParent_(this, nullptr),
       jitStackLimit(JS::NativeStackLimitMin),
       jitStackLimitNoInterrupt(this, JS::NativeStackLimitMin),
       jobQueue(this, nullptr),
@@ -1066,7 +1073,7 @@ void JSContext::setRuntime(JSRuntime* rt) {
 
 #if defined(NIGHTLY_BUILD)
 static bool IsOutOfMemoryException(JSContext* cx, const Value& v) {
-  return v == StringValue(cx->names().outOfMemory);
+  return v == StringValue(cx->names().out_of_memory_);
 }
 #endif
 

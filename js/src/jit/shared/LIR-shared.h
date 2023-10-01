@@ -3393,18 +3393,23 @@ class LWasmCall : public LVariadicInstruction<0, 0> {
   }
 
   MWasmCallBase* callBase() const {
-    if (isCatchable()) {
+    if (isCatchable() && !isReturnCall()) {
       return static_cast<MWasmCallBase*>(mirCatchable());
+    }
+    if (isReturnCall()) {
+      return static_cast<MWasmReturnCall*>(mirReturnCall());
     }
     return static_cast<MWasmCallBase*>(mirUncatchable());
   }
   bool isCatchable() const { return mir_->isWasmCallCatchable(); }
+  bool isReturnCall() const { return mir_->isWasmReturnCall(); }
   MWasmCallCatchable* mirCatchable() const {
     return mir_->toWasmCallCatchable();
   }
   MWasmCallUncatchable* mirUncatchable() const {
     return mir_->toWasmCallUncatchable();
   }
+  MWasmReturnCall* mirReturnCall() const { return mir_->toWasmReturnCall(); }
 
   static bool isCallPreserved(AnyRegister reg) {
     // All MWasmCalls preserve the TLS register:
@@ -3475,7 +3480,7 @@ inline LAllocation LStackArea::ResultIterator::alloc() const {
   MWasmStackResultArea* area = alloc_.ins()->toWasmStackResultArea()->mir();
   return LStackSlot(area->base() - area->result(idx_).offset());
 }
-inline bool LStackArea::ResultIterator::isGcPointer() const {
+inline bool LStackArea::ResultIterator::isWasmAnyRef() const {
   MOZ_ASSERT(!done());
   MWasmStackResultArea* area = alloc_.ins()->toWasmStackResultArea()->mir();
   MIRType type = area->result(idx_).type();
@@ -3486,7 +3491,7 @@ inline bool LStackArea::ResultIterator::isGcPointer() const {
     return false;
   }
 #endif
-  return LDefinition::TypeFrom(type) == LDefinition::OBJECT;
+  return LDefinition::TypeFrom(type) == LDefinition::WASM_ANYREF;
 }
 
 class LWasmStackResult : public LInstructionHelper<1, 1, 0> {

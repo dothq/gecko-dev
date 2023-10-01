@@ -9,6 +9,7 @@ import {
   ParentAutocompleteOption,
 } from "resource://gre/modules/LoginHelper.sys.mjs";
 import { TelemetryUtils } from "resource://gre/modules/TelemetryUtils.sys.mjs";
+import { showConfirmation } from "resource://gre/modules/FillHelpers.sys.mjs";
 
 const lazy = {};
 
@@ -138,16 +139,6 @@ async function getReusableMasksAsync(browser, _origin) {
   });
 
   return [undefined, response.status];
-}
-
-/**
- * Show confirmation tooltip
- * @param browser
- * @param messageId message ID from browser/browser.properties
- */
-function showConfirmation(browser, messageId) {
-  const anchor = browser.ownerDocument.getElementById("identity-icon");
-  anchor.ownerGlobal.ConfirmationHint.show(anchor, messageId, {});
 }
 
 /**
@@ -394,7 +385,11 @@ function isSignup(scenarioName) {
 
 class RelayOffered {
   async *autocompleteItemsAsync(_origin, scenarioName, hasInput) {
-    if (!hasInput && isSignup(scenarioName)) {
+    if (
+      !hasInput &&
+      isSignup(scenarioName) &&
+      !Services.prefs.prefIsLocked("signon.firefoxRelay.feature")
+    ) {
       const isUserEligible = lazy.NimbusFeatures[
         "password-autocomplete"
       ].getVariable("firefoxRelayIntegration");

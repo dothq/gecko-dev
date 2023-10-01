@@ -504,7 +504,6 @@ static constexpr struct {
     // need to re-layout.
     {"browser.theme.toolbar-theme"_ns, widget::ThemeChangeKind::AllBits},
     {"browser.theme.content-theme"_ns},
-    {"mathml.legacy_maction_and_semantics_implementations.disabled"_ns},
     {"dom.element.popover.enabled"_ns},
     {"mathml.legacy_mathvariant_attribute.disabled"_ns},
 };
@@ -1536,9 +1535,8 @@ Modifiers LookAndFeel::GetMenuAccessKeyModifiers() {
     case dom::KeyboardEvent_Binding::DOM_VK_ALT:
       return MODIFIER_ALT;
     case dom::KeyboardEvent_Binding::DOM_VK_META:
-      return MODIFIER_META;
     case dom::KeyboardEvent_Binding::DOM_VK_WIN:
-      return MODIFIER_OS;
+      return MODIFIER_META;
     default:
       return 0;
   }

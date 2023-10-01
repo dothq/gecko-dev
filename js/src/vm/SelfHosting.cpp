@@ -1378,6 +1378,25 @@ static bool intrinsic_RegExpGetSubstitution(JSContext* cx, unsigned argc,
                                namedCaptures, args.rval());
 }
 
+static bool intrinsic_RegExpHasCaptureGroups(JSContext* cx, unsigned argc,
+                                             Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  MOZ_ASSERT(args.length() == 2);
+  MOZ_ASSERT(args[0].isObject());
+  MOZ_ASSERT(args[1].isString());
+
+  Rooted<RegExpObject*> obj(cx, &args[0].toObject().as<RegExpObject>());
+  Rooted<JSString*> string(cx, args[1].toString());
+
+  bool result;
+  if (!RegExpHasCaptureGroups(cx, obj, string, &result)) {
+    return false;
+  }
+
+  args.rval().setBoolean(result);
+  return true;
+}
+
 static bool intrinsic_StringReplaceString(JSContext* cx, unsigned argc,
                                           Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
@@ -2064,13 +2083,18 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_INLINABLE_FN("RegExpExecForTest", intrinsic_RegExpExec<true>, 2, 0,
                     IntrinsicRegExpExecForTest),
     JS_FN("RegExpGetSubstitution", intrinsic_RegExpGetSubstitution, 5, 0),
+    JS_INLINABLE_FN("RegExpHasCaptureGroups", intrinsic_RegExpHasCaptureGroups,
+                    2, 0, RegExpHasCaptureGroups),
     JS_INLINABLE_FN("RegExpInstanceOptimizable", RegExpInstanceOptimizable, 1,
                     0, RegExpInstanceOptimizable),
     JS_INLINABLE_FN("RegExpMatcher", RegExpMatcher, 3, 0, RegExpMatcher),
     JS_INLINABLE_FN("RegExpPrototypeOptimizable", RegExpPrototypeOptimizable, 1,
                     0, RegExpPrototypeOptimizable),
     JS_INLINABLE_FN("RegExpSearcher", RegExpSearcher, 3, 0, RegExpSearcher),
+    JS_INLINABLE_FN("RegExpSearcherLastLimit", RegExpSearcherLastLimit, 0, 0,
+                    RegExpSearcherLastLimit),
     JS_INLINABLE_FN("SameValue", js::obj_is, 2, 0, ObjectIs),
+    JS_FN("SetCopy", SetObject::copy, 1, 0),
     JS_FN("SharedArrayBufferByteLength",
           intrinsic_ArrayBufferByteLength<SharedArrayBufferObject>, 1, 0),
     JS_FN("SharedArrayBufferCopyData",
@@ -2247,7 +2271,9 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("std_Reflect_isExtensible", Reflect_isExtensible, 1, 0),
     JS_FN("std_Reflect_ownKeys", Reflect_ownKeys, 1, 0),
     JS_FN("std_Set_add", SetObject::add, 1, 0),
-    JS_FN("std_Set_has", SetObject::has, 1, 0),
+    JS_FN("std_Set_delete", SetObject::delete_, 1, 0),
+    JS_INLINABLE_FN("std_Set_has", SetObject::has, 1, 0, SetHas),
+    JS_INLINABLE_FN("std_Set_size", SetObject::size, 1, 0, SetSize),
     JS_FN("std_Set_values", SetObject::values, 0, 0),
     JS_INLINABLE_FN("std_String_charCodeAt", str_charCodeAt, 1, 0,
                     StringCharCodeAt),
@@ -2768,6 +2794,13 @@ static bool GetComputedIntrinsic(JSContext* cx, Handle<PropertyName*> name,
       return false;
     }
     cx->global()->setComputedIntrinsicsHolder(computedIntrinsicsHolder);
+
+    // Disable the interrupt callback while executing the top-level script.
+    // This prevents recursive calls to GetComputedIntrinsic through the
+    // interrupt callback.
+    bool hadInterruptsDisabled = JS_DisableInterruptCallback(cx);
+    auto resetInterrupts = mozilla::MakeScopeExit(
+        [&]() { JS_ResetInterruptCallback(cx, hadInterruptsDisabled); });
 
     // Attempt to execute the top-level script. If they fails to run to
     // successful completion, throw away the holder to avoid a partial

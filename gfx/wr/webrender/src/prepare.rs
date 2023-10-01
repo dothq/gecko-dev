@@ -27,10 +27,11 @@ use crate::prim_store::line_dec::MAX_LINE_DECORATION_RESOLUTION;
 use crate::prim_store::*;
 use crate::prim_store::gradient::GradientGpuBlockBuilder;
 use crate::render_backend::DataStores;
+use crate::render_target::RenderTargetKind;
 use crate::render_task_graph::{RenderTaskId};
 use crate::render_task_cache::RenderTaskCacheKeyKind;
 use crate::render_task_cache::{RenderTaskCacheKey, to_cache_size, RenderTaskParent};
-use crate::render_task::{RenderTaskKind, RenderTask};
+use crate::render_task::{RenderTaskKind, RenderTask, SubPass, MaskSubPass};
 use crate::renderer::{GpuBufferBuilder, GpuBufferAddress};
 use crate::segment::{EdgeAaSegmentMask, SegmentBuilder};
 use crate::space::SpaceMapper;
@@ -1593,6 +1594,7 @@ fn update_clip_task_for_brush(
                     device_pixel_scale,
                     &dirty_world_rect,
                     &mut data_stores.clip,
+                    frame_state.rg_builder,
                     false,
                 );
 
@@ -2056,8 +2058,18 @@ fn add_segment(
                 quad_flags,
                 prim_instance.vis.clip_chain.clips_range,
                 needs_scissor_rect,
+                RenderTargetKind::Color,
             ),
         ));
+
+        let masks = MaskSubPass {
+            clip_node_range: prim_instance.vis.clip_chain.clips_range,
+        };
+
+        let task = frame_state.rg_builder.get_task_mut(task_id);
+        task.add_sub_pass(SubPass::Masks {
+            masks,
+        });
 
         frame_state.surface_builder.add_child_render_task(
             task_id,

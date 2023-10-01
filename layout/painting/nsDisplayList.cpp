@@ -773,14 +773,21 @@ void nsDisplayListBuilder::AddEffectUpdate(dom::RemoteBrowser* aBrowser,
   // we get from each display item.
   nsPresContext* pc =
       mReferenceFrame ? mReferenceFrame->PresContext() : nullptr;
-  if (pc && (pc->Type() != nsPresContext::eContext_Galley)) {
+  if (pc && pc->Type() != nsPresContext::eContext_Galley) {
     Maybe<dom::EffectsInfo> existing = mEffectsUpdates.MaybeGet(aBrowser);
-    if (existing.isSome()) {
+    if (existing) {
       // Only the visible rect should differ, the scales should match.
       MOZ_ASSERT(existing->mRasterScale == aUpdate.mRasterScale &&
                  existing->mTransformToAncestorScale ==
                      aUpdate.mTransformToAncestorScale);
-      update.mVisibleRect = update.mVisibleRect.Union(existing->mVisibleRect);
+      if (existing->mVisibleRect) {
+        if (update.mVisibleRect) {
+          update.mVisibleRect =
+              Some(update.mVisibleRect->Union(*existing->mVisibleRect));
+        } else {
+          update.mVisibleRect = existing->mVisibleRect;
+        }
+      }
     }
   }
   mEffectsUpdates.InsertOrUpdate(aBrowser, update);
@@ -4008,7 +4015,7 @@ void nsDisplayOutline::Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) {
   nsRect rect = GetInnerRect() + ToReferenceFrame();
   nsPresContext* pc = mFrame->PresContext();
   if (IsThemedOutline()) {
-    rect.Inflate(mFrame->StyleOutline()->mOutlineOffset.ToAppUnits());
+    rect.Inflate(mFrame->StyleOutline()->EffectiveOffsetFor(rect));
     pc->Theme()->DrawWidgetBackground(aCtx, mFrame,
                                       StyleAppearance::FocusOutline, rect,
                                       GetPaintRect(aBuilder, aCtx));
@@ -4037,7 +4044,7 @@ bool nsDisplayOutline::CreateWebRenderCommands(
   nsPresContext* pc = mFrame->PresContext();
   nsRect rect = GetInnerRect() + ToReferenceFrame();
   if (IsThemedOutline()) {
-    rect.Inflate(mFrame->StyleOutline()->mOutlineOffset.ToAppUnits());
+    rect.Inflate(mFrame->StyleOutline()->EffectiveOffsetFor(rect));
     return pc->Theme()->CreateWebRenderCommandsForWidget(
         aBuilder, aResources, aSc, aManager, mFrame,
         StyleAppearance::FocusOutline, rect);
@@ -5166,10 +5173,10 @@ bool nsDisplayOwnLayer::IsScrollbarContainer() const {
 }
 
 bool nsDisplayOwnLayer::IsRootScrollbarContainer() const {
-  if (!IsScrollbarContainer()) {
-    return false;
-  }
+  return IsScrollbarContainer() && IsScrollbarLayerForRoot();
+}
 
+bool nsDisplayOwnLayer::IsScrollbarLayerForRoot() const {
   return mFrame->PresContext()->IsRootContentDocumentCrossProcess() &&
          mScrollbarData.mTargetViewId ==
              nsLayoutUtils::ScrollIdForRootScrollFrame(mFrame->PresContext());
@@ -5304,11 +5311,15 @@ bool nsDisplayOwnLayer::UpdateScrollData(WebRenderScrollData* aData,
     aLayerData->SetScrollbarAnimationId(mWrAnimationId);
     LayoutDeviceRect bounds = LayoutDeviceIntRect::FromAppUnits(
         mBounds, mFrame->PresContext()->AppUnitsPerDevPixel());
-    // We use a resolution of 1.0 because this is a WebRender codepath which
-    // always uses containerless scrolling, and so resolution doesn't apply to
-    // scrollbars.
+    // Subframe scrollbars are subject to the pinch-zoom scale,
+    // but root scrollbars are not because they are outside of the
+    // region that is zoomed.
+    const float resolution =
+        IsScrollbarLayerForRoot()
+            ? 1.0f
+            : mFrame->PresContext()->PresShell()->GetCumulativeResolution();
     LayerIntRect layerBounds =
-        RoundedOut(bounds * LayoutDeviceToLayerScale(1.0f));
+        RoundedOut(bounds * LayoutDeviceToLayerScale(resolution));
     aLayerData->SetVisibleRegion(LayerIntRegion(layerBounds));
   }
   return true;
@@ -6073,13 +6084,13 @@ Point3D nsDisplayTransform::GetDeltaToTransformOrigin(
   CSSPoint origin = nsStyleTransformMatrix::Convert2DPosition(
       transformOrigin.horizontal, transformOrigin.vertical, aRefBox);
 
-  if (aFrame->HasAnyStateBits(NS_FRAME_SVG_LAYOUT)) {
-    // SVG frames (unlike other frames) have a reference box that can be (and
-    // typically is) offset from the TopLeft() of the frame. We need to account
-    // for that here.
-    origin.x += CSSPixel::FromAppUnits(aRefBox.X());
-    origin.y += CSSPixel::FromAppUnits(aRefBox.Y());
-  }
+  // Note:
+  // 1. SVG frames have a reference box that can be (and typically is) offset
+  //    from the TopLeft() of the frame. We need to account for that here.
+  // 2. If we are using transform-box:content-box in CSS layout, we have the
+  //    offset from TopLeft() of the frame as well.
+  origin.x += CSSPixel::FromAppUnits(aRefBox.X());
+  origin.y += CSSPixel::FromAppUnits(aRefBox.Y());
 
   float scale = AppUnitsPerCSSPixel() / float(aAppUnitsPerPixel);
   float z = transformOrigin.depth._0;

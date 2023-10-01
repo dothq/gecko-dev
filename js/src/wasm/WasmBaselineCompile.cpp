@@ -370,7 +370,7 @@ bool BaseCompiler::beginFunction() {
   for (WasmABIArgIter i(args); !i.done(); i++) {
     ABIArg argLoc = *i;
     if (argLoc.kind() == ABIArg::Stack &&
-        args[i.index()] == MIRType::RefOrNull) {
+        args[i.index()] == MIRType::WasmAnyRef) {
       uint32_t offset = argLoc.offsetFromArgBase();
       MOZ_ASSERT(offset < inboundStackArgBytes);
       MOZ_ASSERT(offset % sizeof(void*) == 0);
@@ -443,7 +443,7 @@ bool BaseCompiler::beginFunction() {
   for (const Local& l : localInfo_) {
     // Locals that are stack arguments were already added to the stackmap
     // before pushing the frame.
-    if (l.type == MIRType::RefOrNull && !l.isStackArgument()) {
+    if (l.type == MIRType::WasmAnyRef && !l.isStackArgument()) {
       uint32_t offs = fr.localOffsetFromSp(l);
       MOZ_ASSERT(0 == (offs % sizeof(void*)));
       stackMapGenerator_.machineStackTracker.setGCPointer(offs / sizeof(void*));
@@ -483,7 +483,7 @@ bool BaseCompiler::beginFunction() {
       case MIRType::Int64:
         fr.storeLocalI64(RegI64(i->gpr64()), l);
         break;
-      case MIRType::RefOrNull: {
+      case MIRType::WasmAnyRef: {
         DebugOnly<uint32_t> offs = fr.localOffsetFromSp(l);
         MOZ_ASSERT(0 == (offs % sizeof(void*)));
         fr.storeLocalRef(RegRef(i->gpr()), l);
@@ -1533,7 +1533,7 @@ void BaseCompiler::passArg(ValType type, const Stk& arg, FunctionCall* call) {
       break;
     }
     case ValType::Ref: {
-      ABIArg argLoc = call->abi.next(MIRType::RefOrNull);
+      ABIArg argLoc = call->abi.next(MIRType::WasmAnyRef);
       if (argLoc.kind() == ABIArg::Stack) {
         ScratchRef scratch(*this);
         loadRef(arg, scratch);
@@ -1575,9 +1575,18 @@ class OutOfLineAbortingTrap : public OutOfLineCode {
   }
 };
 
+#ifdef ENABLE_WASM_TAIL_CALLS
+static ReturnCallAdjustmentInfo BuildReturnCallAdjustmentInfo(
+    const FuncType& callerType, const FuncType& calleeType) {
+  return ReturnCallAdjustmentInfo(
+      StackArgAreaSizeUnaligned(ArgTypeVector(calleeType)),
+      StackArgAreaSizeUnaligned(ArgTypeVector(callerType)));
+}
+#endif
+
 bool BaseCompiler::callIndirect(uint32_t funcTypeIndex, uint32_t tableIndex,
                                 const Stk& indexVal, const FunctionCall& call,
-                                CodeOffset* fastCallOffset,
+                                bool tailCall, CodeOffset* fastCallOffset,
                                 CodeOffset* slowCallOffset) {
   CallIndirectId callIndirectId =
       CallIndirectId::forFuncType(moduleEnv_, funcTypeIndex);
@@ -1604,8 +1613,19 @@ bool BaseCompiler::callIndirect(uint32_t funcTypeIndex, uint32_t tableIndex,
   }
   nullCheckFailed = nullref->entry();
 #endif
-  masm.wasmCallIndirect(desc, callee, oob->entry(), nullCheckFailed,
-                        mozilla::Nothing(), fastCallOffset, slowCallOffset);
+  if (!tailCall) {
+    masm.wasmCallIndirect(desc, callee, oob->entry(), nullCheckFailed,
+                          mozilla::Nothing(), fastCallOffset, slowCallOffset);
+  } else {
+#ifdef ENABLE_WASM_TAIL_CALLS
+    ReturnCallAdjustmentInfo retCallInfo = BuildReturnCallAdjustmentInfo(
+        this->funcType(), (*moduleEnv_.types)[funcTypeIndex].funcType());
+    masm.wasmReturnCallIndirect(desc, callee, oob->entry(), nullCheckFailed,
+                                mozilla::Nothing(), retCallInfo);
+#else
+    MOZ_CRASH("not available");
+#endif
+  }
   return true;
 }
 
@@ -3175,7 +3195,7 @@ bool BaseCompiler::jumpConditionalWithResults(BranchState* b, RegRef object,
       needIntegerResultRegisters(b->resultType);
       branchIfRefSubtype(
           object, sourceType, destType, &notTaken,
-          /*onSuccess=*/b->invertBranch ? !onSuccess : onSuccess);
+          /*onSuccess=*/b->invertBranch ? onSuccess : !onSuccess);
       freeIntegerResultRegisters(b->resultType);
 
       // Shuffle stack args.
@@ -3821,15 +3841,15 @@ bool BaseCompiler::emitBrOnNull() {
   if (b.hasBlockResults()) {
     needResultRegisters(b.resultType);
   }
-  RegRef rp = popRef();
+  RegRef ref = popRef();
   if (b.hasBlockResults()) {
     freeResultRegisters(b.resultType);
   }
-  if (!jumpConditionalWithResults(&b, Assembler::Equal, rp,
-                                  ImmWord(NULLREF_VALUE))) {
+  if (!jumpConditionalWithResults(&b, Assembler::Equal, ref,
+                                  ImmWord(AnyRef::NullRefValue))) {
     return false;
   }
-  pushRef(rp);
+  pushRef(ref);
 
   return true;
 }
@@ -3860,22 +3880,22 @@ bool BaseCompiler::emitBrOnNonNull() {
   needIntegerResultRegisters(b.resultType);
 
   // Get the ref from the top of the stack
-  RegRef condition = popRef();
+  RegRef refCondition = popRef();
 
   // Create a copy of the ref for passing to the on_non_null label,
   // the original ref is used in the condition.
-  RegRef rp = needRef();
-  moveRef(condition, rp);
-  pushRef(rp);
+  RegRef ref = needRef();
+  moveRef(refCondition, ref);
+  pushRef(ref);
 
   freeIntegerResultRegisters(b.resultType);
 
-  if (!jumpConditionalWithResults(&b, Assembler::NotEqual, condition,
-                                  ImmWord(NULLREF_VALUE))) {
+  if (!jumpConditionalWithResults(&b, Assembler::NotEqual, refCondition,
+                                  ImmWord(AnyRef::NullRefValue))) {
     return false;
   }
 
-  freeRef(condition);
+  freeRef(refCondition);
 
   // Dropping null reference.
   dropValue();
@@ -4134,9 +4154,6 @@ bool BaseCompiler::emitCatch() {
 #endif
       }
       case ValType::Ref: {
-        // TODO/AnyRef-boxing: With boxed immediates and strings, this may need
-        // to handle other kinds of values.
-        ASSERT_ANYREF_IS_JSOBJECT;
         RegRef reg = needRef();
         masm.loadPtr(Address(data, offset), reg);
         pushRef(reg);
@@ -4562,8 +4579,8 @@ bool BaseCompiler::emitReturn() {
   return true;
 }
 
-bool BaseCompiler::emitCallArgs(const ValTypeVector& argTypes,
-                                const StackResultsLoc& results,
+template <typename T>
+bool BaseCompiler::emitCallArgs(const ValTypeVector& argTypes, T results,
                                 FunctionCall* baselineCall,
                                 CalleeOnStack calleeOnStack) {
   MOZ_ASSERT(!deadCode_);
@@ -4574,7 +4591,7 @@ bool BaseCompiler::emitCallArgs(const ValTypeVector& argTypes,
   startCallArgs(StackArgAreaSizeUnaligned(args), baselineCall);
 
   // Args are deeper on the stack than the stack result area, if any.
-  size_t argsDepth = results.count();
+  size_t argsDepth = results.onStackCount();
   // They're deeper than the callee too, for callIndirect.
   if (calleeOnStack == CalleeOnStack::True) {
     argsDepth++;
@@ -4590,11 +4607,11 @@ bool BaseCompiler::emitCallArgs(const ValTypeVector& argTypes,
       ABIArg argLoc = baselineCall->abi.next(MIRType::Pointer);
       if (argLoc.kind() == ABIArg::Stack) {
         ScratchPtr scratch(*this);
-        fr.computeOutgoingStackResultAreaPtr(results, scratch);
+        results.getStackResultArea(fr, scratch);
         masm.storePtr(scratch, Address(masm.getStackPointer(),
                                        argLoc.offsetFromArgBase()));
       } else {
-        fr.computeOutgoingStackResultAreaPtr(results, RegPtr(argLoc.gpr()));
+        results.getStackResultArea(fr, RegPtr(argLoc.gpr()));
       }
     }
   }
@@ -4635,7 +4652,7 @@ void BaseCompiler::pushReturnValueOfCall(const FunctionCall& call,
       break;
     }
 #endif
-    case MIRType::RefOrNull: {
+    case MIRType::WasmAnyRef: {
       RegRef rv = captureReturnedRef();
       pushRef(rv);
       break;
@@ -4755,7 +4772,7 @@ bool BaseCompiler::emitCall() {
             import ? RestoreRegisterStateAndRealm::True
                    : RestoreRegisterStateAndRealm::False);
 
-  if (!emitCallArgs(funcType.args(), results, &baselineCall,
+  if (!emitCallArgs(funcType.args(), NormalCallResults(results), &baselineCall,
                     CalleeOnStack::False)) {
     return false;
   }
@@ -4781,6 +4798,59 @@ bool BaseCompiler::emitCall() {
   captureCallResultRegisters(resultType);
   return pushCallResults(baselineCall, resultType, results);
 }
+
+#ifdef ENABLE_WASM_TAIL_CALLS
+bool BaseCompiler::emitReturnCall() {
+  uint32_t funcIndex;
+  BaseNothingVector args_{};
+  BaseNothingVector unused_values{};
+  if (!iter_.readReturnCall(&funcIndex, &args_, &unused_values)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  sync();
+
+  const FuncType& funcType = *moduleEnv_.funcs[funcIndex].type;
+  bool import = moduleEnv_.funcIsImport(funcIndex);
+
+  uint32_t numArgs = funcType.args().length();
+
+  FunctionCall baselineCall{};
+  beginCall(baselineCall, UseABI::Wasm,
+            import ? RestoreRegisterStateAndRealm::True
+                   : RestoreRegisterStateAndRealm::False);
+
+  if (!emitCallArgs(funcType.args(), TailCallResults(funcType), &baselineCall,
+                    CalleeOnStack::False)) {
+    return false;
+  }
+
+  ReturnCallAdjustmentInfo retCallInfo =
+      BuildReturnCallAdjustmentInfo(this->funcType(), funcType);
+
+  if (import) {
+    CallSiteDesc desc(bytecodeOffset(), CallSiteDesc::Import);
+    CalleeDesc callee = CalleeDesc::import(
+        moduleEnv_.offsetOfFuncImportInstanceData(funcIndex));
+    masm.wasmReturnCallImport(desc, callee, retCallInfo);
+  } else {
+    CallSiteDesc desc(bytecodeOffset(), CallSiteDesc::ReturnFunc);
+    masm.wasmReturnCall(desc, funcIndex, retCallInfo);
+  }
+
+  MOZ_ASSERT(stackMapGenerator_.framePushedExcludingOutboundCallArgs.isSome());
+  stackMapGenerator_.framePushedExcludingOutboundCallArgs.reset();
+
+  popValueStackBy(numArgs);
+
+  deadCode_ = true;
+  return true;
+}
+#endif
 
 bool BaseCompiler::emitCallIndirect() {
   uint32_t funcTypeIndex;
@@ -4815,7 +4885,7 @@ bool BaseCompiler::emitCallIndirect() {
   // MacroAssembler::wasmCallIndirect).
   beginCall(baselineCall, UseABI::Wasm, RestoreRegisterStateAndRealm::False);
 
-  if (!emitCallArgs(funcType.args(), results, &baselineCall,
+  if (!emitCallArgs(funcType.args(), NormalCallResults(results), &baselineCall,
                     CalleeOnStack::True)) {
     return false;
   }
@@ -4824,7 +4894,7 @@ bool BaseCompiler::emitCallIndirect() {
   CodeOffset fastCallOffset;
   CodeOffset slowCallOffset;
   if (!callIndirect(funcTypeIndex, tableIndex, callee, baselineCall,
-                    &fastCallOffset, &slowCallOffset)) {
+                    /*tailCall*/ false, &fastCallOffset, &slowCallOffset)) {
     return false;
   }
   if (!createStackMap("emitCallIndirect", fastCallOffset)) {
@@ -4843,6 +4913,58 @@ bool BaseCompiler::emitCallIndirect() {
   captureCallResultRegisters(resultType);
   return pushCallResults(baselineCall, resultType, results);
 }
+
+#ifdef ENABLE_WASM_TAIL_CALLS
+bool BaseCompiler::emitReturnCallIndirect() {
+  uint32_t funcTypeIndex;
+  uint32_t tableIndex;
+  Nothing callee_;
+  BaseNothingVector args_{};
+  BaseNothingVector unused_values{};
+  if (!iter_.readReturnCallIndirect(&funcTypeIndex, &tableIndex, &callee_,
+                                    &args_, &unused_values)) {
+    return false;
+  }
+
+  if (deadCode_) {
+    return true;
+  }
+
+  sync();
+
+  const FuncType& funcType = (*moduleEnv_.types)[funcTypeIndex].funcType();
+
+  // Stack: ... arg1 .. argn callee
+
+  uint32_t numArgs = funcType.args().length() + 1;
+
+  FunctionCall baselineCall{};
+  // State and realm are restored as needed by by callIndirect (really by
+  // MacroAssembler::wasmCallIndirect).
+  beginCall(baselineCall, UseABI::Wasm, RestoreRegisterStateAndRealm::False);
+
+  if (!emitCallArgs(funcType.args(), TailCallResults(funcType), &baselineCall,
+                    CalleeOnStack::True)) {
+    return false;
+  }
+
+  const Stk& callee = peek(0);
+  CodeOffset fastCallOffset;
+  CodeOffset slowCallOffset;
+  if (!callIndirect(funcTypeIndex, tableIndex, callee, baselineCall,
+                    /*tailCall*/ true, &fastCallOffset, &slowCallOffset)) {
+    return false;
+  }
+
+  MOZ_ASSERT(stackMapGenerator_.framePushedExcludingOutboundCallArgs.isSome());
+  stackMapGenerator_.framePushedExcludingOutboundCallArgs.reset();
+
+  popValueStackBy(numArgs);
+
+  deadCode_ = true;
+  return true;
+}
+#endif
 
 #ifdef ENABLE_WASM_FUNCTION_REFERENCES
 bool BaseCompiler::emitCallRef() {
@@ -4875,7 +4997,7 @@ bool BaseCompiler::emitCallRef() {
   // MacroAssembler::wasmCallRef).
   beginCall(baselineCall, UseABI::Wasm, RestoreRegisterStateAndRealm::False);
 
-  if (!emitCallArgs(funcType->args(), results, &baselineCall,
+  if (!emitCallArgs(funcType->args(), NormalCallResults(results), &baselineCall,
                     CalleeOnStack::True)) {
     return false;
   }
@@ -4940,12 +5062,11 @@ bool BaseCompiler::emitUnaryMathBuiltinCall(SymbolicAddress callee,
   ValType retType = operandType;
   uint32_t numArgs = signature.length();
   size_t stackSpace = stackConsumed(numArgs);
-  StackResultsLoc noStackResults;
 
   FunctionCall baselineCall{};
   beginCall(baselineCall, UseABI::Builtin, RestoreRegisterStateAndRealm::False);
 
-  if (!emitCallArgs(signature, noStackResults, &baselineCall,
+  if (!emitCallArgs(signature, NoCallResults(), &baselineCall,
                     CalleeOnStack::False)) {
     return false;
   }
@@ -5225,7 +5346,7 @@ bool BaseCompiler::emitSetOrTeeLocal(uint32_t slot) {
     case ValType::Ref: {
       RegRef rv = popRef();
       syncLocal(slot);
-      fr.storeLocalRef(rv, localFromSlot(slot, MIRType::RefOrNull));
+      fr.storeLocalRef(rv, localFromSlot(slot, MIRType::WasmAnyRef));
       if (isSetLocal) {
         freeRef(rv);
       } else {
@@ -5713,7 +5834,7 @@ bool BaseCompiler::emitInstanceCall(const SymbolicAddressSignature& builtin) {
       case MIRType::Float32:
         t = ValType::F32;
         break;
-      case MIRType::RefOrNull:
+      case MIRType::WasmAnyRef:
         t = RefType::extern_();
         break;
       case MIRType::Pointer:
@@ -5774,7 +5895,7 @@ bool BaseCompiler::emitRefNull() {
     return true;
   }
 
-  pushRef(NULLREF_VALUE);
+  pushRef(AnyRef::NullRefValue);
   return true;
 }
 
@@ -5791,7 +5912,7 @@ bool BaseCompiler::emitRefIsNull() {
   RegRef r = popRef();
   RegI32 rd = narrowRef(r);
 
-  masm.cmpPtrSet(Assembler::Equal, r, ImmWord(NULLREF_VALUE), rd);
+  masm.cmpPtrSet(Assembler::Equal, r, ImmWord(AnyRef::NullRefValue), rd);
   pushI32(rd);
   return true;
 }
@@ -6406,10 +6527,6 @@ bool BaseCompiler::emitBarrieredStore(const Maybe<RegRef>& object,
                                       RegPtr valueAddr, RegRef value,
                                       PreBarrierKind preBarrierKind,
                                       PostBarrierKind postBarrierKind) {
-  // TODO/AnyRef-boxing: With boxed immediates and strings, the write
-  // barrier is going to have to be more complicated.
-  ASSERT_ANYREF_IS_JSOBJECT;
-
   // The pre-barrier preserves all allocated registers.
   if (preBarrierKind == PreBarrierKind::Normal) {
     emitPreBarrier(valueAddr);
@@ -6434,15 +6551,11 @@ bool BaseCompiler::emitBarrieredStore(const Maybe<RegRef>& object,
 }
 
 void BaseCompiler::emitBarrieredClear(RegPtr valueAddr) {
-  // TODO/AnyRef-boxing: With boxed immediates and strings, the write
-  // barrier is going to have to be more complicated.
-  ASSERT_ANYREF_IS_JSOBJECT;
-
   // The pre-barrier preserves all allocated registers.
   emitPreBarrier(valueAddr);
 
   // Store null
-  masm.storePtr(ImmWord(0), Address(valueAddr, 0));
+  masm.storePtr(ImmWord(AnyRef::NullRefValue), Address(valueAddr, 0));
 
   // No post-barrier is needed, as null does not require a store buffer entry
 }
@@ -7354,13 +7467,47 @@ bool BaseCompiler::emitArrayCopy() {
   return emitInstanceCall(SASigArrayCopy);
 }
 
+bool BaseCompiler::emitI31New() {
+  Nothing value;
+  if (!iter_.readConversion(ValType::I32, ValType(RefType::i31()), &value)) {
+    return false;
+  }
+
+  RegI32 intValue = popI32();
+  RegRef i31Value = needRef();
+  masm.truncate32ToWasmI31Ref(intValue, i31Value);
+  freeI32(intValue);
+  pushRef(i31Value);
+  return true;
+}
+
+bool BaseCompiler::emitI31Get(FieldWideningOp wideningOp) {
+  MOZ_ASSERT(wideningOp != FieldWideningOp::None);
+
+  Nothing value;
+  if (!iter_.readConversion(ValType(RefType::i31()), ValType::I32, &value)) {
+    return false;
+  }
+
+  RegRef i31Value = popRef();
+  RegI32 intValue = needI32();
+  if (wideningOp == FieldWideningOp::Signed) {
+    masm.convertWasmI31RefTo32Signed(i31Value, intValue);
+  } else {
+    masm.convertWasmI31RefTo32Unsigned(i31Value, intValue);
+  }
+  freeRef(i31Value);
+  pushI32(intValue);
+  return true;
+}
+
 void BaseCompiler::emitRefTestCommon(RefType sourceType, RefType destType) {
   Label success;
   Label join;
-  RegRef object = popRef();
+  RegRef ref = popRef();
   RegI32 result = needI32();
 
-  branchIfRefSubtype(object, sourceType, destType, &success,
+  branchIfRefSubtype(ref, sourceType, destType, &success,
                      /*onSuccess=*/true);
   masm.xor32(result, result);
   masm.jump(&join);
@@ -7369,7 +7516,7 @@ void BaseCompiler::emitRefTestCommon(RefType sourceType, RefType destType) {
   masm.bind(&join);
 
   pushI32(result);
-  freeRef(object);
+  freeRef(ref);
 }
 
 void BaseCompiler::emitRefCastCommon(RefType sourceType, RefType destType) {
@@ -7534,22 +7681,24 @@ bool BaseCompiler::emitBrOnCastCommon(bool onSuccess,
     needIntegerResultRegisters(b.resultType);
   }
 
-  // Create a copy of the ref for passing to the br_on_cast label,
-  // the original ref is used for casting in the condition.
-  RegRef object = popRef();
-  RegRef objectCondition = needRef();
-  moveRef(object, objectCondition);
-  pushRef(object);
+  // Get the ref from the top of the stack
+  RegRef refCondition = popRef();
+
+  // Create a copy of the ref for passing to the on_cast label,
+  // the original ref is used in the condition.
+  RegRef ref = needRef();
+  moveRef(refCondition, ref);
+  pushRef(ref);
 
   if (b.hasBlockResults()) {
     freeIntegerResultRegisters(b.resultType);
   }
 
-  if (!jumpConditionalWithResults(&b, objectCondition, sourceType, destType,
+  if (!jumpConditionalWithResults(&b, refCondition, sourceType, destType,
                                   onSuccess)) {
     return false;
   }
-  freeRef(objectCondition);
+  freeRef(refCondition);
 
   return true;
 }
@@ -9207,6 +9356,18 @@ bool BaseCompiler::emitBody() {
         CHECK_NEXT(emitCall());
       case uint16_t(Op::CallIndirect):
         CHECK_NEXT(emitCallIndirect());
+#ifdef ENABLE_WASM_TAIL_CALLS
+      case uint16_t(Op::ReturnCall):
+        if (!moduleEnv_.tailCallsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitReturnCall());
+      case uint16_t(Op::ReturnCallIndirect):
+        if (!moduleEnv_.tailCallsEnabled()) {
+          return iter_.unrecognizedOpcode(&op);
+        }
+        CHECK_NEXT(emitReturnCallIndirect());
+#endif
 #ifdef ENABLE_WASM_FUNCTION_REFERENCES
       case uint16_t(Op::CallRef):
         if (!moduleEnv_.functionReferencesEnabled()) {
@@ -9824,6 +9985,12 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(emitArrayLen(/*decodeIgnoredTypeIndex=*/false));
           case uint32_t(GcOp::ArrayCopy):
             CHECK_NEXT(emitArrayCopy());
+          case uint32_t(GcOp::I31New):
+            CHECK_NEXT(emitI31New());
+          case uint32_t(GcOp::I31GetS):
+            CHECK_NEXT(emitI31Get(FieldWideningOp::Signed));
+          case uint32_t(GcOp::I31GetU):
+            CHECK_NEXT(emitI31Get(FieldWideningOp::Unsigned));
           case uint32_t(GcOp::RefTestV5):
             CHECK_NEXT(emitRefTestV5());
           case uint32_t(GcOp::RefCastV5):

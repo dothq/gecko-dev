@@ -606,7 +606,7 @@ class Document : public nsINode,
                                                     aFocusedRadio, aRadioOut);
   }
   void AddToRadioGroup(const nsAString& aName, HTMLInputElement* aRadio) final {
-    DocumentOrShadowRoot::AddToRadioGroup(aName, aRadio);
+    DocumentOrShadowRoot::AddToRadioGroup(aName, aRadio, nullptr);
   }
   void RemoveFromRadioGroup(const nsAString& aName,
                             HTMLInputElement* aRadio) final {
@@ -1067,25 +1067,6 @@ class Document : public nsINode,
   void SetBidiOptions(uint32_t aBidiOptions) { mBidiOptions = aBidiOptions; }
 
   /**
-   * Set CSP flag for this document.
-   */
-  void SetHasCSP(bool aHasCSP) { mHasCSP = aHasCSP; }
-
-  /**
-   * Set unsafe-inline CSP flag for this document.
-   */
-  void SetHasUnsafeInlineCSP(bool aHasUnsafeInlineCSP) {
-    mHasUnsafeInlineCSP = aHasUnsafeInlineCSP;
-  }
-
-  /**
-   * Set unsafe-eval CSP flag for this document.
-   */
-  void SetHasUnsafeEvalCSP(bool aHasUnsafeEvalCSP) {
-    mHasUnsafeEvalCSP = aHasUnsafeEvalCSP;
-  }
-
-  /**
    * Returns true if the document holds a CSP
    * delivered through an HTTP Header.
    */
@@ -1443,8 +1424,8 @@ class Document : public nsINode,
   // Returns the cookie jar settings for this and sub contexts.
   nsICookieJarSettings* CookieJarSettings();
 
-  // Returns whether this document has the storage access permission.
-  bool HasStorageAccessPermissionGranted();
+  // Returns whether this document is using unpartitioned cookies
+  bool UsingStorageAccess();
 
   // Returns whether the storage access permission of the document is granted by
   // the allow list.
@@ -1687,8 +1668,8 @@ class Document : public nsINode,
    * and that observers should be notified and style sets updated
    */
   void StyleSheetApplicableStateChanged(StyleSheet&);
-
   void PostStyleSheetApplicableStateChangeEvent(StyleSheet&);
+  void PostStyleSheetRemovedEvent(StyleSheet&);
 
   enum additionalSheetType {
     eAgentSheet,
@@ -2348,7 +2329,12 @@ class Document : public nsINode,
                                    bool aIncludeSubdocuments,
                                    bool aAllowUnloadListeners = true);
 
-  virtual nsresult Init();
+  /**
+   * Pass principals if the correct ones are known when calling Init. That way
+   * NodeInfoManager doesn't need to create a temporary null principal.
+   */
+  virtual nsresult Init(nsIPrincipal* aPrincipal,
+                        nsIPrincipal* aPartitionedPrincipal);
 
   /**
    * Notify the document that its associated ContentViewer is being destroyed.
@@ -2992,6 +2978,7 @@ class Document : public nsINode,
   SheetPreloadStatus PreloadStyle(nsIURI* aURI, const Encoding* aEncoding,
                                   const nsAString& aCrossOriginAttr,
                                   ReferrerPolicyEnum aReferrerPolicy,
+                                  const nsAString& aNonce,
                                   const nsAString& aIntegrity,
                                   css::StylePreloadKind,
                                   uint64_t aEarlyHintPreloaderId);
@@ -3594,6 +3581,9 @@ class Document : public nsINode,
 
   void MaybeWarnAboutZoom();
 
+  // https://drafts.csswg.org/cssom-view/#evaluate-media-queries-and-report-changes
+  void EvaluateMediaQueriesAndReportChanges(bool aRecurse);
+
   // ParentNode
   nsIHTMLCollection* Children();
   uint32_t ChildElementCount();
@@ -4058,6 +4048,10 @@ class Document : public nsINode,
 
   nsIPermissionDelegateHandler* PermDelegateHandler();
 
+  // Returns whether this is a top-level about:blank page without an opener
+  // (and thus not accessible by content).
+  bool IsContentInaccessibleAboutBlank() const;
+
   // CSS prefers-color-scheme media feature for this document.
   enum class IgnoreRFP { No, Yes };
   ColorScheme PreferredColorScheme(IgnoreRFP = IgnoreRFP::No) const;
@@ -4126,6 +4120,8 @@ class Document : public nsINode,
   // Recompute the current resist fingerprinting state. Returns true when
   // the state was changed.
   bool RecomputeResistFingerprinting();
+
+  bool MayHaveDOMActivateListeners() const;
 
  protected:
   // Returns the WindowContext for the document that we will contribute
@@ -4673,15 +4669,6 @@ class Document : public nsINode,
   // document.
   bool mMayHaveAnimationObservers : 1;
 
-  // True if a document load has a CSP attached.
-  bool mHasCSP : 1;
-
-  // True if a document load has a CSP with unsafe-eval attached.
-  bool mHasUnsafeEvalCSP : 1;
-
-  // True if a document load has a CSP with unsafe-inline attached.
-  bool mHasUnsafeInlineCSP : 1;
-
   // True if the document has a CSP delivered throuh a header
   bool mHasCSPDeliveredThroughHeader : 1;
 
@@ -4754,10 +4741,6 @@ class Document : public nsINode,
 
   // Whether we have a designmode.css stylesheet in the style set.
   bool mDesignModeSheetAdded : 1;
-
-  // Keeps track of whether we have a pending
-  // 'style-sheet-applicable-state-changed' notification.
-  bool mSSApplicableStateNotificationPending : 1;
 
   // True if this document has ever had an HTML or SVG <title> element
   // bound to it
@@ -5491,17 +5474,27 @@ bool IsInActiveTab(Document* aDoc);
 
 // XXX These belong somewhere else
 nsresult NS_NewHTMLDocument(mozilla::dom::Document** aInstancePtrResult,
+                            nsIPrincipal* aPrincipal,
+                            nsIPrincipal* aPartitionedPrincipal,
                             bool aLoadedAsData = false);
 
 nsresult NS_NewXMLDocument(mozilla::dom::Document** aInstancePtrResult,
+                           nsIPrincipal* aPrincipal,
+                           nsIPrincipal* aPartitionedPrincipal,
                            bool aLoadedAsData = false,
                            bool aIsPlainDocument = false);
 
-nsresult NS_NewSVGDocument(mozilla::dom::Document** aInstancePtrResult);
+nsresult NS_NewSVGDocument(mozilla::dom::Document** aInstancePtrResult,
+                           nsIPrincipal* aPrincipal,
+                           nsIPrincipal* aPartitionedPrincipal);
 
-nsresult NS_NewImageDocument(mozilla::dom::Document** aInstancePtrResult);
+nsresult NS_NewImageDocument(mozilla::dom::Document** aInstancePtrResult,
+                             nsIPrincipal* aPrincipal,
+                             nsIPrincipal* aPartitionedPrincipal);
 
-nsresult NS_NewVideoDocument(mozilla::dom::Document** aInstancePtrResult);
+nsresult NS_NewVideoDocument(mozilla::dom::Document** aInstancePtrResult,
+                             nsIPrincipal* aPrincipal,
+                             nsIPrincipal* aPartitionedPrincipal);
 
 // Enum for requesting a particular type of document when creating a doc
 enum DocumentFlavor {

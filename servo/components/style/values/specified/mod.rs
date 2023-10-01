@@ -55,7 +55,7 @@ pub use self::effects::{BoxShadow, Filter, SimpleShadow};
 pub use self::flex::FlexBasis;
 pub use self::font::{FontFamily, FontLanguageOverride, FontPalette, FontStyle};
 pub use self::font::{FontFeatureSettings, FontVariantLigatures, FontVariantNumeric};
-pub use self::font::{FontSize, FontSizeAdjust, FontSizeKeyword, FontStretch, FontSynthesis};
+pub use self::font::{FontSize, FontSizeAdjust, FontSizeAdjustFactor, FontSizeKeyword, FontStretch, FontSynthesis};
 pub use self::font::{FontVariantAlternates, FontWeight};
 pub use self::font::{FontVariantEastAsian, FontVariationSettings};
 pub use self::font::{MathDepth, MozScriptMinSize, MozScriptSizeMultiplier, XLang, XTextScale};
@@ -97,7 +97,7 @@ pub use self::text::{TextAlignKeyword, TextDecorationLine, TextOverflow, WordSpa
 pub use self::text::{TextDecorationLength, TextDecorationSkipInk, TextJustify, TextTransform};
 pub use self::time::Time;
 pub use self::transform::{Rotate, Scale, Transform};
-pub use self::transform::{TransformOrigin, TransformStyle, Translate};
+pub use self::transform::{TransformBox, TransformOrigin, TransformStyle, Translate};
 #[cfg(feature = "gecko")]
 pub use self::ui::CursorImage;
 pub use self::ui::{BoolInteger, Cursor, UserSelect};

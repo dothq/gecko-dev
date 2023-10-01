@@ -206,14 +206,7 @@ static bool GetRealmConfiguration(JSContext* cx, unsigned argc, Value* vp) {
   }
 #endif
 
-  bool changeArrayByCopy =
-      cx->realm()->creationOptions().getChangeArrayByCopyEnabled();
-  if (!JS_SetProperty(cx, info, "enableChangeArrayByCopy",
-                      changeArrayByCopy ? TrueHandleValue : FalseHandleValue)) {
-    return false;
-  }
-
-#ifdef ENABLE_NEW_SET_METHODS
+#ifdef NIGHTLY_BUILD
   bool newSetMethods = cx->realm()->creationOptions().getNewSetMethodsEnabled();
   if (!JS_SetProperty(cx, info, "enableNewSetMethods",
                       newSetMethods ? TrueHandleValue : FalseHandleValue)) {
@@ -568,15 +561,6 @@ static bool GetBuildConfiguration(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-#ifdef ENABLE_NEW_SET_METHODS
-  value = BooleanValue(true);
-#else
-  value = BooleanValue(false);
-#endif
-  if (!JS_SetProperty(cx, info, "new-set-methods", value)) {
-    return false;
-  }
-
 #ifdef ENABLE_DECORATORS
   value = BooleanValue(true);
 #else
@@ -834,7 +818,7 @@ static bool WasmIsSupported(JSContext* cx, unsigned argc, Value* vp) {
 
 static bool WasmIsSupportedByHardware(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
-  args.rval().setBoolean(wasm::HasPlatformSupport(cx));
+  args.rval().setBoolean(wasm::HasPlatformSupport());
   return true;
 }
 
@@ -1484,7 +1468,7 @@ static bool WasmGlobalToString(JSContext* cx, unsigned argc, Value* vp) {
       break;
     }
     case wasm::ValType::Ref: {
-      result = JS_smprintf("ref:%p", globalVal.ref().asJSObject());
+      result = JS_smprintf("ref:%" PRIxPTR, globalVal.ref().rawValue());
       break;
     }
     default:
@@ -5802,10 +5786,12 @@ void ShapeSnapshot::checkSelf(JSContext* cx) const {
     PropertyInfo prop = propSnapshot.prop;
 
     // Skip if the map no longer matches the snapshotted data. This can
-    // only happen for non-configurable dictionary properties.
-    if (PropertySnapshot(propMap, propMapIndex) != propSnapshot) {
+    // only happen for dictionary maps because they can be mutated or compacted
+    // after a shape change.
+    if (!propMap->hasKey(propMapIndex) ||
+        PropertySnapshot(propMap, propMapIndex) != propSnapshot) {
       MOZ_RELEASE_ASSERT(propMap->isDictionary());
-      MOZ_RELEASE_ASSERT(prop.configurable());
+      MOZ_RELEASE_ASSERT(object_->shape() != shape_);
       continue;
     }
 
@@ -6675,7 +6661,7 @@ static bool EvalReturningScope(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   JS::AutoFilename filename;
-  unsigned lineno;
+  uint32_t lineno;
 
   JS::DescribeScriptedCaller(cx, &filename, &lineno);
 
@@ -6977,7 +6963,7 @@ static bool CompileToStencil(JSContext* cx, uint32_t argc, Value* vp) {
 
   JS::InstantiationStorage storage;
   if (prepareForInstantiate) {
-    if (!JS::PrepareForInstantiate(&fc, compileStorage, *stencil, storage)) {
+    if (!JS::PrepareForInstantiate(&fc, *stencil, storage)) {
       return false;
     }
   }
@@ -8371,7 +8357,7 @@ static bool BaselineCompile(JSContext* cx, unsigned argc, Value* vp) {
       returnedStr = "can't compile";
       break;
     }
-    if (!cx->realm()->ensureJitRealmExists(cx)) {
+    if (!cx->zone()->ensureJitZoneExists(cx)) {
       return false;
     }
 
@@ -8686,7 +8672,7 @@ static bool FdLibM_Pow(JSContext* cx, unsigned argc, Value* vp) {
   if (!std::isfinite(y) && (x == 1.0 || x == -1.0)) {
     args.rval().setNaN();
   } else {
-    args.rval().setDouble(fdlibm::pow(x, y));
+    args.rval().setDouble(fdlibm_pow(x, y));
   }
   return true;
 }

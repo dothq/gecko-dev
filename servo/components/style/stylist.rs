@@ -53,7 +53,7 @@ use selectors::bloom::BloomFilter;
 use selectors::matching::{
     matches_selector, MatchingContext, MatchingMode, NeedsSelectorFlags, SelectorCaches,
 };
-use selectors::matching::{IgnoreNthChildForInvalidation, VisitedHandlingMode};
+use selectors::matching::{MatchingForInvalidation, VisitedHandlingMode};
 use selectors::parser::{
     ArcSelectorList, AncestorHashes, Combinator, Component, Selector, SelectorIter, SelectorList,
 };
@@ -1103,7 +1103,7 @@ impl Stylist {
         //
         // FIXME(emilio): We should assert that it holds if pseudo.is_none()!
         properties::cascade::<E>(
-            &self.device,
+            &self,
             pseudo,
             inputs.rules.as_ref().unwrap_or(self.rule_tree.root()),
             guards,
@@ -1113,7 +1113,6 @@ impl Stylist {
             first_line_reparenting,
             visited_rules,
             inputs.flags,
-            self.quirks_mode,
             rule_cache,
             rule_cache_conditions,
             element,
@@ -1156,7 +1155,7 @@ impl Stylist {
             &mut selector_caches,
             self.quirks_mode,
             needs_selector_flags,
-            IgnoreNthChildForInvalidation::No,
+            MatchingForInvalidation::No,
         );
 
         matching_context.pseudo_element_matching_fn = matching_fn;
@@ -1191,7 +1190,7 @@ impl Stylist {
                 VisitedHandlingMode::RelevantLinkVisited,
                 self.quirks_mode,
                 needs_selector_flags,
-                IgnoreNthChildForInvalidation::No,
+                MatchingForInvalidation::No,
             );
             matching_context.pseudo_element_matching_fn = matching_fn;
             matching_context.extra_data.originating_element_style = Some(originating_element_style);
@@ -1410,7 +1409,7 @@ impl Stylist {
             selector_caches,
             self.quirks_mode,
             needs_selector_flags,
-            IgnoreNthChildForInvalidation::No,
+            MatchingForInvalidation::No,
         );
 
         // Note that, by the time we're revalidating, we're guaranteed that the
@@ -1489,7 +1488,7 @@ impl Stylist {
         // reversing this as it shouldn't be slow anymore, and should avoid
         // generating two instantiations of apply_declarations.
         properties::apply_declarations::<E, _>(
-            &self.device,
+            &self,
             /* pseudo = */ None,
             self.rule_tree.root(),
             guards,
@@ -1510,7 +1509,6 @@ impl Stylist {
                 visited_rules: None,
             },
             Default::default(),
-            self.quirks_mode,
             /* rule_cache = */ None,
             &mut Default::default(),
             /* element = */ None,
@@ -2541,7 +2539,7 @@ impl CascadeData {
             };
             let matches = condition
                 .matches(
-                    stylist.device(),
+                    stylist,
                     element,
                     context.extra_data.originating_element_style,
                     &mut context.extra_data.cascade_input_flags,

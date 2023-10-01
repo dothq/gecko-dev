@@ -585,6 +585,18 @@ nsChangeHint nsStyleOutline::CalcDifference(
   return nsChangeHint(0);
 }
 
+nsSize nsStyleOutline::EffectiveOffsetFor(const nsRect& aRect) const {
+  const nscoord offset = mOutlineOffset.ToAppUnits();
+
+  if (offset >= 0) {
+    // Fast path for non-negative offset values
+    return nsSize(offset, offset);
+  }
+
+  return nsSize(std::max(offset, -(aRect.Width() / 2)),
+                std::max(offset, -(aRect.Height() / 2)));
+}
+
 // --------------------
 // nsStyleList
 //
@@ -2175,7 +2187,7 @@ nsStyleDisplay::nsStyleDisplay()
                       StyleScrollSnapStrictness::None},
       mBackfaceVisibility(StyleBackfaceVisibility::Visible),
       mTransformStyle(StyleTransformStyle::Flat),
-      mTransformBox(StyleGeometryBox::BorderBox),
+      mTransformBox(StyleTransformBox::ViewBox),
       mRotate(StyleRotate::None()),
       mTranslate(StyleTranslate::None()),
       mScale(StyleScale::None()),
@@ -2184,7 +2196,7 @@ nsStyleDisplay::nsStyleDisplay()
       mOffsetDistance(LengthPercentage::Zero()),
       mOffsetRotate{true, StyleAngle{0.0}},
       mOffsetAnchor(StylePositionOrAuto::Auto()),
-      mOffsetPosition(StyleOffsetPosition::Auto()),
+      mOffsetPosition(StyleOffsetPosition::Normal()),
       mTransformOrigin{LengthPercentage::FromPercentage(0.5),
                        LengthPercentage::FromPercentage(0.5),
                        {0.}},

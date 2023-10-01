@@ -64,10 +64,7 @@ static NSPasteboard* GetPasteboard(int32_t aWhichClipboard) {
     case nsIClipboard::kGlobalClipboard:
       return [NSPasteboard generalPasteboard];
     case nsIClipboard::kFindClipboard:
-      if (@available(macOS 10.13, *)) {
-        return [NSPasteboard pasteboardWithName:NSPasteboardNameFind];
-      }
-      return [NSPasteboard pasteboardWithName:NSFindPboard];
+      return [NSPasteboard pasteboardWithName:NSPasteboardNameFind];
     default:
       return nil;
   }
@@ -137,6 +134,11 @@ nsClipboard::SetNativeClipboardData(nsITransferable* aTransferable, nsIClipboard
       } else if ([currentKey
                      isEqualToString:[UTIHelper stringFromPboardType:(NSString*)kUTTypeFileURL]]) {
         [cocoaPasteboard setString:currentValue forType:currentKey];
+      } else if ([currentKey
+                     isEqualToString:[UTIHelper stringFromPboardType:kPasteboardConcealedType]]) {
+        // It's fine to set the data to null for this field - this field is an addition
+        // to a value's other type and works like a flag.
+        [cocoaPasteboard setData:NULL forType:currentKey];
       } else {
         [cocoaPasteboard setData:currentValue forType:currentKey];
       }
@@ -535,6 +537,13 @@ NSDictionary* nsClipboard::PasteboardDictFromTransferable(nsITransferable* aTran
       nativeString = [nativeString precomposedStringWithCanonicalMapping];
       if (nativeString) {
         [pasteboardOutputDict setObject:nativeString forKey:pboardType];
+      }
+
+      if (aTransferable->GetIsPrivateData()) {
+        // In the case of password strings, we want to include the key for concealed type.
+        // These will be flagged as private data.
+        [pasteboardOutputDict setObject:nativeString
+                                 forKey:[UTIHelper stringFromPboardType:kPasteboardConcealedType]];
       }
     } else if (flavorStr.EqualsLiteral(kCustomTypesMime)) {
       nsCOMPtr<nsISupports> genericDataWrapper;

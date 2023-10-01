@@ -11,7 +11,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   L10nCache: "resource:///modules/UrlbarUtils.sys.mjs",
   ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
-  setTimeout: "resource://gre/modules/Timer.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarProviderQuickSuggest:
     "resource:///modules/UrlbarProviderQuickSuggest.sys.mjs",
@@ -112,7 +111,7 @@ export class UrlbarView {
     }
 
     lazy.UrlbarPrefs.addObserver(this);
-    lazy.setTimeout(() => this.updateRichSuggestionAttribute());
+    this.window.setTimeout(() => this.#updateRichSuggestionAttribute());
   }
 
   get oneOffSearchButtons() {
@@ -446,12 +445,10 @@ export class UrlbarView {
    *
    * @param {UrlbarResult} result
    *   The result that was dismissed.
-   * @param {boolean} allOfType
-   *   If true, the tip's text will indicate that all results of the given
-   *   result's type have been dismissed and won't be shown anymore. If false,
-   *   the text will indicate that only the one result was dismissed.
+   * @param {object} titleL10n
+   *   The localization object shown as dismissed feedback.
    */
-  acknowledgeDismissal(result, allOfType = false) {
+  #acknowledgeDismissal(result, titleL10n) {
     let row = this.#rows.children[result.rowIndex];
     if (!row || row.result != result) {
       return;
@@ -473,11 +470,7 @@ export class UrlbarView {
       lazy.UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
       {
         type: "dismissalAcknowledgment",
-        titleL10n: {
-          id: allOfType
-            ? "firefox-suggest-dismissal-acknowledgment-all"
-            : "firefox-suggest-dismissal-acknowledgment-one",
-        },
+        titleL10n,
         buttons: [{ l10n: { id: "urlbar-search-tips-confirm-short" } }],
         icon: "chrome://branding/content/icon32.png",
       }
@@ -859,8 +852,15 @@ export class UrlbarView {
    */
   onQueryResultRemoved(index) {
     let rowToRemove = this.#rows.children[index];
-    rowToRemove.remove();
 
+    let { result } = rowToRemove;
+    if (result.acknowledgeDismissalL10n) {
+      // Replace the result's row with a dismissal acknowledgment tip.
+      this.#acknowledgeDismissal(result, result.acknowledgeDismissalL10n);
+      return;
+    }
+
+    rowToRemove.remove();
     this.#updateIndices();
 
     if (rowToRemove != this.#getSelectedRow()) {
@@ -1478,10 +1478,7 @@ export class UrlbarView {
     item._elements.set("url", url);
 
     let description = this.#createElement("div");
-    description.classList.add(
-      "urlbarView-row-body-description",
-      "urlbarView-overflowable"
-    );
+    description.classList.add("urlbarView-row-body-description");
     body.appendChild(description);
     item._elements.set("description", description);
 
@@ -1774,6 +1771,18 @@ export class UrlbarView {
       case lazy.UrlbarUtils.RESULT_TYPE.TIP:
         isRowSelectable = false;
         break;
+      case lazy.UrlbarUtils.RESULT_TYPE.URL:
+        if (result.providerName == "UrlbarProviderClipboard") {
+          result.payload.displayUrl = "";
+          actionSetter = () => {
+            this.#setElementL10n(action, {
+              id: "urlbar-result-action-visit-from-your-clipboard",
+            });
+          };
+          title.setAttribute("isurl", "true");
+          break;
+        }
+      // fall-through
       default:
         if (result.heuristic && !result.payload.title) {
           isVisitAction = true;
@@ -2112,6 +2121,16 @@ export class UrlbarView {
       return null;
     }
 
+    let engineName =
+      row.result.payload.engine || Services.search.defaultEngine.name;
+
+    if (row.result.payload.trending) {
+      return {
+        id: "urlbar-group-trending",
+        args: { engine: engineName },
+      };
+    }
+
     if (
       row.result.isBestMatch &&
       row.result.providerName == lazy.UrlbarProviderQuickSuggest.name
@@ -2119,6 +2138,8 @@ export class UrlbarView {
       switch (row.result.payload.telemetryType) {
         case "amo":
           return { id: "urlbar-group-addon" };
+        case "mdn":
+          return { id: "urlbar-group-mdn" };
         case "pocket":
           return { id: "urlbar-group-pocket" };
       }
@@ -2148,8 +2169,6 @@ export class UrlbarView {
       case lazy.UrlbarUtils.RESULT_TYPE.SEARCH:
         // Show "{ $engine } suggestions" if it's not the first label.
         if (currentLabel && row.result.payload.suggestion) {
-          let engineName =
-            row.result.payload.engine || Services.search.defaultEngine.name;
           return {
             id: "urlbar-group-search-suggestions",
             args: { engine: engineName },
@@ -2658,6 +2677,7 @@ export class UrlbarView {
       { id: "urlbar-result-action-search-tabs" },
       { id: "urlbar-result-action-switch-tab" },
       { id: "urlbar-result-action-visit" },
+      { id: "urlbar-result-action-visit-from-your-clipboard" },
     ];
 
     if (lazy.UrlbarPrefs.get("groupLabels.enabled")) {
@@ -2669,6 +2689,12 @@ export class UrlbarView {
           lazy.UrlbarPrefs.get("suggest.weather"))
       ) {
         idArgs.push({ id: "urlbar-group-best-match" });
+      }
+      if (
+        lazy.UrlbarPrefs.get("quickSuggestEnabled") &&
+        lazy.UrlbarPrefs.get("addonsFeatureGate")
+      ) {
+        idArgs.push({ id: "urlbar-group-addon" });
       }
     }
 
@@ -3212,17 +3238,16 @@ export class UrlbarView {
   onPrefChanged(pref) {
     switch (pref) {
       case RICH_SUGGESTIONS_PREF:
-        this.updateRichSuggestionAttribute();
+        this.#updateRichSuggestionAttribute();
         break;
     }
   }
 
-  updateRichSuggestionAttribute() {
-    if (lazy.UrlbarPrefs.get(RICH_SUGGESTIONS_PREF)) {
-      this.input.setAttribute("richSuggestionsEnabled", true);
-    } else {
-      this.input.removeAttribute("richSuggestionsEnabled");
-    }
+  #updateRichSuggestionAttribute() {
+    this.input.toggleAttribute(
+      "richSuggestionsEnabled",
+      lazy.UrlbarPrefs.get(RICH_SUGGESTIONS_PREF)
+    );
   }
 
   /**

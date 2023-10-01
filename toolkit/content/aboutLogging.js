@@ -20,7 +20,7 @@ const { CustomizableUI } = ChromeUtils.importESModule(
   "resource:///modules/CustomizableUI.sys.mjs"
 );
 
-XPCOMUtils.defineLazyGetter(this, "ProfilerPopupBackground", function () {
+ChromeUtils.defineLazyGetter(this, "ProfilerPopupBackground", function () {
   return ChromeUtils.import(
     "resource://devtools/client/performance-new/shared/background.jsm.js"
   );
@@ -87,7 +87,7 @@ const gLoggingPresets = {
   },
   "media-playback": {
     modules:
-      "HTMLMediaElement:4,HTMLMediaElementEvents:4,cubeb:5,PlatformDecoderModule:5,AudioSink:5,AudioSinkWrapper:5,MediaDecoderStateMachine:4,MediaDecoder:4,MediaFormatReader:5",
+      "HTMLMediaElement:4,HTMLMediaElementEvents:4,cubeb:5,PlatformDecoderModule:5,AudioSink:5,AudioSinkWrapper:5,MediaDecoderStateMachine:4,MediaDecoder:4,MediaFormatReader:5,GMP:5",
     l10nIds: {
       label: "about-logging-preset-media-playback-label",
       description: "about-logging-preset-media-playback-description",
@@ -102,6 +102,14 @@ const gLoggingPresets = {
       description: "about-logging-preset-webrtc-description",
     },
     profilerPreset: "media",
+  },
+  webgpu: {
+    modules:
+      "wgpu_core::*:5,wgpu_hal::*:5,wgpu_types::*:5,naga::*:5,wgpu_bindings::*:5,WebGPU:5",
+    l10nIds: {
+      label: "about-logging-preset-webgpu-label",
+      description: "about-logging-preset-webgpu-description",
+    },
   },
   custom: {
     modules: "",

@@ -227,7 +227,8 @@ function waitForSelectedSource(dbg, sourceOrUrl) {
         // Second argument is either a source URL (string)
         // or a Source object.
         if (typeof sourceOrUrl == "string") {
-          if (!location.source.url.includes(encodeURI(sourceOrUrl))) {
+          const url = location.source.url;
+          if (typeof url != "string" || !url.includes(encodeURI(sourceOrUrl))) {
             return false;
           }
         } else if (location.source.id != sourceOrUrl.id) {
@@ -1757,7 +1758,6 @@ const selectors = {
     `${selectors.resultItems}:nth-child(${i})[title$="${name}"]`,
   fileMatch: ".project-text-search .line-value",
   popup: ".popover",
-  tooltip: ".tooltip",
   previewPopup: ".preview-popup",
   openInspector: "button.open-inspector",
   outlineItem: i =>
@@ -2262,12 +2262,21 @@ async function tryHovering(dbg, line, column, elementName) {
 
   return { element, tokenEl };
 }
-
+/**
+ * Hovers and asserts tooltip previews with simple text expressions (i.e numbers and strings)
+ * @param {*} dbg
+ * @param {Number} line
+ * @param {Number} column
+ * @param {Object} options
+ * @param {String}  options.result - Expected text shown in the preview
+ * @param {String}  options.expression - The expression hovered over
+ * @param {Boolean} options.doNotClose - Set to true to not close the tooltip
+ */
 async function assertPreviewTextValue(
   dbg,
   line,
   column,
-  { text, expression, doNotClose = false }
+  { result, expression, doNotClose = false }
 ) {
   const { element: previewEl, tokenEl } = await tryHovering(
     dbg,
@@ -2285,11 +2294,11 @@ async function assertPreviewTextValue(
   );
 
   ok(
-    previewEl.innerText.includes(text),
+    previewEl.innerText.includes(result),
     "Popup preview text shown to user. Got: " +
       previewEl.innerText +
       " Expected: " +
-      text
+      result
   );
 
   if (!doNotClose) {
@@ -2297,34 +2306,22 @@ async function assertPreviewTextValue(
   }
 }
 
-async function assertPreviewTooltip(dbg, line, column, { result, expression }) {
-  const { element: previewEl, tokenEl } = await tryHovering(
-    dbg,
-    line,
-    column,
-    "tooltip"
-  );
-
-  ok(
-    tokenEl.innerText.includes(expression),
-    "Tooltip preview hovered expression is correct. Got: " +
-      tokenEl.innerText +
-      " Expected: " +
-      expression
-  );
-
-  is(previewEl.innerText, result, "Tooltip preview text shown to user");
-
-  await closePreviewForToken(dbg, tokenEl);
-}
-
+/**
+ * Asserts multiple previews
+ * @param {*} dbg
+ * @param {Array} previews
+ */
 async function assertPreviews(dbg, previews) {
-  for (const { line, column, expression, result, fields } of previews) {
-    if (fields && result) {
-      throw new Error("Invalid test fixture");
+  for (const { line, column, expression, result, header, fields } of previews) {
+    info(" # Assert preview on " + line + ":" + column);
+
+    if (result) {
+      await assertPreviewTextValue(dbg, line, column, {
+        expression,
+        result,
+      });
     }
 
-    info(" # Assert preview on " + line + ":" + column);
     if (fields) {
       const { element: popupEl, tokenEl } = await tryHovering(
         dbg,
@@ -2332,9 +2329,24 @@ async function assertPreviews(dbg, previews) {
         column,
         "popup"
       );
+
+      info("Wait for child nodes to load");
+      await waitUntil(
+        () => popupEl.querySelectorAll(".preview-popup .node").length > 1
+      );
+      ok(true, "child nodes loaded");
+
       const oiNodes = Array.from(
         popupEl.querySelectorAll(".preview-popup .node")
       );
+
+      if (header) {
+        is(
+          oiNodes[0].querySelector(".objectBox").textContent,
+          header,
+          "popup has expected value"
+        );
+      }
 
       for (const [field, value] of fields) {
         const node = oiNodes.find(
@@ -2344,21 +2356,85 @@ async function assertPreviews(dbg, previews) {
           ok(false, `The "${field}" property is not displayed in the popup`);
         } else {
           is(
-            node.querySelector(".objectBox").textContent,
-            value,
-            `The "${field}" property has the expected value`
+            node.querySelector(".object-label").textContent,
+            field,
+            `The "${field}" property is displayed in the popup`
           );
+          if (value !== undefined) {
+            is(
+              node.querySelector(".objectBox").textContent,
+              value,
+              `The "${field}" property has the expected value`
+            );
+          }
         }
       }
 
       await closePreviewForToken(dbg, tokenEl, "popup");
-    } else {
-      await assertPreviewTextValue(dbg, line, column, {
-        expression,
-        text: result,
-      });
     }
   }
+}
+
+/**
+ * Asserts the inline expression preview value
+ * @param {*} dbg
+ * @param {Number} line
+ * @param {Number} column
+ * @param {Object} options
+ * @param {String}  options.result - Expected text shown in the preview
+ * @param {String}  options.expression - The expression hovered over
+ * @param {Array}  options.fields - The expected stacktrace information
+ */
+async function assertInlineExceptionPreview(
+  dbg,
+  line,
+  column,
+  { expression, result, fields }
+) {
+  info(" # Assert preview on " + line + ":" + column);
+  const { element: popupEl, tokenEl } = await tryHovering(
+    dbg,
+    line,
+    column,
+    "previewPopup"
+  );
+
+  info("Wait for top level node to expand and child nodes to load");
+  await waitForElementWithSelector(
+    dbg,
+    ".exception-popup .exception-message .arrow.expanded"
+  );
+
+  is(
+    popupEl.querySelector(".preview-popup .exception-message .objectBox")
+      .textContent,
+    result,
+    "The correct result is not displayed in the popup"
+  );
+
+  await waitFor(() =>
+    popupEl.querySelectorAll(".preview-popup .exception-stacktrace .frame")
+  );
+  const stackFrameNodes = Array.from(
+    popupEl.querySelectorAll(".preview-popup .exception-stacktrace .frame")
+  );
+
+  for (const [field, value] of fields) {
+    const node = stackFrameNodes.find(
+      frameNode => frameNode.querySelector(".title")?.textContent === field
+    );
+    if (!node) {
+      ok(false, `The "${field}" property is not displayed in the popup`);
+    } else {
+      is(
+        node.querySelector(".location").textContent,
+        value,
+        `The "${field}" property has the expected value`
+      );
+    }
+  }
+
+  await closePreviewForToken(dbg, tokenEl, "previewPopup");
 }
 
 async function waitForBreakableLine(dbg, source, lineNumber) {

@@ -224,6 +224,7 @@ JS_FOR_EACH_TRACEKIND(IMPL_CHECK_TRACED_THING);
 #  undef IMPL_CHECK_TRACED_THING
 
 template void CheckTracedThing<Value>(JSTracer*, const Value&);
+template void CheckTracedThing<wasm::AnyRef>(JSTracer*, const wasm::AnyRef&);
 
 }  // namespace js
 
@@ -391,6 +392,7 @@ JS_FOR_EACH_PUBLIC_TAGGED_GC_POINTER_TYPE(DEFINE_UNSAFE_TRACE_ROOT_FUNCTION)
 // Also, for the moment, define TraceRoot for internal GC pointer types.
 DEFINE_UNSAFE_TRACE_ROOT_FUNCTION(AbstractGeneratorObject*)
 DEFINE_UNSAFE_TRACE_ROOT_FUNCTION(SavedFrame*)
+DEFINE_UNSAFE_TRACE_ROOT_FUNCTION(wasm::AnyRef)
 
 #undef DEFINE_UNSAFE_TRACE_ROOT_FUNCTION
 
@@ -664,6 +666,10 @@ bool js::gc::TraceEdgeInternal(JSTracer* trc, TaggedProto* thingp,
                                const char* name) {
   return TraceTaggedPtrEdge(trc, thingp, name);
 }
+bool js::gc::TraceEdgeInternal(JSTracer* trc, wasm::AnyRef* thingp,
+                               const char* name) {
+  return TraceTaggedPtrEdge(trc, thingp, name);
+}
 
 template <typename T>
 void js::gc::TraceRangeInternal(JSTracer* trc, size_t len, T* vec,
@@ -713,9 +719,10 @@ void GCMarker::markEphemeronEdges(EphemeronEdgeVector& edges,
     CellColor targetColor = std::min(srcColor, edge.color);
     MOZ_ASSERT(CellColor(markColor()) >= targetColor);
     if (targetColor == markColor()) {
-      ApplyGCThingTyped(
-          edge.target, edge.target->getTraceKind(),
-          [this](auto t) { markAndTraverse<NormalMarkingOptions>(t); });
+      ApplyGCThingTyped(edge.target, edge.target->getTraceKind(),
+                        [this](auto t) {
+                          markAndTraverse<MarkingOptions::MarkImplicitEdges>(t);
+                        });
     }
   }
 
@@ -921,7 +928,10 @@ void MarkingTracerT<opts>::onEdge(T** thingp, const char* name) {
 }
 
 #define INSTANTIATE_ONEDGE_METHOD(name, type, _1, _2)                 \
-  template void MarkingTracerT<NormalMarkingOptions>::onEdge<type>(   \
+  template void MarkingTracerT<MarkingOptions::None>::onEdge<type>(   \
+      type * *thingp, const char* name);                              \
+  template void                                                       \
+  MarkingTracerT<MarkingOptions::MarkImplicitEdges>::onEdge<type>(    \
       type * *thingp, const char* name);                              \
   template void                                                       \
   MarkingTracerT<MarkingOptions::MarkRootCompartments>::onEdge<type>( \
@@ -1138,8 +1148,10 @@ void js::GCMarker::pushThing(T* thing) {
   pushTaggedPtr(thing);
 }
 
-template void js::GCMarker::markAndTraverse<NormalMarkingOptions, JSObject>(
+template void js::GCMarker::markAndTraverse<MarkingOptions::None, JSObject>(
     JSObject* thing);
+template void js::GCMarker::markAndTraverse<MarkingOptions::MarkImplicitEdges,
+                                            JSObject>(JSObject* thing);
 template void js::GCMarker::markAndTraverse<
     MarkingOptions::MarkRootCompartments, JSObject>(JSObject* thing);
 
@@ -1268,7 +1280,11 @@ bool GCMarker::markUntilBudgetExhausted(SliceBudget& budget,
     return false;
   }
 
-  return doMarking<NormalMarkingOptions>(budget, reportTime);
+  if (isWeakMarking()) {
+    return doMarking<MarkingOptions::MarkImplicitEdges>(budget, reportTime);
+  }
+
+  return doMarking<MarkingOptions::None>(budget, reportTime);
 }
 
 template <uint32_t opts>
@@ -2097,7 +2113,6 @@ void GCMarker::setMarkingStateAndTracer(MarkingState prev, MarkingState next) {
 
 bool GCMarker::enterWeakMarkingMode() {
   MOZ_ASSERT(tracer()->weakMapAction() == JS::WeakMapTraceAction::Expand);
-  MOZ_ASSERT(state == RegularMarking);
   if (!haveAllImplicitEdges) {
     return false;
   }
@@ -2112,7 +2127,7 @@ bool GCMarker::enterWeakMarkingMode() {
   // Set state before doing anything else, so any new key that is marked
   // during the following gcEphemeronEdges scan will itself be looked up in
   // gcEphemeronEdges and marked according to ephemeron rules.
-  state = WeakMarking;
+  setMarkingStateAndTracer<WeakMarkingTracer>(RegularMarking, WeakMarking);
 
   return true;
 }
@@ -2168,8 +2183,11 @@ IncrementalProgress JS::Zone::enterWeakMarkingMode(GCMarker* marker,
 }
 
 void GCMarker::leaveWeakMarkingMode() {
-  MOZ_ASSERT(state == WeakMarking || state == RegularMarking);
-  state = RegularMarking;
+  if (state == RegularMarking) {
+    return;
+  }
+
+  setMarkingStateAndTracer<MarkingTracer>(WeakMarking, RegularMarking);
 
   // The gcEphemeronEdges table is still populated and may be used during a
   // future weak marking mode within this GC.

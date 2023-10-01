@@ -239,6 +239,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Whether results will include a calculator.
   ["suggest.calculator", false],
 
+  // Whether results will include clipboard results.
+  ["suggest.clipboard", true],
+
   // Whether results will include search engines (e.g. tab-to-search).
   ["suggest.engines", true],
 
@@ -300,6 +303,10 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // If `browser.urlbar.weather.featureGate` is true, this controls whether
   // weather suggestions are turned on.
   ["suggest.weather", true],
+
+  // If `browser.urlbar.trending.featureGate` is true, this controls whether
+  // trending suggestions are turned on.
+  ["suggest.trending", true],
 
   // JSON'ed array of blocked quick suggest URL digests.
   ["quicksuggest.blockedDigests", ""],
@@ -402,6 +409,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
   // Remove redundant portions from URLs.
   ["trimURLs", true],
 
+  // Remove 'https://' from url when urlbar is focused.
+  ["trimHttps", true],
+
   // If true, top sites may include sponsored ones.
   ["sponsoredTopSites", false],
 
@@ -445,6 +455,9 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // Feature gate pref for rich suggestions being shown in the urlbar.
   ["richSuggestions.featureGate", false],
+
+  // Feature gate pref for clipboard suggestions in the urlbar.
+  ["clipboard.featureGate", false],
 ]);
 
 const PREF_OTHER_DEFAULTS = new Map([
@@ -461,7 +474,7 @@ const PREF_OTHER_DEFAULTS = new Map([
 // defaults are the values of their fallbacks.
 const NIMBUS_DEFAULTS = {
   addonsShowLessFrequentlyCap: 0,
-  addonsUITreatment: "a",
+  addonsUITreatment: "b",
   experimentType: "",
   isBestMatchExperiment: false,
   pocketShowLessFrequentlyCap: 0,

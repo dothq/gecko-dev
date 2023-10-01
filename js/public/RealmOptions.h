@@ -219,29 +219,15 @@ class JS_PUBLIC_API RealmCreationOptions {
     return *this;
   }
 
-  bool getArrayBufferTransferEnabled() const { return arrayBufferTransfer_; }
-  RealmCreationOptions& setArrayBufferTransferEnabled(bool flag) {
-    arrayBufferTransfer_ = flag;
-    return *this;
-  }
-#endif
-
-  bool getArrayFromAsyncEnabled() const { return arrayFromAsync_; }
-  RealmCreationOptions& setArrayFromAsyncEnabled(bool flag) {
-    arrayFromAsync_ = flag;
-    return *this;
-  }
-
-  bool getChangeArrayByCopyEnabled() const { return changeArrayByCopy_; }
-  RealmCreationOptions& setChangeArrayByCopyEnabled(bool flag) {
-    changeArrayByCopy_ = flag;
-    return *this;
-  }
-
-#ifdef ENABLE_NEW_SET_METHODS
   bool getNewSetMethodsEnabled() const { return newSetMethods_; }
   RealmCreationOptions& setNewSetMethodsEnabled(bool flag) {
     newSetMethods_ = flag;
+    return *this;
+  }
+
+  bool getArrayBufferTransferEnabled() const { return arrayBufferTransfer_; }
+  RealmCreationOptions& setArrayBufferTransferEnabled(bool flag) {
+    arrayBufferTransfer_ = flag;
     return *this;
   }
 #endif
@@ -310,13 +296,10 @@ class JS_PUBLIC_API RealmCreationOptions {
   bool arrayGrouping_ = false;
   // Pref for String.prototype.{is,to}WellFormed() methods.
   bool wellFormedUnicodeStrings_ = false;
+  // Pref for new Set.prototype methods.
+  bool newSetMethods_ = false;
   // Pref for ArrayBuffer.prototype.transfer{,ToFixedLength}() methods.
   bool arrayBufferTransfer_ = false;
-#endif
-  bool arrayFromAsync_ = true;
-  bool changeArrayByCopy_ = false;
-#ifdef ENABLE_NEW_SET_METHODS
-  bool newSetMethods_ = false;
 #endif
   bool secureContext_ = false;
   bool freezeBuiltins_ = false;

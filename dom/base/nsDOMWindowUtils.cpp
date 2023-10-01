@@ -14,7 +14,7 @@
 #include "nsContentList.h"
 #include "nsError.h"
 #include "nsQueryContentEventResult.h"
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowOuter.h"
 #include "nsFocusManager.h"
 #include "nsFrameManager.h"
 #include "nsRefreshDriver.h"
@@ -2202,7 +2202,7 @@ nsDOMWindowUtils::GetCanvasBackgroundColor(nsAString& aColor) {
   }
   nscolor color = NS_RGB(255, 255, 255);
   if (PresShell* presShell = GetPresShell()) {
-    color = presShell->ComputeCanvasBackground().mColor;
+    color = presShell->ComputeCanvasBackground().mViewportColor;
   }
   nsStyleUtil::GetSerializedColorValue(color, aColor);
   return NS_OK;
@@ -4260,6 +4260,17 @@ nsDOMWindowUtils::GetFramesReflowed(uint64_t* aResult) {
 }
 
 NS_IMETHODIMP
+nsDOMWindowUtils::GetAnimationTriggeredRestyles(uint64_t* aResult) {
+  nsPresContext* presContext = GetPresContext();
+  if (!presContext) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  *aResult = presContext->AnimationTriggeredRestylesCount();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsDOMWindowUtils::GetRefreshDriverHasPendingTick(bool* aResult) {
   nsPresContext* presContext = GetPresContext();
   if (!presContext) {
@@ -4284,10 +4295,8 @@ nsDOMWindowUtils::LeaveChaosMode() {
 
 NS_IMETHODIMP
 nsDOMWindowUtils::TriggerDeviceReset() {
-  ContentChild* cc = ContentChild::GetSingleton();
-  if (cc) {
-    cc->SendDeviceReset();
-    return NS_OK;
+  if (!XRE_IsParentProcess()) {
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
   GPUProcessManager* pm = GPUProcessManager::Get();

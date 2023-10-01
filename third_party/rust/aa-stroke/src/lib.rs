@@ -156,8 +156,8 @@ impl<'z> PathBuilder<'z> {
     }
 
     /// Completes the current path
-    pub fn finish(self) -> Vec<Vertex> {
-        self.vertices
+    pub fn finish(self) -> Box<[Vertex]> {
+        self.vertices.into_boxed_slice()
     }
 
     pub fn get_output_buffer_size(&self) -> Option<usize> {
@@ -519,6 +519,10 @@ fn dot(a: Vector, b: Vector) -> f32 {
     a.x * b.x + a.y * b.y
 }
 
+fn cross(a: Vector, b: Vector) -> f32 {
+    return a.x * b.y - a.y * b.x;
+}
+
 /* Finds the intersection of two lines each defined by a point and a normal.
 From "Example 2: Find the intersection of two lines" of
 "The Pleasures of "Perp Dot" Products"
@@ -540,7 +544,7 @@ fn line_intersection(a: Point, a_perp: Vector, b: Point, b_perp: Vector) -> Opti
 
 fn is_interior_angle(a: Vector, b: Vector) -> bool {
     /* angles of 180 and 0 degress will evaluate to 0, however
-     * we to treat 180 as an interior angle and 180 as an exterior angle */
+     * we to treat 0 as an interior angle and 180 as an exterior angle */
     dot(perp(a), b) > 0. || a == b /* 0 degrees is interior */
 }
 
@@ -578,30 +582,66 @@ fn join_line(
                     if dest.aa {
                         let ramp_start = pt + s1_normal * (offset + 1.);
                         let ramp_end = pt + s2_normal * (offset + 1.);
+
+                        // The following diagram is inspired by the DoLimitedMiter code
+                        // from WpfGfx. Their math doesn't make sense to me so
+                        // there's an original derivation from jgilbert below:
+                        //
+                        //              offset point
+                        //           --*----------------------  offset line
+                        //          | *
+                        //          |*
+                        //          * clip point
+                        //         *|s       a          spine
+                        //        *-- offset  ................
+                        //         q| point   .
+                        //          |         .
+                        //          |         .
+                        //          |         .
+                        //          |  - r -  .        -------
+                        //          |         .       |
+                        //          |         .       |
+                        //
+                        // b = a/2
+                        // r/(q+r) = cos b => q + r = r/cos b => q = r/cos b - r
+                        // q/s = sin b/cos b => s = q cos b/sin b
+                        // s = (r/cos b - r) * cos b/sin b = (r - r cos b)/sin b
+                        // sub in r = 1
+                        // s = (1 - cos b)/sin b
+                        //
+                        // rearrange so that we don't have denominator of 0 when b = 0 (parallel lines)
+                        // this prevents numerical instability in that case
+                        //
+                        // (1 - cos b)/sin b => (1 - cos b)(1 + cos b)/(sin b * (1 + cos b))
+                        //                   => (1 - cos^2 b) / (sin b * (1 + cos b)
+                        //                   => sin^2 b / sin b * (1 + cos b)
+                        //                   => sin b / (1 + cos b)
+
                         let mid = bisect(s1_normal, s2_normal);
-                        let ramp_intersection = intersection + mid;
 
-                        let ramp_s1 = line_intersection(ramp_start, s1_normal, ramp_intersection, flip(mid));
-                        let ramp_s2 = line_intersection(ramp_end, s2_normal, ramp_intersection, flip(mid));
+                        // cross = sin, dot = cos
+                        let cos = dot(s1_normal, mid);
+                        let s = cross(mid, s1_normal)/(1. + cos);
 
-                        if let Some(ramp_s1) = ramp_s1 {
-                            dest.ramp(intersection.x, intersection.y,
-                                ramp_s1.x, ramp_s1.y,
-                                ramp_start.x, ramp_start.y,
-                                pt.x + s1_normal.x * offset, pt.y + s1_normal.y * offset,
-                            );
-                        }
-                        if let Some(ramp_s2) = ramp_s2 {
-                            dest.ramp(pt.x + s2_normal.x * offset, pt.y + s2_normal.y * offset,
-                                ramp_end.x, ramp_end.y,
-                                ramp_s2.x, ramp_s2.y,
-                                intersection.x, intersection.y);
-                            if let Some(ramp_s1) = ramp_s1 {
-                                dest.tri_ramp(ramp_s1.x, ramp_s1.y, ramp_s2.x, ramp_s2.y, intersection.x, intersection.y);
-                            }
-                        }
+                        // compute the intersection in a more stable way
+                        let intersection = pt + mid * (offset / cos);
 
-                        // we'll want to intersect the ramps and put a flat cap on the end
+                        let ramp_s1 = intersection + s1_normal * 1. + unperp(s1_normal) * s;
+                        let ramp_s2 = intersection + s2_normal * 1. + perp(s2_normal) * s;
+
+                        dest.ramp(intersection.x, intersection.y,
+                            ramp_s1.x, ramp_s1.y,
+                            ramp_start.x, ramp_start.y,
+                            pt.x + s1_normal.x * offset, pt.y + s1_normal.y * offset,
+                        );
+                        dest.ramp(pt.x + s2_normal.x * offset, pt.y + s2_normal.y * offset,
+                            ramp_end.x, ramp_end.y,
+                            ramp_s2.x, ramp_s2.y,
+                            intersection.x, intersection.y);
+
+                        // put a flat cap on the end
+                        dest.tri_ramp(ramp_s1.x, ramp_s1.y, ramp_s2.x, ramp_s2.y, intersection.x, intersection.y);
+
                         dest.quad(pt.x + s1_normal.x * offset, pt.y + s1_normal.y * offset,
                             intersection.x, intersection.y,
                             pt.x + s2_normal.x * offset, pt.y + s2_normal.y * offset,
@@ -659,7 +699,9 @@ impl<'z> Stroker<'z> {
     pub fn line_to_capped(&mut self, pt: Point) {
         if let Some(cur_pt) = self.cur_pt {
             let normal = compute_normal(cur_pt, pt).unwrap_or(self.last_normal);
-            self.line_to(if self.stroked_path.aa && self.style.cap == LineCap::Butt { pt - flip(normal) * 0.5} else { pt });
+            // if we have a butt cap end the line half a pixel early so we have room to put the cap.
+            // XXX: this will probably mess things up if the line is shorter than 1/2 pixel long
+            self.line_to(if self.stroked_path.aa && self.style.cap == LineCap::Butt { pt + perp(normal) * 0.5} else { pt });
             if let (Some(cur_pt), Some((_point, _normal))) = (self.cur_pt, self.start_point) {
                 // cap end
                 cap_line(&mut self.stroked_path, &self.style, cur_pt, self.last_normal);
@@ -669,12 +711,16 @@ impl<'z> Stroker<'z> {
     }
 
     pub fn move_to(&mut self, pt: Point, closed_subpath: bool) {
+        //eprintln!("stroker.move_to(Point::new({}, {}), {});", pt.x, pt.y, closed_subpath);
+
         self.start_point = None;
         self.cur_pt = Some(pt);
         self.closed_subpath = closed_subpath;
     }
 
     pub fn line_to(&mut self, pt: Point) {
+        //eprintln!("stroker.line_to(Point::new({}, {}));", pt.x, pt.y);
+
         let cur_pt = self.cur_pt;
         let stroked_path = &mut self.stroked_path;
         let half_width = self.half_width;
@@ -686,10 +732,13 @@ impl<'z> Stroker<'z> {
                 if self.start_point.is_none() {
                     if !self.closed_subpath {
                         // cap beginning
-                        cap_line(stroked_path, &self.style, cur_pt, flip(normal));
+                        let mut cur_pt = cur_pt;
                         if stroked_path.aa && self.style.cap == LineCap::Butt {
-                            
+                            // adjust the starting point to make room for the cap
+                            // XXX: this will probably mess things up if the line is shorter than 1/2 pixel long
+                            cur_pt += perp(flip(normal)) * 0.5;
                         }
+                        cap_line(stroked_path, &self.style, cur_pt, flip(normal));
                     }
                     self.start_point = Some((cur_pt, normal));
                 } else {
@@ -743,6 +792,7 @@ impl<'z> Stroker<'z> {
     }
 
     pub fn curve_to(&mut self, cx1: Point, cx2: Point, pt: Point) {
+        //eprintln!("stroker.curve_to(Point::new({}, {}), Point::new({}, {}), Point::new({}, {}));", cx1.x, cx1.y, cx2.x, cx2.y, pt.x, pt.y);
         self.curve_to_internal(cx1, cx2, pt, false);
     }
 
@@ -849,7 +899,7 @@ impl<'z> Stroker<'z> {
         stroked_path
     }
 
-    pub fn finish(&mut self) -> Vec<Vertex> {
+    pub fn finish(&mut self) -> Box<[Vertex]> {
         self.get_stroked_path().finish()
     }
 }
@@ -886,6 +936,21 @@ fn curve() {
         stroker.close();
     let stroked = stroker.finish();
     assert_eq!(stroked.len(), 1089);
+}
+
+#[test]
+fn butt_cap() {
+    let mut stroker = Stroker::new(&StrokeStyle{
+        cap: LineCap::Butt,
+        join: LineJoin::Bevel,
+        width: 1.,
+        ..Default::default()});
+    stroker.move_to(Point::new(20., 20.5), false);
+    stroker.line_to_capped(Point::new(40., 20.5));
+    let result = stroker.finish();
+    for v in result.iter() {
+        assert!(v.y == 20.5 || v.y == 19.5 || v.y == 21.5);
+    }
 }
 
 #[test]
@@ -930,5 +995,80 @@ fn parallel_line_join() {
         stroker.close();
         stroker.finish();
     }
+}
+
+#[test]
+fn degenerate_miter_join() {
+    // from https://bugzilla.mozilla.org/show_bug.cgi?id=1841020
+    let mut stroker = Stroker::new(&StrokeStyle{
+        cap: LineCap::Square,
+        join: LineJoin::Miter,
+        width: 1.0,
+        ..Default::default()});
+
+    stroker.move_to(Point::new(-204.48355, 528.4429), false);
+    stroker.line_to(Point::new(-203.89037, 529.0532));
+    stroker.line_to(Point::new(-202.58539, 530.396,));
+    stroker.line_to(Point::new(-201.2804, 531.73883,));
+    stroker.line_to(Point::new(-200.68721, 532.3492,));
+
+    let result = stroker.finish();
+    // make sure none of the verticies are wildly out of place
+    for v in result.iter() {
+        assert!(v.y >= 527.);
+    }
+
+    let mut stroker = Stroker::new(&StrokeStyle{
+        cap: LineCap::Square,
+        join: LineJoin::Miter,
+        width: 40.0,
+        ..Default::default()});
+
+    fn distance_from_line(p1: Point, p2: Point, x: Point)  -> f32 {
+        ((p2.x - p1.x)*(p1.y - x.y) - (p1.x - x.x)*(p2.y - p1.y)).abs() /
+          ((p2.x - p1.x).powi(2) + (p2.y - p1.y).powi(2)).sqrt()
+    }
+    let start = Point::new(512., 599.);
+    let end = Point::new(513.51666, 597.47736);
+    stroker.move_to(start, false);
+    stroker.line_to(Point::new(512.3874, 598.6111));
+    stroker.line_to_capped(end);
+    let result = stroker.finish();
+    for v in result.iter() {
+        assert!(distance_from_line(start, end, Point::new(v.x, v.y)) <= 21.);
+    }
+
+    // from https://stackoverflow.com/questions/849211/shortest-distance-between-a-point-and-a-line-segment
+    fn minimum_distance(v: Point, w: Point, p: Point) -> f32 {
+        // Return minimum distance between line segment vw and point p
+        let l2 = (v-w).length().powi(2);  // i.e. |w-v|^2 -  avoid a sqrt
+        if l2 == 0.0 { return (p - v).length(); }   // v == w case
+        // Consider the line extending the segment, parameterized as v + t (w - v).
+        // We find projection of point p onto the line.
+        // It falls where t = [(p-v) . (w-v)] / |w-v|^2
+        // We clamp t from [0,1] to handle points outside the segment vw.
+        let t = 0_f32.max(1_f32.min(dot(p - v, w - v) / l2));
+        let projection = v + (w - v) * t;  // Projection falls on the segment
+        (p - projection).length()
+    }
+
+    let mut stroker = Stroker::new(&StrokeStyle{
+        cap: LineCap::Square,
+        join: LineJoin::Miter,
+        width: 40.0,
+        miter_limit: 10.0,
+        ..Default::default()});
+    let start = Point::new(689.3504, 434.5446);
+    let end = Point::new(671.83203, 422.61914);
+    stroker.move_to(Point::new(689.3504, 434.5446), false);
+    stroker.line_to(Point::new(681.04254, 428.8891));
+    stroker.line_to_capped(Point::new(671.83203, 422.61914));
+
+    let result = stroker.finish();
+    let max_distance = (21_f32.powi(2) * 2.).sqrt();
+    for v in result.iter() {
+        assert!(minimum_distance(start, end, Point::new(v.x, v.y)) <= max_distance);
+    }
+
 }
 

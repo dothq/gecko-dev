@@ -97,7 +97,6 @@
 #include "nsIContentPrefService2.h"
 #include "nsIMIMEService.h"
 #include "nsIObserverService.h"
-#include "nsGlobalWindow.h"
 
 // input type=image
 #include "nsImageLoadingContent.h"
@@ -187,16 +186,18 @@ static const nsAttrValue::EnumTable kCaptureTable[] = {
 
 static const nsAttrValue::EnumTable* kCaptureDefault = &kCaptureTable[2];
 
-const Decimal HTMLInputElement::kStepScaleFactorDate = Decimal(86400000);
-const Decimal HTMLInputElement::kStepScaleFactorNumberRange = Decimal(1);
-const Decimal HTMLInputElement::kStepScaleFactorTime = Decimal(1000);
-const Decimal HTMLInputElement::kStepScaleFactorMonth = Decimal(1);
-const Decimal HTMLInputElement::kStepScaleFactorWeek = Decimal(7 * 86400000);
-const Decimal HTMLInputElement::kDefaultStepBase = Decimal(0);
-const Decimal HTMLInputElement::kDefaultStepBaseWeek = Decimal(-259200000);
-const Decimal HTMLInputElement::kDefaultStep = Decimal(1);
-const Decimal HTMLInputElement::kDefaultStepTime = Decimal(60);
-const Decimal HTMLInputElement::kStepAny = Decimal(0);
+using namespace blink;
+
+constexpr Decimal HTMLInputElement::kStepScaleFactorDate(86400000_d);
+constexpr Decimal HTMLInputElement::kStepScaleFactorNumberRange(1_d);
+constexpr Decimal HTMLInputElement::kStepScaleFactorTime(1000_d);
+constexpr Decimal HTMLInputElement::kStepScaleFactorMonth(1_d);
+constexpr Decimal HTMLInputElement::kStepScaleFactorWeek(7 * 86400000_d);
+constexpr Decimal HTMLInputElement::kDefaultStepBase(0_d);
+constexpr Decimal HTMLInputElement::kDefaultStepBaseWeek(-259200000_d);
+constexpr Decimal HTMLInputElement::kDefaultStep(1_d);
+constexpr Decimal HTMLInputElement::kDefaultStepTime(60_d);
+constexpr Decimal HTMLInputElement::kStepAny(0_d);
 
 const double HTMLInputElement::kMinimumYear = 1;
 const double HTMLInputElement::kMaximumYear = 275760;
@@ -3538,8 +3539,16 @@ nsresult HTMLInputElement::MaybeInitPickers(EventChainPostVisitor& aVisitor) {
  */
 static bool IgnoreInputEventWithModifier(const WidgetInputEvent& aEvent,
                                          bool ignoreControl) {
-  return (ignoreControl && aEvent.IsControl()) || aEvent.IsAltGraph() ||
-         aEvent.IsFn() || aEvent.IsOS();
+  return (ignoreControl && aEvent.IsControl()) ||
+         aEvent.IsAltGraph()
+#if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
+         // Meta key is the Windows Logo key on Windows and Linux which may
+         // assign some special meaning for the events while it's pressed.
+         // On the other hand, it's a normal modifier in macOS and Android.
+         // Therefore, We should ignore it only in Win/Linux.
+         || aEvent.IsMeta()
+#endif
+         || aEvent.IsFn();
 }
 
 bool HTMLInputElement::StepsInputValue(
@@ -3619,6 +3628,7 @@ nsresult HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
       !IsSingleLineTextControl(true) && mType != FormControlType::InputNumber) {
     WidgetMouseEvent* mouseEvent = aVisitor.mEvent->AsMouseEvent();
     if (mouseEvent && mouseEvent->IsLeftClickEvent() &&
+        OwnerDoc()->MayHaveDOMActivateListeners() &&
         !ShouldPreventDOMActivateDispatch(aVisitor.mEvent->mOriginalTarget)) {
       // DOMActive event should be trusted since the activation is actually
       // occurred even if the cause is an untrusted click event.

@@ -12,7 +12,6 @@
 #include "mozilla/intl/AppDateTimeFormat.h"
 #include "mozilla/dom/ServiceWorkerRegistrar.h"
 #include "nsAttrValue.h"
-#include "nsColorNames.h"
 #include "nsComputedDOMStyle.h"
 #include "nsContentDLF.h"
 #include "nsContentUtils.h"
@@ -26,7 +25,8 @@
 #include "mozilla/dom/PopupBlocker.h"
 #include "nsIFrame.h"
 #include "nsFrameState.h"
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowInner.h"
+#include "nsGlobalWindowOuter.h"
 #include "nsGkAtoms.h"
 #include "nsImageFrame.h"
 #include "mozilla/GlobalStyleSheetCache.h"
@@ -148,8 +148,7 @@ nsresult nsLayoutStatics::Initialize() {
 
   ContentParent::StartUp();
 
-  nsCSSProps::AddRefTable();
-  nsColorNames::AddRefTable();
+  nsCSSProps::Init();
 
 #ifdef DEBUG
   nsCSSPseudoElements::AssertAtoms();
@@ -340,8 +339,6 @@ void nsLayoutStatics::Shutdown() {
   ActiveLayerTracker::Shutdown();
 
   // Release all of our atoms
-  nsColorNames::ReleaseTable();
-  nsCSSProps::ReleaseTable();
   nsRepeatService::Shutdown();
 
   nsXULContentUtils::Finish();

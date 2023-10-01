@@ -22,6 +22,7 @@ use crate::media_queries::Device;
 use crate::properties;
 use crate::properties::{ComputedValues, StyleBuilder};
 use crate::rule_cache::RuleCacheConditions;
+use crate::stylist::Stylist;
 use crate::stylesheets::container_rule::{
     ContainerInfo, ContainerSizeQuery, ContainerSizeQueryResult,
 };
@@ -67,7 +68,7 @@ pub use self::effects::{BoxShadow, Filter, SimpleShadow};
 pub use self::flex::FlexBasis;
 pub use self::font::{FontFamily, FontLanguageOverride, FontPalette, FontStyle};
 pub use self::font::{FontFeatureSettings, FontVariantLigatures, FontVariantNumeric};
-pub use self::font::{FontSize, FontSizeAdjust, FontStretch, FontSynthesis};
+pub use self::font::{FontSize, FontSizeAdjust, FontSizeAdjustFactor, FontStretch, FontSynthesis};
 pub use self::font::{FontVariantAlternates, FontWeight};
 pub use self::font::{FontVariantEastAsian, FontVariationSettings};
 pub use self::font::{MathDepth, MozScriptMinSize, MozScriptSizeMultiplier, XLang, XTextScale};
@@ -100,7 +101,7 @@ pub use self::text::{OverflowWrap, RubyPosition, TextOverflow, WordBreak, WordSp
 pub use self::text::{TextAlign, TextAlignLast, TextEmphasisPosition, TextEmphasisStyle};
 pub use self::text::{TextDecorationLength, TextDecorationSkipInk, TextJustify};
 pub use self::time::Time;
-pub use self::transform::{Rotate, Scale, Transform, TransformOperation};
+pub use self::transform::{Rotate, Scale, Transform, TransformBox, TransformOperation};
 pub use self::transform::{TransformOrigin, TransformStyle, Translate};
 #[cfg(feature = "gecko")]
 pub use self::ui::CursorImage;
@@ -215,7 +216,7 @@ impl<'a> Context<'a> {
     {
         let mut conditions = RuleCacheConditions::default();
         let context = Context {
-            builder: StyleBuilder::for_inheritance(device, None, None),
+            builder: StyleBuilder::for_inheritance(device, None, None, None),
             cached_system_font: None,
             in_media_query: true,
             in_container_query: false,
@@ -233,6 +234,7 @@ impl<'a> Context<'a> {
     /// specified.
     pub fn for_container_query_evaluation<F, R>(
         device: &Device,
+        stylist: Option<&Stylist>,
         container_info_and_style: Option<(ContainerInfo, Arc<ComputedValues>)>,
         container_size_query: ContainerSizeQuery,
         f: F,
@@ -250,7 +252,7 @@ impl<'a> Context<'a> {
         let style = style.as_ref().map(|s| &**s);
         let quirks_mode = device.quirks_mode();
         let context = Context {
-            builder: StyleBuilder::for_inheritance(device, style, None),
+            builder: StyleBuilder::for_inheritance(device, stylist, style, None),
             cached_system_font: None,
             in_media_query: false,
             in_container_query: true,

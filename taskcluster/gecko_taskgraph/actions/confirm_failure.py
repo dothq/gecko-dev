@@ -73,7 +73,11 @@ def get_failures(task_id, task_definition):
                         test_path = test_path.split(":")[-1]
 
                     # edge case where a crash on shutdown has a "test" name == group name
-                    if test_path.endswith(".ini") or test_path.endswith(".list"):
+                    if (
+                        test_path.endswith(".toml")
+                        or test_path.endswith(".ini")
+                        or test_path.endswith(".list")
+                    ):
                         continue
 
                     # edge cases with missing test names
@@ -92,17 +96,19 @@ def get_failures(task_id, task_definition):
                     if test_path:
                         tests.update(test_path)
                 else:
-                    test_path = l["test"]
+                    test_path = l["test"].split(" ")[0]
 
                     # tests with url params (wpt), will get confused here
                     if "?" not in test_path:
                         test_path = test_path.split(":")[-1]
 
-                    if "==" in test_path or "!=" in test_path:
-                        test_path = test_path.split(" ")[0]
-
                     # edge case where a crash on shutdown has a "test" name == group name
-                    if test_path.endswith(".ini") or test_path.endswith(".list"):
+                    if (
+                        test_path.endswith(".toml")
+                        or test_path.endswith(".ini")
+                        or test_path.endswith(".list")
+                    ):
+                        # TODO: consider running just the manifest
                         continue
 
                     # edge cases with missing test names

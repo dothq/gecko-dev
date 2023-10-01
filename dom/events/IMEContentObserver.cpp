@@ -37,8 +37,8 @@
 
 namespace mozilla {
 
-using NodePosition = ContentEventHandler::NodePosition;
-using NodePositionBefore = ContentEventHandler::NodePositionBefore;
+using RawNodePosition = ContentEventHandler::RawNodePosition;
+using RawNodePositionBefore = ContentEventHandler::RawNodePositionBefore;
 
 using namespace dom;
 using namespace widget;
@@ -49,14 +49,14 @@ static const char* ToChar(bool aBool) { return aBool ? "true" : "false"; }
 
 // This method determines the node to use for the point before the current node.
 // If you have the following aContent and aContainer, and want to represent the
-// following point for `NodePosition` or `RangeBoundary`:
+// following point for `RawNodePosition` or `RawRangeBoundary`:
 //
 // <parent> {node} {node} | {node} </parent>
 //  ^                     ^     ^
 // aContainer           point  aContent
 //
 // This function will shift `aContent` to the left into the format which
-// `NodePosition` and `RangeBoundary` use:
+// `RawNodePosition` and `RawRangeBoundary` use:
 //
 // <parent> {node} {node} | {node} </parent>
 //  ^               ^     ^
@@ -123,19 +123,9 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTING_ADDREF(IMEContentObserver)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(IMEContentObserver)
 
-IMEContentObserver::IMEContentObserver()
-    : mESM(nullptr),
-      mIMENotificationRequests(nullptr),
-      mSendingNotification(NOTIFY_IME_OF_NOTHING),
-      mIsObserving(false),
-      mIMEHasFocus(false),
-      mNeedsToNotifyIMEOfFocusSet(false),
-      mNeedsToNotifyIMEOfTextChange(false),
-      mNeedsToNotifyIMEOfSelectionChange(false),
-      mNeedsToNotifyIMEOfPositionChange(false),
-      mNeedsToNotifyIMEOfCompositionEventHandled(false),
-      mIsHandlingQueryContentEvent(false) {
+IMEContentObserver::IMEContentObserver() {
 #ifdef DEBUG
+  // TODO: Make this test as GTest.
   mTextChangeData.Test();
 #endif
 }
@@ -275,7 +265,9 @@ bool IMEContentObserver::InitWithEditor(nsPresContext& aPresContext,
             mRootElement ? mRootElement->GetFirstChild() : nullptr)) {
       mTextControlValueLength = ContentEventHandler::GetNativeTextLength(*text);
     }
+    mIsTextControl = true;
   } else if (const nsRange* selRange = mSelection->GetRangeAt(0)) {
+    MOZ_ASSERT(!mIsTextControl);
     if (NS_WARN_IF(!selRange->GetStartContainer())) {
       return false;
     }
@@ -284,6 +276,7 @@ bool IMEContentObserver::InitWithEditor(nsPresContext& aPresContext,
     mRootElement = Element::FromNodeOrNull(
         startContainer->GetSelectionRootContent(presShell));
   } else {
+    MOZ_ASSERT(!mIsTextControl);
     nsCOMPtr<nsINode> editableNode = mEditableNode;
     mRootElement = Element::FromNodeOrNull(
         editableNode->GetSelectionRootContent(presShell));
@@ -869,13 +862,24 @@ void IMEContentObserver::CharacterDataChanged(
              "CharacterDataWillChange()");
 
   uint32_t offset = 0;
-  // get offsets of change and fire notification
-  nsresult rv = ContentEventHandler::GetFlatTextLengthInRange(
-      NodePosition(mRootElement, 0u),
-      NodePosition(aContent, aInfo.mChangeStart), mRootElement, &offset,
-      LINE_BREAK_TYPE_NATIVE);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return;
+  if (mIsTextControl) {
+    // If we're observing a text control, mRootElement is the anonymous <div>
+    // element which has only one text node and/or invisible <br> element.
+    // TextEditor assumes this structure when it handles editing commands.
+    // Therefore, it's safe to assume same things here.
+    MOZ_ASSERT(mRootElement->GetFirstChild() == aContent);
+    if (aInfo.mChangeStart) {
+      offset = ContentEventHandler::GetNativeTextLength(*aContent->AsText(), 0,
+                                                        aInfo.mChangeStart);
+    }
+  } else {
+    nsresult rv = ContentEventHandler::GetFlatTextLengthInRange(
+        RawNodePosition(mRootElement, 0u),
+        RawNodePosition(aContent, aInfo.mChangeStart), mRootElement, &offset,
+        LINE_BREAK_TYPE_NATIVE);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      return;
+    }
   }
 
   uint32_t newLength = ContentEventHandler::GetNativeTextLength(
@@ -948,8 +952,9 @@ void IMEContentObserver::NotifyContentAdded(nsINode* aContainer,
                                   aFirstContent->GetPreviousSibling())) {
     mEndOfAddedTextCache.Clear();
     rv = ContentEventHandler::GetFlatTextLengthInRange(
-        NodePosition(mRootElement, 0u),
-        NodePositionBefore(aContainer, PointBefore(aContainer, aFirstContent)),
+        RawNodePosition(mRootElement, 0u),
+        RawNodePositionBefore(aContainer,
+                              PointBefore(aContainer, aFirstContent)),
         mRootElement, &offset, LINE_BREAK_TYPE_NATIVE);
     if (NS_WARN_IF(NS_FAILED((rv)))) {
       return;
@@ -961,8 +966,8 @@ void IMEContentObserver::NotifyContentAdded(nsINode* aContainer,
   // get offset at the end of the last added node
   uint32_t addingLength = 0;
   rv = ContentEventHandler::GetFlatTextLengthInRange(
-      NodePositionBefore(aContainer, PointBefore(aContainer, aFirstContent)),
-      NodePosition(aContainer, aLastContent), mRootElement, &addingLength,
+      RawNodePositionBefore(aContainer, PointBefore(aContainer, aFirstContent)),
+      RawNodePosition(aContainer, aLastContent), mRootElement, &addingLength,
       LINE_BREAK_TYPE_NATIVE);
   if (NS_WARN_IF(NS_FAILED((rv)))) {
     mEndOfAddedTextCache.Clear();
@@ -1016,8 +1021,8 @@ void IMEContentObserver::ContentRemoved(nsIContent* aChild,
     // by open tag of aContainer.  Be careful when aPreviousSibling is nullptr.
 
     rv = ContentEventHandler::GetFlatTextLengthInRange(
-        NodePosition(mRootElement, 0u),
-        NodePosition(containerNode, aPreviousSibling), mRootElement, &offset,
+        RawNodePosition(mRootElement, 0u),
+        RawNodePosition(containerNode, aPreviousSibling), mRootElement, &offset,
         LINE_BREAK_TYPE_NATIVE);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       mStartOfRemovingTextRangeCache.Clear();
@@ -1035,8 +1040,8 @@ void IMEContentObserver::ContentRemoved(nsIContent* aChild,
     textLength = ContentEventHandler::GetNativeTextLength(*textNode);
   } else {
     nsresult rv = ContentEventHandler::GetFlatTextLengthInRange(
-        NodePositionBefore(aChild, 0u),
-        NodePosition(aChild, aChild->GetChildCount()), mRootElement,
+        RawNodePositionBefore(aChild, 0u),
+        RawNodePosition(aChild, aChild->GetChildCount()), mRootElement,
         &textLength, LINE_BREAK_TYPE_NATIVE, true);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       mStartOfRemovingTextRangeCache.Clear();
@@ -1117,9 +1122,9 @@ void IMEContentObserver::MaybeNotifyIMEOfAddedTextDuringDocumentChange() {
   // editor.
   uint32_t offset;
   nsresult rv = ContentEventHandler::GetFlatTextLengthInRange(
-      NodePosition(mRootElement, 0u),
-      NodePosition(mFirstAddedContainer,
-                   PointBefore(mFirstAddedContainer, mFirstAddedContent)),
+      RawNodePosition(mRootElement, 0u),
+      RawNodePosition(mFirstAddedContainer,
+                      PointBefore(mFirstAddedContainer, mFirstAddedContent)),
       mRootElement, &offset, LINE_BREAK_TYPE_NATIVE);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     ClearAddedNodesDuringDocumentChange();
@@ -1129,9 +1134,9 @@ void IMEContentObserver::MaybeNotifyIMEOfAddedTextDuringDocumentChange() {
   // Next, compute the text length of added nodes.
   uint32_t length;
   rv = ContentEventHandler::GetFlatTextLengthInRange(
-      NodePosition(mFirstAddedContainer,
-                   PointBefore(mFirstAddedContainer, mFirstAddedContent)),
-      NodePosition(mLastAddedContainer, mLastAddedContent), mRootElement,
+      RawNodePosition(mFirstAddedContainer,
+                      PointBefore(mFirstAddedContainer, mFirstAddedContent)),
+      RawNodePosition(mLastAddedContainer, mLastAddedContent), mRootElement,
       &length, LINE_BREAK_TYPE_NATIVE);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     ClearAddedNodesDuringDocumentChange();

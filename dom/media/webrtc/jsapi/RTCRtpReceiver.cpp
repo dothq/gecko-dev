@@ -378,9 +378,10 @@ nsTArray<RefPtr<RTCStatsPromise>> RTCRtpReceiver::GetStatsInternal(
               constructCommonInboundRtpStats(local);
               local.mJitter.Construct(audioStats->jitter_ms / 1000.0);
               local.mPacketsLost.Construct(audioStats->packets_lost);
-              local.mPacketsReceived.Construct(audioStats->packets_rcvd);
+              local.mPacketsReceived.Construct(audioStats->packets_received);
               local.mPacketsDiscarded.Construct(audioStats->packets_discarded);
-              local.mBytesReceived.Construct(audioStats->payload_bytes_rcvd);
+              local.mBytesReceived.Construct(
+                  audioStats->payload_bytes_received);
               // Always missing from libwebrtc stats
               // if (audioStats->estimated_playout_ntp_timestamp_ms) {
               //   local.mEstimatedPlayoutTimestamp.Construct(
@@ -409,7 +410,7 @@ nsTArray<RefPtr<RTCStatsPromise>> RTCRtpReceiver::GetStatsInternal(
                         .ToDom());
               }
               local.mHeaderBytesReceived.Construct(
-                  audioStats->header_and_padding_bytes_rcvd);
+                  audioStats->header_and_padding_bytes_received);
               local.mFecPacketsReceived.Construct(
                   audioStats->fec_packets_received);
               local.mFecPacketsDiscarded.Construct(
@@ -850,8 +851,10 @@ void RTCRtpReceiver::UpdateAudioConduit() {
 }
 
 void RTCRtpReceiver::Stop() {
-  MOZ_ASSERT(mTransceiver->Stopped());
+  MOZ_ASSERT(mTransceiver->Stopped() || mTransceiver->Stopping());
   mReceiving = false;
+  GetMainThreadSerialEventTarget()->Dispatch(NS_NewRunnableFunction(
+      __func__, [trackSource = mTrackSource] { trackSource->ForceEnded(); }));
 }
 
 bool RTCRtpReceiver::HasTrack(const dom::MediaStreamTrack* aTrack) const {

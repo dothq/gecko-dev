@@ -2436,6 +2436,10 @@ nsresult nsHttpChannel::ContinueProcessResponse3(nsresult rv) {
         // CSP Frame Ancestor and X-Frame-Options check has failed
         // Do not prompt http auth - Bug 1629307
         rv = NS_ERROR_FAILURE;
+      } else if (httpStatus == 401 &&
+                 mLoadInfo->GetTainting() == mozilla::LoadTainting::CORS) {
+        // CORS does not allow Authentication headers on 401 (see bug 1554538)
+        rv = NS_ERROR_FAILURE;
       } else {
         rv = mAuthProvider->ProcessAuthentication(
             httpStatus, mConnectionInfo->EndToEndSSL() && mTransaction &&
@@ -6881,7 +6885,7 @@ nsHttpChannel::GetTransactionPending(TimeStamp* _retval) {
   if (mTransaction) {
     *_retval = mTransaction->GetPendingTime();
   } else {
-    *_retval = mTransactionPendingTime;
+    *_retval = mTransactionTimings.transactionPending;
   }
   return NS_OK;
 }
@@ -7391,6 +7395,31 @@ static nsLiteralCString ContentTypeToTelemetryLabel(nsHttpChannel* aChannel) {
   return "other"_ns;
 }
 
+nsresult nsHttpChannel::LogConsoleError(const char* aTag) {
+  nsCOMPtr<nsIConsoleService> console(
+      do_GetService(NS_CONSOLESERVICE_CONTRACTID));
+  NS_ENSURE_TRUE(console, NS_ERROR_OUT_OF_MEMORY);
+
+  nsCOMPtr<nsILoadInfo> loadInfo = LoadInfo();
+  NS_ENSURE_TRUE(console, NS_ERROR_OUT_OF_MEMORY);
+  uint64_t innerWindowID = loadInfo->GetInnerWindowID();
+
+  nsAutoString errorText;
+  nsresult rv = nsContentUtils::GetLocalizedString(
+      nsContentUtils::eNECKO_PROPERTIES, aTag, errorText);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIScriptError> error(do_CreateInstance(NS_SCRIPTERROR_CONTRACTID));
+  NS_ENSURE_TRUE(error, NS_ERROR_OUT_OF_MEMORY);
+
+  rv = error->InitWithSourceURI(errorText, mURI, u""_ns, 0, 0,
+                                nsIScriptError::errorFlag,
+                                "Invalid HTTP Status Lines"_ns, innerWindowID);
+  NS_ENSURE_SUCCESS(rv, rv);
+  console->LogMessage(error);
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 nsHttpChannel::OnStopRequest(nsIRequest* request, nsresult status) {
   AUTO_PROFILER_LABEL("nsHttpChannel::OnStopRequest", NETWORK);
@@ -7403,6 +7432,10 @@ nsHttpChannel::OnStopRequest(nsIRequest* request, nsresult status) {
 
   MOZ_ASSERT(NS_IsMainThread(),
              "OnStopRequest should only be called from the main thread");
+
+  if (mStatus == NS_ERROR_PARSING_HTTP_STATUS_LINE) {
+    Unused << LogConsoleError("InvalidHTTPResponseStatusLine");
+  }
 
   if (WRONG_RACING_RESPONSE_SOURCE(request)) {
     return NS_OK;
@@ -7561,7 +7594,6 @@ nsHttpChannel::OnStopRequest(nsIRequest* request, nsresult status) {
 
     // at this point, we're done with the transaction
     mTransactionTimings = mTransaction->Timings();
-    mTransactionPendingTime = mTransaction->GetPendingTime();
     mTransaction = nullptr;
     mTransactionPump = nullptr;
 

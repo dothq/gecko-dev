@@ -17,7 +17,8 @@
 #include "nsJSUtils.h"
 
 #include "nsDocShell.h"
-#include "nsGlobalWindow.h"
+#include "nsGlobalWindowInner.h"
+#include "nsGlobalWindowOuter.h"
 #include "nsHashPropertyBag.h"
 #include "nsIBaseWindow.h"
 #include "nsIBrowserDOMWindow.h"
@@ -73,7 +74,6 @@
 #include "mozilla/dom/SessionStorageManager.h"
 #include "nsIAppWindow.h"
 #include "nsIXULBrowserWindow.h"
-#include "nsGlobalWindow.h"
 #include "ReferrerInfo.h"
 
 using namespace mozilla;
@@ -1277,6 +1277,12 @@ nsresult nsWindowWatcher::OpenWindowInternal(
         context && context->HasValidTransientUserGestureActivation());
     if (parentBC) {
       loadState->SetTriggeringSandboxFlags(parentBC->GetSandboxFlags());
+    }
+
+    if (parentInnerWin) {
+      loadState->SetTriggeringWindowId(parentInnerWin->WindowID());
+      loadState->SetTriggeringStorageAccess(
+          parentInnerWin->UsingStorageAccess());
     }
 
     if (subjectPrincipal) {

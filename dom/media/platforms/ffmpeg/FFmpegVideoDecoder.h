@@ -17,7 +17,7 @@
 #if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
 #  include "mozilla/layers/TextureClient.h"
 #endif
-#ifdef MOZ_WAYLAND_USE_HWDECODE
+#ifdef MOZ_USE_HWDECODE
 #  include "FFmpegVideoFramePool.h"
 #endif
 
@@ -123,7 +123,7 @@ class FFmpegVideoDecoder<LIBAV_VER>
                                           int32_t aHeight) const;
 #endif
 
-#ifdef MOZ_WAYLAND_USE_HWDECODE
+#ifdef MOZ_USE_HWDECODE
   void InitHWDecodingPrefs();
   MediaResult InitVAAPIDecoder();
   MediaResult InitV4L2Decoder();
@@ -140,9 +140,10 @@ class FFmpegVideoDecoder<LIBAV_VER>
                                MediaDataDecoder::DecodedData& aResults);
   MediaResult CreateImageV4L2(int64_t aOffset, int64_t aPts, int64_t aDuration,
                               MediaDataDecoder::DecodedData& aResults);
+  void AdjustHWDecodeLogging();
 #endif
 
-#ifdef MOZ_WAYLAND_USE_HWDECODE
+#ifdef MOZ_USE_HWDECODE
   AVBufferRef* mVAAPIDeviceContext;
   bool mUsingV4L2;
   bool mEnableHardwareDecoding;

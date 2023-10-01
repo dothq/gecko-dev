@@ -840,6 +840,15 @@
   z-index: 4;
 }
 
+.annotationEditorLayer.waiting {
+  content: "";
+  cursor: wait;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
 .annotationEditorLayer.freeTextEditing {
   cursor: var(--editorFreeText-editing-cursor);
 }
@@ -849,7 +858,7 @@
 }
 
 .annotationEditorLayer
-  :is(.freeTextEditor, .inkEditor, .stampEditor)[draggable="true"] {
+  :is(.freeTextEditor, .inkEditor, .stampEditor).draggable.selectedEditor {
   cursor: move;
 }
 
@@ -936,122 +945,135 @@
   height: auto;
 }
 
-.annotationEditorLayer .stampEditor.loading {
-  aspect-ratio: 1;
-  width: 10%;
-  height: auto;
-  background-color: rgba(128, 128, 128, 0.5);
-  background-image: var(--loading-icon);
-  background-repeat: no-repeat;
-  background-position: 50%;
-  background-size: 16px 16px;
-  transition-property: background-size;
-  transition-delay: var(--loading-icon-delay);
-}
-
 .annotationEditorLayer .stampEditor canvas {
   width: 100%;
   height: 100%;
 }
 
-.annotationEditorLayer .resizers {
-  width: 100%;
-  height: 100%;
-  position: absolute;
-  inset: 0;
-}
+.annotationEditorLayer {
+  :is(.freeTextEditor, .inkEditor, .stampEditor) {
+    & > .resizers {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      inset: 0;
 
-.annotationEditorLayer .resizers.hidden {
-  display: none;
-}
+      &.hidden {
+        display: none;
+      }
 
-.annotationEditorLayer .resizer {
-  width: var(--resizer-size);
-  height: var(--resizer-size);
-  border-radius: 50%;
-  background: var(--resizer-color);
-  border: var(--focus-outline);
-  position: absolute;
-}
+      & > .resizer {
+        width: var(--resizer-size);
+        height: var(--resizer-size);
+        border-radius: 50%;
+        background: var(--resizer-color);
+        border: var(--focus-outline);
+        position: absolute;
 
-.annotationEditorLayer .resizer.topLeft {
-  cursor: nw-resize;
-  top: var(--resizer-shift);
-  left: var(--resizer-shift);
-}
+        &.topLeft {
+          top: var(--resizer-shift);
+          left: var(--resizer-shift);
+        }
 
-.annotationEditorLayer .resizer.topMiddle {
-  cursor: n-resize;
-  top: var(--resizer-shift);
-  left: calc(50% + var(--resizer-shift));
-}
+        &.topMiddle {
+          top: var(--resizer-shift);
+          left: calc(50% + var(--resizer-shift));
+        }
 
-.annotationEditorLayer .resizer.topRight {
-  cursor: ne-resize;
-  top: var(--resizer-shift);
-  right: var(--resizer-shift);
-}
+        &.topRight {
+          top: var(--resizer-shift);
+          right: var(--resizer-shift);
+        }
 
-.annotationEditorLayer .resizer.middleRight {
-  cursor: e-resize;
-  top: calc(50% + var(--resizer-shift));
-  right: var(--resizer-shift);
-}
+        &.middleRight {
+          top: calc(50% + var(--resizer-shift));
+          right: var(--resizer-shift);
+        }
 
-.annotationEditorLayer .resizer.bottomRight {
-  cursor: se-resize;
-  bottom: var(--resizer-shift);
-  right: var(--resizer-shift);
-}
+        &.bottomRight {
+          bottom: var(--resizer-shift);
+          right: var(--resizer-shift);
+        }
 
-.annotationEditorLayer .resizer.bottomMiddle {
-  cursor: s-resize;
-  bottom: var(--resizer-shift);
-  left: calc(50% + var(--resizer-shift));
-}
+        &.bottomMiddle {
+          bottom: var(--resizer-shift);
+          left: calc(50% + var(--resizer-shift));
+        }
 
-.annotationEditorLayer .resizer.bottomLeft {
-  cursor: sw-resize;
-  bottom: var(--resizer-shift);
-  left: var(--resizer-shift);
-}
+        &.bottomLeft {
+          bottom: var(--resizer-shift);
+          left: var(--resizer-shift);
+        }
 
-.annotationEditorLayer .resizer.middleLeft {
-  cursor: w-resize;
-  top: calc(50% + var(--resizer-shift));
-  left: var(--resizer-shift);
-}
+        &.middleLeft {
+          top: calc(50% + var(--resizer-shift));
+          left: var(--resizer-shift);
+        }
+      }
+    }
+  }
 
-.annotationEditorLayer.resizingTopLeft {
-  cursor: nw-resize;
-}
+  &[data-main-rotation="0"]
+    :is([data-editor-rotation="0"], [data-editor-rotation="180"]),
+  &[data-main-rotation="90"]
+    :is([data-editor-rotation="270"], [data-editor-rotation="90"]),
+  &[data-main-rotation="180"]
+    :is([data-editor-rotation="180"], [data-editor-rotation="0"]),
+  &[data-main-rotation="270"]
+    :is([data-editor-rotation="90"], [data-editor-rotation="270"]) {
+    & > .resizers > .resizer {
+      &.topLeft,
+      &.bottomRight {
+        cursor: nwse-resize;
+      }
 
-.annotationEditorLayer.resizingTopMiddle {
-  cursor: n-resize;
-}
+      &.topMiddle,
+      &.bottomMiddle {
+        cursor: ns-resize;
+      }
 
-.annotationEditorLayer.resizingTopRight {
-  cursor: ne-resize;
-}
+      &.topRight,
+      &.bottomLeft {
+        cursor: nesw-resize;
+      }
 
-.annotationEditorLayer.resizingMiddleRight {
-  cursor: e-resize;
-}
+      &.middleRight,
+      &.middleLeft {
+        cursor: ew-resize;
+      }
+    }
+  }
 
-.annotationEditorLayer.resizingBottomRight {
-  cursor: se-resize;
-}
+  &[data-main-rotation="0"]
+    :is([data-editor-rotation="90"], [data-editor-rotation="270"]),
+  &[data-main-rotation="90"]
+    :is([data-editor-rotation="0"], [data-editor-rotation="180"]),
+  &[data-main-rotation="180"]
+    :is([data-editor-rotation="270"], [data-editor-rotation="90"]),
+  &[data-main-rotation="270"]
+    :is([data-editor-rotation="180"], [data-editor-rotation="0"]) {
+    & > .resizers > .resizer {
+      &.topLeft,
+      &.bottomRight {
+        cursor: nesw-resize;
+      }
 
-.annotationEditorLayer.resizingBottomMiddle {
-  cursor: s-resize;
-}
+      &.topMiddle,
+      &.bottomMiddle {
+        cursor: ew-resize;
+      }
 
-.annotationEditorLayer.resizingBottomLeft {
-  cursor: sw-resize;
-}
+      &.topRight,
+      &.bottomLeft {
+        cursor: nwse-resize;
+      }
 
-.annotationEditorLayer.resizingMiddleLeft {
-  cursor: w-resize;
+      &.middleRight,
+      &.middleLeft {
+        cursor: ns-resize;
+      }
+    }
+  }
 }
 
 :root {
@@ -1122,6 +1144,10 @@
   position: relative;
   width: 0;
   height: var(--viewer-container-height);
+}
+
+.pdfViewer.noUserSelect {
+  user-select: none;
 }
 
 .pdfViewer:is(.scrollHorizontal, .scrollWrapped),
@@ -1218,6 +1244,10 @@
   --body-bg-color: rgba(212, 212, 215, 1);
   --scrollbar-color: auto;
   --scrollbar-bg-color: auto;
+  --field-color: rgba(6, 6, 6, 1);
+  --field-bg-color: rgba(255, 255, 255, 1);
+  --field-border-color: rgba(187, 187, 188, 1);
+  --doorhanger-bg-color: rgba(255, 255, 255, 1);
   --dialog-button-border: none;
   --dialog-button-bg-color: rgba(12, 12, 13, 0.1);
   --dialog-button-hover-bg-color: rgba(12, 12, 13, 0.3);
@@ -1240,6 +1270,10 @@
     --body-bg-color: rgba(42, 42, 46, 1);
     --scrollbar-color: rgba(121, 121, 123, 1);
     --scrollbar-bg-color: rgba(35, 35, 39, 1);
+    --field-color: rgba(250, 250, 250, 1);
+    --field-bg-color: rgba(64, 64, 68, 1);
+    --field-border-color: rgba(115, 115, 115, 1);
+    --doorhanger-bg-color: rgba(74, 74, 79, 1);
     --dialog-button-bg-color: rgba(92, 92, 97, 1);
     --dialog-button-hover-bg-color: rgba(115, 115, 115, 1);
 
@@ -1254,6 +1288,7 @@
     --dialog-button-border: 1px solid Highlight;
     --dialog-button-hover-bg-color: Highlight;
     --dialog-button-hover-color: ButtonFace;
+    --field-border-color: ButtonText;
     --main-color: CanvasText;
   }
 }
@@ -1483,4 +1518,58 @@ dialog :link {
 
 @page {
   margin: 0;
+}
+
+#printContainer {
+  display: none;
+}
+
+@media print {
+  body {
+    background: rgba(0, 0, 0, 0) none;
+  }
+  body[data-pdfjsprinting] #outerContainer {
+    display: none;
+  }
+  body[data-pdfjsprinting] #printContainer {
+    display: block;
+  }
+  #printContainer {
+    height: 100%;
+  }
+  /* wrapper around (scaled) print canvas elements */
+  #printContainer > .printedPage {
+    page-break-after: always;
+    page-break-inside: avoid;
+
+    /* The wrapper always cover the whole page. */
+    height: 100%;
+    width: 100%;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+
+  #printContainer > .xfaPrintedPage .xfaPage {
+    position: absolute;
+  }
+
+  #printContainer > .xfaPrintedPage {
+    page-break-after: always;
+    page-break-inside: avoid;
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  #printContainer > .printedPage :is(canvas, img) {
+    /* The intrinsic canvas / image size will make sure that we fit the page. */
+    max-width: 100%;
+    max-height: 100%;
+
+    direction: ltr;
+    display: block;
+  }
 }

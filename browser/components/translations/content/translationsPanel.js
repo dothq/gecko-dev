@@ -729,8 +729,8 @@ var TranslationsPanel = new (class {
    * pertain to languages.
    */
   async #updateSettingsMenuLanguageCheckboxStates() {
-    const { docLangTag, isDocLangTagSupported } =
-      await this.#getCachedDetectedLanguages();
+    const langTags = await this.#getCachedDetectedLanguages();
+    const { docLangTag, isDocLangTagSupported } = langTags;
 
     const { panel } = this.elements;
     const alwaysTranslateMenuItems = panel.ownerDocument.querySelectorAll(
@@ -739,9 +739,15 @@ var TranslationsPanel = new (class {
     const neverTranslateMenuItems = panel.ownerDocument.querySelectorAll(
       ".never-translate-language-menuitem"
     );
+    const alwaysOfferTranslationsMenuItems =
+      panel.ownerDocument.querySelectorAll(
+        ".always-offer-translations-menuitem"
+      );
 
+    const alwaysOfferTranslations =
+      TranslationsParent.shouldAlwaysOfferTranslations();
     const alwaysTranslateLanguage =
-      TranslationsParent.shouldAlwaysTranslateLanguage(docLangTag);
+      TranslationsParent.shouldAlwaysTranslateLanguage(langTags);
     const neverTranslateLanguage =
       TranslationsParent.shouldNeverTranslateLanguage(docLangTag);
     const shouldDisable =
@@ -749,6 +755,12 @@ var TranslationsPanel = new (class {
       !isDocLangTagSupported ||
       docLangTag === new Intl.Locale(Services.locale.appLocaleAsBCP47).language;
 
+    for (const menuitem of alwaysOfferTranslationsMenuItems) {
+      menuitem.setAttribute(
+        "checked",
+        alwaysOfferTranslations ? "true" : "false"
+      );
+    }
     for (const menuitem of alwaysTranslateMenuItems) {
       menuitem.setAttribute(
         "checked",
@@ -1331,19 +1343,28 @@ var TranslationsPanel = new (class {
    * If auto-translate is currently inactive for the doc language, activates it.
    */
   async onAlwaysTranslateLanguage() {
-    const { docLangTag } = await this.#getCachedDetectedLanguages();
+    const langTags = await this.#getCachedDetectedLanguages();
+    const { docLangTag } = langTags;
     if (!docLangTag) {
       throw new Error("Expected to have a document language tag.");
     }
     const pageAction =
       this.getCheckboxPageActionFor().alwaysTranslateLanguage();
     const toggledOn =
-      TranslationsParent.toggleAlwaysTranslateLanguagePref(docLangTag);
+      TranslationsParent.toggleAlwaysTranslateLanguagePref(langTags);
     TranslationsParent.telemetry()
       .panel()
       .onAlwaysTranslateLanguage(docLangTag, toggledOn);
     this.#updateSettingsMenuLanguageCheckboxStates();
     await this.#doPageAction(pageAction);
+  }
+
+  /**
+   * Toggle offering translations.
+   */
+  async onAlwaysOfferTranslations() {
+    const toggledOn = TranslationsParent.toggleAutomaticallyPopupPref();
+    TranslationsParent.telemetry().panel().onAlwaysOfferTranslations(toggledOn);
   }
 
   /**
@@ -1395,6 +1416,19 @@ var TranslationsPanel = new (class {
   }
 
   handleEventId = 0;
+
+  /**
+   * An event handler that allows the TranslationsPanel object
+   * to be compatible with the addTabsProgressListener function.
+   *
+   * @param {tabbrowser} browser
+   */
+  onLocationChange(browser) {
+    if (browser.currentURI.spec.startsWith("about:reader")) {
+      // Hide the translations button when entering reader mode.
+      TranslationsPanel.#hideTranslationsButton();
+    }
+  }
 
   /**
    * Set the state of the translations button in the URL bar.

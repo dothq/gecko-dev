@@ -25,7 +25,7 @@ ChromeUtils.defineESModuleGetters(this, {
   SafeBrowsing: "resource://gre/modules/SafeBrowsing.sys.mjs",
 });
 
-XPCOMUtils.defineLazyGetter(this, "WindowEventDispatcher", () =>
+ChromeUtils.defineLazyGetter(this, "WindowEventDispatcher", () =>
   EventDispatcher.for(window)
 );
 
@@ -836,6 +836,20 @@ function startup() {
             child: {
               esModuleURI:
                 "resource:///actors/GeckoViewPrintDelegateChild.sys.mjs",
+            },
+            allFrames: true,
+          },
+        },
+      },
+    },
+    {
+      name: "GeckoViewExperimentDelegate",
+      onInit: {
+        actors: {
+          GeckoViewExperimentDelegate: {
+            parent: {
+              esModuleURI:
+                "resource:///actors/GeckoViewExperimentDelegateParent.sys.mjs",
             },
             allFrames: true,
           },

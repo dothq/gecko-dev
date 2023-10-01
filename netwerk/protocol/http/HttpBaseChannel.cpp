@@ -55,6 +55,7 @@
 #include "nsContentUtils.h"
 #include "nsDebug.h"
 #include "nsEscape.h"
+#include "nsGlobalWindowInner.h"
 #include "nsGlobalWindowOuter.h"
 #include "nsHttpChannel.h"
 #include "nsHTTPCompressConv.h"
@@ -2159,7 +2160,14 @@ HttpBaseChannel::GetResponseStatus(uint32_t* aValue) {
 NS_IMETHODIMP
 HttpBaseChannel::GetResponseStatusText(nsACString& aValue) {
   if (!mResponseHead) return NS_ERROR_NOT_AVAILABLE;
-  mResponseHead->StatusText(aValue);
+  nsAutoCString version;
+  // https://fetch.spec.whatwg.org :
+  // Responses over an HTTP/2 connection will always have the empty byte
+  // sequence as status message as HTTP/2 does not support them.
+  if (NS_WARN_IF(NS_FAILED(GetProtocolVersion(version))) ||
+      !version.EqualsLiteral("h2")) {
+    mResponseHead->StatusText(aValue);
+  }
   return NS_OK;
 }
 
@@ -5534,7 +5542,7 @@ HttpBaseChannel::GetCacheReadEnd(TimeStamp* _retval) {
 
 NS_IMETHODIMP
 HttpBaseChannel::GetTransactionPending(TimeStamp* _retval) {
-  *_retval = mTransactionPendingTime;
+  *_retval = mTransactionTimings.transactionPending;
   return NS_OK;
 }
 
@@ -5638,7 +5646,7 @@ void HttpBaseChannel::MaybeReportTimingData() {
       return;
     }
 
-    Maybe<LoadInfoArgs> loadInfoArgs;
+    LoadInfoArgs loadInfoArgs;
     mozilla::ipc::LoadInfoToLoadInfoArgs(mLoadInfo, &loadInfoArgs);
     child->SendReportFrameTimingData(loadInfoArgs, entryName, initiatorType,
                                      std::move(performanceTimingData));

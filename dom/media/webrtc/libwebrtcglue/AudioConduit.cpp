@@ -516,12 +516,8 @@ void WebrtcAudioConduit::SetTransportActive(bool aActive) {
     MOZ_ALWAYS_SUCCEEDS(mCallThread->Dispatch(NS_NewRunnableFunction(
         __func__,
         [self = RefPtr<WebrtcAudioConduit>(this),
-         recvRtpListener = std::move(mReceiverRtpEventListener),
-         recvRtcpListener = std::move(mReceiverRtcpEventListener),
-         sendRtcpListener = std::move(mSenderRtcpEventListener)]() mutable {
+         recvRtpListener = std::move(mReceiverRtpEventListener)]() mutable {
           recvRtpListener.DisconnectIfExists();
-          recvRtcpListener.DisconnectIfExists();
-          sendRtcpListener.DisconnectIfExists();
         })));
   }
 }
@@ -621,6 +617,32 @@ void WebrtcAudioConduit::OnRtpReceived(webrtc::RtpPacketReceived&& aPacket,
                 aPacket.SequenceNumber(), aPacket.size(), aPacket.Ssrc(),
                 aPacket.Ssrc());
 
+  // Libwebrtc commit cde4b67d9d now expect calls to
+  // SourceTracker::GetSources() to happen on the call thread.  We'll
+  // grab the value now while on the call thread, and dispatch to main
+  // to store the cached value if we have new source information.
+  // See Bug 1845621.
+  std::vector<webrtc::RtpSource> sources;
+  if (mRecvStream) {
+    sources = mRecvStream->GetSources();
+  }
+
+  bool needsCacheUpdate = false;
+  {
+    AutoReadLock lock(mLock);
+    needsCacheUpdate = sources != mRtpSources;
+  }
+
+  // only dispatch to main if we have new data
+  if (needsCacheUpdate) {
+    GetMainThreadSerialEventTarget()->Dispatch(NS_NewRunnableFunction(
+        __func__, [this, rtpSources = std::move(sources),
+                   self = RefPtr<WebrtcAudioConduit>(this)]() {
+          AutoWriteLock lock(mLock);
+          mRtpSources = rtpSources;
+        }));
+  }
+
   mRtpPacketEvent.Notify();
   if (mCall->Call()) {
     mCall->Call()->Receiver()->DeliverRtpPacket(
@@ -633,16 +655,6 @@ void WebrtcAudioConduit::OnRtpReceived(webrtc::RtpPacketReceived&& aPacket,
               self.get(), packet.Ssrc(), packet.SequenceNumber());
           return false;
         });
-  }
-}
-
-void WebrtcAudioConduit::OnRtcpReceived(MediaPacket&& aPacket) {
-  CSFLogDebug(LOGTAG, "%s", __FUNCTION__);
-  MOZ_ASSERT(mCallThread->IsOnCurrentThread());
-
-  if (mCall->Call()) {
-    mCall->Call()->Receiver()->DeliverRtcpPacket(
-        rtc::CopyOnWriteBuffer(aPacket.data(), aPacket.len()));
   }
 }
 
@@ -819,14 +831,7 @@ bool WebrtcAudioConduit::IsSamplingFreqSupported(int freq) const {
 std::vector<webrtc::RtpSource> WebrtcAudioConduit::GetUpstreamRtpSources()
     const {
   MOZ_ASSERT(NS_IsMainThread());
-  std::vector<webrtc::RtpSource> sources;
-  {
-    AutoReadLock lock(mLock);
-    if (mRecvStream) {
-      sources = mRecvStream->GetSources();
-    }
-  }
-  return sources;
+  return mRtpSources;
 }
 
 /* Return block-length of 10 ms audio frame in number of samples */

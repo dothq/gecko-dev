@@ -194,9 +194,11 @@ static Atomic<int64_t> sDrawTargetWebglCount(0);
 
 DrawTargetWebgl::DrawTargetWebgl() { sDrawTargetWebglCount++; }
 
-inline void DrawTargetWebgl::SharedContext::ClearLastTexture() {
+inline void DrawTargetWebgl::SharedContext::ClearLastTexture(bool aFullClear) {
   mLastTexture = nullptr;
-  mLastClipMask = nullptr;
+  if (aFullClear) {
+    mLastClipMask = nullptr;
+  }
 }
 
 // Attempts to clear the snapshot state. If the snapshot is only referenced by
@@ -239,6 +241,7 @@ DrawTargetWebgl::~DrawTargetWebgl() {
         child->DeallocShmem(mShmem);
       }
     }
+    mSharedContext->ClearLastTexture(true);
     if (mClipMask) {
       mSharedContext->mWebgl->DeleteTexture(mClipMask);
     }
@@ -1209,8 +1212,10 @@ bool DrawTargetWebgl::SharedContext::CreateShaders() {
         u"attribute vec3 a_vertex;\n"
         "uniform vec2 u_transform[3];\n"
         "uniform vec2 u_viewport;\n"
+        "uniform vec4 u_clipbounds;\n"
         "uniform float u_aa;\n"
-        "varying vec4 v_cliptc;\n"
+        "varying vec2 v_cliptc;\n"
+        "varying vec4 v_clipdist;\n"
         "varying vec4 v_dist;\n"
         "varying float v_alpha;\n"
         "void main() {\n"
@@ -1224,7 +1229,9 @@ bool DrawTargetWebgl::SharedContext::CreateShaders() {
         "                 u_transform[1] * extrude.y +\n"
         "                 u_transform[2];\n"
         "   gl_Position = vec4(vertex * 2.0 / u_viewport - 1.0, 0.0, 1.0);\n"
-        "   v_cliptc = vec4(vertex / u_viewport, vertex);\n"
+        "   v_cliptc = vertex / u_viewport;\n"
+        "   v_clipdist = vec4(vertex - u_clipbounds.xy,\n"
+        "                     u_clipbounds.zw - vertex);\n"
         "   v_dist = vec4(extrude, 1.0 - extrude) * scale.xyxy + 1.5 - u_aa;\n"
         "   v_alpha = a_vertex.z;\n"
         "}\n"_ns;
@@ -1232,15 +1239,13 @@ bool DrawTargetWebgl::SharedContext::CreateShaders() {
         u"precision mediump float;\n"
         "uniform vec4 u_color;\n"
         "uniform sampler2D u_clipmask;\n"
-        "uniform vec4 u_clipbounds;\n"
-        "varying vec4 v_cliptc;\n"
+        "varying highp vec2 v_cliptc;\n"
+        "varying vec4 v_clipdist;\n"
         "varying vec4 v_dist;\n"
         "varying float v_alpha;\n"
         "void main() {\n"
-        "   float clip = texture2D(u_clipmask, v_cliptc.xy).r;\n"
-        "   vec4 clipdist = vec4(v_cliptc.zw - u_clipbounds.xy,\n"
-        "                        u_clipbounds.zw - v_cliptc.zw);\n"
-        "   vec4 dist = min(v_dist, clipdist);\n"
+        "   float clip = texture2D(u_clipmask, v_cliptc).r;\n"
+        "   vec4 dist = min(v_dist, v_clipdist);\n"
         "   dist.xy = min(dist.xy, dist.zw);\n"
         "   float aa = v_alpha * clamp(min(dist.x, dist.y), 0.0, 1.0);\n"
         "   gl_FragColor = clip * aa * u_color;\n"
@@ -1291,11 +1296,13 @@ bool DrawTargetWebgl::SharedContext::CreateShaders() {
     auto vsSource =
         u"attribute vec3 a_vertex;\n"
         "uniform vec2 u_viewport;\n"
+        "uniform vec4 u_clipbounds;\n"
         "uniform float u_aa;\n"
         "uniform vec2 u_transform[3];\n"
         "uniform vec2 u_texmatrix[3];\n"
-        "varying vec4 v_cliptc;\n"
+        "varying vec2 v_cliptc;\n"
         "varying vec2 v_texcoord;\n"
+        "varying vec4 v_clipdist;\n"
         "varying vec4 v_dist;\n"
         "varying float v_alpha;\n"
         "void main() {\n"
@@ -1309,7 +1316,9 @@ bool DrawTargetWebgl::SharedContext::CreateShaders() {
         "                 u_transform[1] * extrude.y +\n"
         "                 u_transform[2];\n"
         "   gl_Position = vec4(vertex * 2.0 / u_viewport - 1.0, 0.0, 1.0);\n"
-        "   v_cliptc = vec4(vertex / u_viewport, vertex);\n"
+        "   v_cliptc = vertex / u_viewport;\n"
+        "   v_clipdist = vec4(vertex - u_clipbounds.xy,\n"
+        "                     u_clipbounds.zw - vertex);\n"
         "   v_texcoord = u_texmatrix[0] * extrude.x +\n"
         "                u_texmatrix[1] * extrude.y +\n"
         "                u_texmatrix[2];\n"
@@ -1323,18 +1332,17 @@ bool DrawTargetWebgl::SharedContext::CreateShaders() {
         "uniform float u_swizzle;\n"
         "uniform sampler2D u_sampler;\n"
         "uniform sampler2D u_clipmask;\n"
-        "uniform vec4 u_clipbounds;\n"
-        "varying vec4 v_cliptc;\n"
-        "varying vec2 v_texcoord;\n"
+        "varying highp vec2 v_cliptc;\n"
+        "varying highp vec2 v_texcoord;\n"
+        "varying vec4 v_clipdist;\n"
         "varying vec4 v_dist;\n"
         "varying float v_alpha;\n"
         "void main() {\n"
-        "   vec2 tc = clamp(v_texcoord, u_texbounds.xy, u_texbounds.zw);\n"
+        "   highp vec2 tc = clamp(v_texcoord, u_texbounds.xy,\n"
+        "                         u_texbounds.zw);\n"
         "   vec4 image = texture2D(u_sampler, tc);\n"
-        "   float clip = texture2D(u_clipmask, v_cliptc.xy).r;\n"
-        "   vec4 clipdist = vec4(v_cliptc.zw - u_clipbounds.xy,\n"
-        "                        u_clipbounds.zw - v_cliptc.zw);\n"
-        "   vec4 dist = min(v_dist, clipdist);\n"
+        "   float clip = texture2D(u_clipmask, v_cliptc).r;\n"
+        "   vec4 dist = min(v_dist, v_clipdist);\n"
         "   dist.xy = min(dist.xy, dist.zw);\n"
         "   float aa = v_alpha * clamp(min(dist.x, dist.y), 0.0, 1.0);\n"
         "   gl_FragColor = clip * aa * u_color *\n"
@@ -3118,6 +3126,10 @@ already_AddRefed<TextureHandle> DrawTargetWebgl::SharedContext::DrawStrokeMask(
   mWebgl->UniformData(LOCAL_GL_FLOAT_VEC2, mSolidProgramTransform, false,
                       {(const uint8_t*)xformData, sizeof(xformData)});
 
+  // Ensure the current clip mask is ignored.
+  RefPtr<WebGLTextureJS> prevClipMask = mLastClipMask;
+  SetNoClipMask();
+
   // Draw the mask using the supplied path vertex range.
   mWebgl->DrawArrays(LOCAL_GL_TRIANGLES, GLint(aVertexRange.mOffset),
                      GLsizei(aVertexRange.mLength));
@@ -3128,6 +3140,9 @@ already_AddRefed<TextureHandle> DrawTargetWebgl::SharedContext::DrawStrokeMask(
   mDirtyViewport = true;
   mDirtyAA = true;
   mDirtyClip = true;
+  if (prevClipMask) {
+    SetClipMask(prevClipMask);
+  }
 
   return handle.forget();
 }

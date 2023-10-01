@@ -144,19 +144,33 @@ XPCOMUtils.defineLazyPreferenceGetter(
 // - false      = remove: always use false, even when true is specified.
 //                (if .same_as_mv2 is set, also warn if the default changed)
 // Deprecation plan: https://bugzilla.mozilla.org/show_bug.cgi?id=1827910#c1
-// Bug 1830711 will set browser_style_mv3.supported to false.
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
   "browserStyleMV3supported",
   "extensions.browser_style_mv3.supported",
   false
 );
-// Bug 1830711 will then set browser_style_mv3.supported to false.
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
   "browserStyleMV3sameAsMV2",
   "extensions.browser_style_mv3.same_as_mv2",
   false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "processCrashThreshold",
+  "extensions.webextensions.crash.threshold",
+  // The default number of times an extension process is allowed to crash
+  // within a timeframe.
+  5
+);
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "processCrashTimeframe",
+  "extensions.webextensions.crash.timeframe",
+  // The default timeframe used to count crashes, in milliseconds.
+  30 * 1000
 );
 
 var {
@@ -661,6 +675,11 @@ ExtensionAddonObserver.init();
  */
 export var ExtensionProcessCrashObserver = {
   initialized: false,
+
+  _appInForeground: true,
+  _isAndroid: AppConstants.platform === "android",
+  _processSpawningDisabled: false,
+
   // Technically there is at most one child extension process,
   // but we may need to adjust this assumption to account for more
   // than one if that ever changes in the future.
@@ -668,11 +687,22 @@ export var ExtensionProcessCrashObserver = {
   lastCrashedProcessChildID: undefined,
   QueryInterface: ChromeUtils.generateQI(["nsIObserver"]),
 
+  // Collect the timestamps of the crashes happened over the last
+  // `processCrashTimeframe` milliseconds.
+  lastCrashTimestamps: [],
+
   init() {
     if (!this.initialized) {
       Services.obs.addObserver(this, "ipc:content-created");
       Services.obs.addObserver(this, "process-type-set");
       Services.obs.addObserver(this, "ipc:content-shutdown");
+      this.logger = lazy.Log.repository.getLogger(
+        "addons.process-crash-observer"
+      );
+      if (this._isAndroid) {
+        Services.obs.addObserver(this, "application-foreground");
+        Services.obs.addObserver(this, "application-background");
+      }
       this.initialized = true;
     }
   },
@@ -683,6 +713,10 @@ export var ExtensionProcessCrashObserver = {
         Services.obs.removeObserver(this, "ipc:content-created");
         Services.obs.removeObserver(this, "process-type-set");
         Services.obs.removeObserver(this, "ipc:content-shutdown");
+        if (this._isAndroid) {
+          Services.obs.removeObserver(this, "application-foreground");
+          Services.obs.removeObserver(this, "application-background");
+        }
       } catch (err) {
         // Removing the observer may fail if they are not registered anymore,
         // this shouldn't happen in practice, but let's still log the error
@@ -696,13 +730,27 @@ export var ExtensionProcessCrashObserver = {
   observe(subject, topic, data) {
     let childID = data;
     switch (topic) {
+      case "application-foreground":
+      // Intentional fall-through
+      case "application-background":
+        this._appInForeground = topic === "application-foreground";
+        if (this._appInForeground) {
+          Management.emit("application-foreground", {
+            appInForeground: this._appInForeground,
+            childID: this.currentProcessChildID,
+            processSpawningDisabled: this.processSpawningDisabled,
+          });
+        }
+        break;
       case "process-type-set":
       // Intentional fall-through
       case "ipc:content-created": {
         let pp = subject.QueryInterface(Ci.nsIDOMProcessParent);
         if (pp.remoteType === "extension") {
           this.currentProcessChildID = childID;
-          Glean.extensions.processEvent.created.add(1);
+          Glean.extensions.processEvent[
+            this.appInForeground ? "created_fg" : "created_bg"
+          ].add(1);
         }
         break;
       }
@@ -730,11 +778,65 @@ export var ExtensionProcessCrashObserver = {
         }
 
         this.lastCrashedProcessChildID = childID;
-        Glean.extensions.processEvent.crashed.add(1);
-        Management.emit("extension-process-crash", { childID });
+
+        const now = Cu.now();
+        // Filter crash timestamps older than processCrashTimeframe.
+        this.lastCrashTimestamps = this.lastCrashTimestamps.filter(
+          timestamp => now - timestamp < lazy.processCrashTimeframe
+        );
+        // Push the new timeframe.
+        this.lastCrashTimestamps.push(now);
+        // Set the flag that disable process spawning when we exceed the
+        // `processCrashThreshold`.
+        this._processSpawningDisabled =
+          this.lastCrashTimestamps.length > lazy.processCrashThreshold;
+
+        this.logger.debug(
+          `Extension process crashed ${this.lastCrashTimestamps.length} times over the last ${lazy.processCrashTimeframe}ms`
+        );
+
+        const { appInForeground } = this;
+
+        if (this.processSpawningDisabled) {
+          if (appInForeground) {
+            Glean.extensions.processEvent.crashed_over_threshold_fg.add(1);
+          } else {
+            Glean.extensions.processEvent.crashed_over_threshold_bg.add(1);
+          }
+          this.logger.warn(
+            `Extension process respawning disabled because it crashed too often in the last ${lazy.processCrashTimeframe}ms (${this.lastCrashTimestamps.length} > ${lazy.processCrashThreshold}).`
+          );
+        }
+
+        Glean.extensions.processEvent[
+          appInForeground ? "crashed_fg" : "crashed_bg"
+        ].add(1);
+        Management.emit("extension-process-crash", {
+          childID,
+          processSpawningDisabled: this.processSpawningDisabled,
+          appInForeground,
+        });
         break;
       }
     }
+  },
+
+  enableProcessSpawning() {
+    const crashCounter = this.lastCrashTimestamps.length;
+    this.lastCrashTimestamps = [];
+    this.logger.debug(`reset crash counter (was ${crashCounter})`);
+    this._processSpawningDisabled = false;
+    Management.emit("extension-enable-process-spawning");
+  },
+
+  get appInForeground() {
+    // Only account for application in the background for
+    // android builds.
+    return this._isAndroid ? this._appInForeground : true;
+  },
+
+  get processSpawningDisabled() {
+    return this._processSpawningDisabled;
   },
 };
 
@@ -2877,10 +2979,7 @@ export class Extension extends ExtensionData {
 
   get backgroundContext() {
     for (let view of this.views) {
-      if (
-        view.viewType === "background" ||
-        view.viewType === "background_worker"
-      ) {
+      if (view.isBackgroundContext) {
         return view;
       }
     }

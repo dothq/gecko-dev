@@ -23,6 +23,11 @@ struct Circle {
   bool closed = false;
 };
 
+struct Line {
+  Point origin;
+  Point destination;
+};
+
 class PathOps {
  public:
   PathOps() = default;
@@ -40,6 +45,8 @@ class PathOps {
   void Record(S& aStream) const;
 
   bool StreamToSink(PathSink& aPathSink) const;
+
+  bool CheckedStreamToSink(PathSink& aPathSink) const;
 
   PathOps TransformedCopy(const Matrix& aTransform) const;
 
@@ -70,6 +77,7 @@ class PathOps {
   }
 
   Maybe<Circle> AsCircle() const;
+  Maybe<Line> AsLine() const;
 
   bool IsActive() const { return !mPathData.empty(); }
 
@@ -221,6 +229,7 @@ class PathRecording final : public Path {
   }
 
   Maybe<Circle> AsCircle() const { return mPathOps.AsCircle(); }
+  Maybe<Line> AsLine() const { return mPathOps.AsLine(); }
 
   void StreamToSink(PathSink* aSink) const final {
     mPathOps.StreamToSink(*aSink);

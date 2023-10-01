@@ -226,7 +226,6 @@ pref("lightweightThemes.getMoreURL", "https://addons.mozilla.org/%LOCALE%/firefo
 pref("browser.uitour.enabled", true);
 pref("browser.uitour.loglevel", "Error");
 pref("browser.uitour.requireSecure", true);
-pref("browser.uitour.themeOrigin", "https://addons.mozilla.org/%LOCALE%/firefox/themes/");
 pref("browser.uitour.url", "https://www.mozilla.org/%LOCALE%/firefox/%VERSION%/tour/");
 // How long to show a Hearbeat survey (two hours, in seconds)
 pref("browser.uitour.surveyDuration", 7200);
@@ -395,6 +394,7 @@ pref("browser.urlbar.maxHistoricalSearchSuggestions", 2);
 // The default behavior for the urlbar can be configured to use any combination
 // of the match filters with each additional filter adding more results (union).
 pref("browser.urlbar.suggest.bookmark",             true);
+pref("browser.urlbar.suggest.clipboard",            true);
 pref("browser.urlbar.suggest.history",              true);
 pref("browser.urlbar.suggest.openpage",             true);
 pref("browser.urlbar.suggest.remotetab",            true);
@@ -425,6 +425,9 @@ pref("browser.urlbar.suggest.calculator",           false);
 // Feature gate pref for weather suggestions in the urlbar.
 pref("browser.urlbar.weather.featureGate", false);
 
+// Feature gate pref for clipboard suggestions in the urlbar.
+pref("browser.urlbar.clipboard.featureGate", false);
+
 // When false, the weather suggestion will not be fetched when a VPN is
 // detected. When true, it will be fetched anyway.
 pref("browser.urlbar.weather.ignoreVPN", false);
@@ -437,6 +440,10 @@ pref("browser.urlbar.weather.minKeywordLength", 0);
 // If `browser.urlbar.weather.featureGate` is true, this controls whether
 // weather suggestions are turned on.
 pref("browser.urlbar.suggest.weather", true);
+
+// If `browser.urlbar.trending.featureGate` is true, this controls whether
+// trending suggestions are turned on.
+pref("browser.urlbar.suggest.trending", true);
 
 // When `browser.urlbar.bestMatch.enabled` is true, this controls whether best
 // match results are shown in the urlbar. This pref is exposed to the user in
@@ -512,6 +519,8 @@ pref("browser.urlbar.showSearchSuggestionsFirst", true);
 pref("browser.urlbar.maxCharsForSearchSuggestions", 100);
 
 pref("browser.urlbar.trimURLs", true);
+
+pref("browser.urlbar.trimHttps", false);
 
 // If changed to true, copying the entire URL from the location bar will put the
 // human readable (percent-decoded) URL on the clipboard.
@@ -608,7 +617,7 @@ pref("browser.urlbar.bestMatch.blockingEnabled", true);
 pref("browser.urlbar.contextualSearch.enabled", false);
 
 // Feature gate pref for addon suggestions in the urlbar.
-pref("browser.urlbar.addons.featureGate", false);
+pref("browser.urlbar.addons.featureGate", true);
 
 // If `browser.urlbar.addons.featureGate` is true, this controls whether
 // addons suggestions are turned on.
@@ -726,6 +735,14 @@ pref("browser.shopping.experience2023.enabled", false);
 // 1 means the user has opted in.
 // 2 means the user has opted out.
 pref("browser.shopping.experience2023.optedIn", 0);
+
+// Activates the new experimental shopping sidebar.
+// True by default, will be set to false on opt out.
+pref("browser.shopping.experience2023.active", true);
+
+// Activates the ad card in the shopping sidebar.
+// True by default, will be set to false on opt out.
+pref("browser.shopping.experience2023.ads.enabled", true);
 
 // Enables the display of the Mozilla VPN banner in private browsing windows
 pref("browser.privatebrowsing.vpnpromourl", "https://vpn.mozilla.org/?utm_source=firefox-browser&utm_medium=firefox-%CHANNEL%-browser&utm_campaign=private-browsing-vpn-link");
@@ -1001,6 +1018,11 @@ pref("privacy.temporary_permission_expire_time_ms",  3600000);
 // See bug 791594
 pref("privacy.authPromptSpoofingProtection",         true);
 
+// Enable GPC if the user turns it on in about:preferences
+#ifdef NIGHTLY_BUILD
+pref("privacy.globalprivacycontrol.functionality.enabled",  true);
+#endif
+
 pref("network.proxy.share_proxy_settings",  false); // use the same proxy settings for all protocols
 
 // simple gestures support
@@ -1060,7 +1082,7 @@ pref("browser.history_swipe_animation.disabled", false);
   pref("mousewheel.with_alt.action", 2);
 #endif
 
-pref("mousewheel.with_win.action", 1);
+pref("mousewheel.with_meta.action", 1);
 
 pref("browser.xul.error_pages.expert_bad_cert", false);
 pref("browser.xul.error_pages.show_safe_browsing_details_on_load", false);
@@ -1151,8 +1173,10 @@ pref("browser.sessionstore.resuming_after_os_restart", false);
 // recently-closed tab lists & counts, and re-open tabs into the current window
 #ifdef NIGHTLY_BUILD
   pref("browser.sessionstore.closedTabsFromAllWindows", true);
+  pref("browser.sessionstore.closedTabsFromClosedWindows", true);
 #else
   pref("browser.sessionstore.closedTabsFromAllWindows", false);
+  pref("browser.sessionstore.closedTabsFromClosedWindows", false);
 #endif
 
 // Minimal interval between two save operations in milliseconds (while the user is idle).
@@ -1508,6 +1532,7 @@ pref("services.sync.prefs.sync.privacy.clearOnShutdown.offlineApps", true);
 pref("services.sync.prefs.sync.privacy.clearOnShutdown.sessions", true);
 pref("services.sync.prefs.sync.privacy.clearOnShutdown.siteSettings", true);
 pref("services.sync.prefs.sync.privacy.donottrackheader.enabled", true);
+pref("services.sync.prefs.sync.privacy.globalprivacycontrol.enabled", true);
 pref("services.sync.prefs.sync.privacy.sanitize.sanitizeOnShutdown", true);
 pref("services.sync.prefs.sync.privacy.trackingprotection.enabled", true);
 pref("services.sync.prefs.sync.privacy.trackingprotection.cryptomining.enabled", true);
@@ -1857,7 +1882,7 @@ pref("browser.translation.neverForLanguages", "");
 
 // Enable Firefox translations powered by the Bergamot translations
 // engine https://browser.mt/.
-pref("browser.translations.enable", false);
+pref("browser.translations.enable", true);
 
 // Telemetry settings.
 // Determines if Telemetry pings can be archived locally.
@@ -2090,14 +2115,11 @@ pref("privacy.webrtc.sharedTabWarning", false);
 // before navigating to the actual meeting room page. Doesn't survive tab close.
 pref("privacy.webrtc.deviceGracePeriodTimeoutMs", 3600000);
 
-// Enable Fingerprinting Protection in private windows in Nightly.
-#ifdef NIGHTLY_BUILD
+// Enable Fingerprinting Protection in private windows..
 pref("privacy.fingerprintingProtection.pbmode", true);
-#endif
 
 // Start the browser in e10s mode
 pref("browser.tabs.remote.autostart", true);
-pref("browser.tabs.remote.desktopbehavior", true);
 
 // Run media transport in a separate process?
 pref("media.peerconnection.mtransport_process", true);
@@ -2250,10 +2272,6 @@ pref("signon.showAutoCompleteFooter", true);
 pref("signon.showAutoCompleteImport", "import");
 pref("signon.suggestImportCount", 3);
 
-// Enable the "Simplify Page" feature in Print Preview. This feature
-// is disabled by default in toolkit.
-pref("print.use_simplify_page", true);
-
 // Space separated list of URLS that are allowed to send objects (instead of
 // only strings) through webchannels. Bug 1275612 tracks removing this pref and capability.
 pref("webchannel.allowObject.urlWhitelist", "https://content.cdn.mozilla.net https://install.mozilla.org");
@@ -2366,6 +2384,12 @@ pref("browser.toolbars.bookmarks.visibility", "newtab");
 // Visibility of the "Show Other Bookmarks" menuitem in the
 // bookmarks toolbar contextmenu.
 pref("browser.toolbars.bookmarks.showOtherBookmarks", true);
+
+
+// Felt Privacy pref to control simplified private browsing UI
+pref("browser.privatebrowsing.felt-privacy-v1", false);
+// Visiblity of the bookmarks toolbar in PBM (currently only applies if felt-privacy-v1 is true)
+pref("browser.toolbars.bookmarks.showInPrivateBrowsing", false);
 
 // Prefs to control the Firefox Account toolbar menu.
 // This pref will surface existing Firefox Account information

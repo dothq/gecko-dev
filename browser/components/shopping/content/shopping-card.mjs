@@ -14,12 +14,13 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
  *
  * @property {string} label - The label text that will be used for the card header
  * @property {string} type - (optional) The type of card. No type specified
- *   will be the default card. The other available type is "accordion".
+ *   will be the default card. The other available types are "accordion" and "show-more".
  */
 class ShoppingCard extends MozLitElement {
   static properties = {
     label: { type: String },
     type: { type: String },
+    _isExpanded: { type: Boolean },
   };
 
   static get queries() {
@@ -59,6 +60,26 @@ class ShoppingCard extends MozLitElement {
           <div id="content"><slot name="content"></slot></div>
         </details>
       `;
+    } else if (this.type === "show-more") {
+      return html`
+        ${this.labelTemplate()}
+        <article
+          id="content"
+          class="show-more"
+          aria-describedby="content"
+          expanded="false"
+        >
+          <slot name="content"></slot>
+
+          <footer>
+            <button
+              aria-controls="content"
+              data-l10n-id="shopping-show-more-button"
+              @click=${this.handleShowMoreButtonClick}
+            ></button>
+          </footer>
+        </article>
+      `;
     }
     return html`
       ${this.labelTemplate()}
@@ -68,8 +89,29 @@ class ShoppingCard extends MozLitElement {
     `;
   }
 
+  handleShowMoreButtonClick(e) {
+    this._isExpanded = !this._isExpanded;
+    // toggle show more/show less text
+    e.target.setAttribute(
+      "data-l10n-id",
+      this._isExpanded
+        ? "shopping-show-less-button"
+        : "shopping-show-more-button"
+    );
+    // toggle content expanded attribute
+    e.target.parentElement.parentElement.attributes.expanded.value =
+      this._isExpanded;
+  }
+
   handleChevronButtonClick() {
     this.detailsEl.open = !this.detailsEl.open;
+    // here, open represents the state, so we want the inverse for which
+    // action the user is taking.
+    const buttonAction = this.detailsEl.open ? "expand" : "collapse";
+    this.recordChevronButtonGleanEvent([
+      this.getAttribute("data-l10n-id"),
+      buttonAction,
+    ]);
   }
 
   render() {
@@ -86,6 +128,15 @@ class ShoppingCard extends MozLitElement {
         ${this.cardTemplate()}
       </article>
     `;
+  }
+
+  recordChevronButtonGleanEvent(details) {
+    let event = new CustomEvent("ShoppingTelemetryEvent", {
+      composed: true,
+      bubbles: true,
+      detail: details,
+    });
+    this.dispatchEvent(event);
   }
 }
 customElements.define("shopping-card", ShoppingCard);

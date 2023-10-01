@@ -35,10 +35,9 @@
 #include "vm/JSObject.h"
 #include "vm/JSONParser.h"
 #include "vm/NativeObject.h"
-#include "vm/NumberObject.h"   // js::NumberObject
-#include "vm/PlainObject.h"    // js::PlainObject
-#include "vm/StringObject.h"   // js::StringObject
-#include "vm/WellKnownAtom.h"  // js_*_str
+#include "vm/NumberObject.h"  // js::NumberObject
+#include "vm/PlainObject.h"   // js::PlainObject
+#include "vm/StringObject.h"  // js::StringObject
 #ifdef ENABLE_RECORD_TUPLE
 #  include "builtin/RecordObject.h"
 #  include "builtin/TupleObject.h"
@@ -1612,7 +1611,7 @@ bool js::Stringify(JSContext* cx, MutableHandleValue vp, JSObject* replacer_,
   }
 
   Rooted<PlainObject*> wrapper(cx);
-  RootedId emptyId(cx, NameToId(cx->names().empty));
+  RootedId emptyId(cx, NameToId(cx->names().empty_));
   if (replacer && replacer->isCallable()) {
     // We can skip creating the initial wrapper object if no replacer
     // function is present.
@@ -1824,11 +1823,11 @@ static bool Revive(JSContext* cx, HandleValue reviver, MutableHandleValue vp) {
     return false;
   }
 
-  if (!DefineDataProperty(cx, obj, cx->names().empty, vp)) {
+  if (!DefineDataProperty(cx, obj, cx->names().empty_, vp)) {
     return false;
   }
 
-  Rooted<jsid> id(cx, NameToId(cx->names().empty));
+  Rooted<jsid> id(cx, NameToId(cx->names().empty_));
   return Walk(cx, obj, id, reviver, vp);
 }
 
@@ -2055,7 +2054,7 @@ static bool json_parseImmutable(JSContext* cx, unsigned argc, Value* vp) {
     }
   }
 
-  RootedId id(cx, NameToId(cx->names().empty));
+  RootedId id(cx, NameToId(cx->names().empty_));
   return BuildImmutableProperty(cx, unfiltered, id, reviver, args.rval());
 }
 #endif
@@ -2098,8 +2097,8 @@ bool json_stringify(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 static const JSFunctionSpec json_static_methods[] = {
-    JS_FN(js_toSource_str, json_toSource, 0, 0),
-    JS_FN("parse", json_parse, 2, 0), JS_FN("stringify", json_stringify, 3, 0),
+    JS_FN("toSource", json_toSource, 0, 0), JS_FN("parse", json_parse, 2, 0),
+    JS_FN("stringify", json_stringify, 3, 0),
 #ifdef ENABLE_RECORD_TUPLE
     JS_FN("parseImmutable", json_parseImmutable, 2, 0),
 #endif
@@ -2116,6 +2115,5 @@ static JSObject* CreateJSONObject(JSContext* cx, JSProtoKey key) {
 static const ClassSpec JSONClassSpec = {
     CreateJSONObject, nullptr, json_static_methods, json_static_properties};
 
-const JSClass js::JSONClass = {js_JSON_str,
-                               JSCLASS_HAS_CACHED_PROTO(JSProto_JSON),
+const JSClass js::JSONClass = {"JSON", JSCLASS_HAS_CACHED_PROTO(JSProto_JSON),
                                JS_NULL_CLASS_OPS, &JSONClassSpec};
