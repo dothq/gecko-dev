@@ -26,6 +26,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource:///modules/UrlbarProviderSearchTips.sys.mjs",
   UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.sys.mjs",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.sys.mjs",
+  BrowserUIUtils: "resource:///modules/BrowserUIUtils.sys.mjs",
 });
 
 export var UrlbarUtils = {
@@ -52,6 +53,7 @@ export var UrlbarUtils = {
     HEURISTIC_TOKEN_ALIAS_ENGINE: "heuristicTokenAliasEngine",
     INPUT_HISTORY: "inputHistory",
     OMNIBOX: "extension",
+    RECENT_SEARCH: "recentSearch",
     REMOTE_SUGGESTION: "remoteSuggestion",
     REMOTE_TAB: "remoteTab",
     SUGGESTED_INDEX: "suggestedIndex",
@@ -548,7 +550,9 @@ export var UrlbarUtils = {
     switch (result.type) {
       case UrlbarUtils.RESULT_TYPE.SEARCH:
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
-          return UrlbarUtils.RESULT_GROUP.FORM_HISTORY;
+          return result.providerName == "RecentSearches"
+            ? UrlbarUtils.RESULT_GROUP.RECENT_SEARCH
+            : UrlbarUtils.RESULT_GROUP.FORM_HISTORY;
         }
         if (result.payload.tail) {
           return UrlbarUtils.RESULT_GROUP.TAIL_SUGGESTION;
@@ -862,6 +866,13 @@ export var UrlbarUtils = {
     return pasteData;
   },
 
+  /**
+   * Add a (url, input) tuple to the input history table that drives adaptive
+   * results.
+   *
+   * @param {string} url The url to add input history for
+   * @param {string} input The associated search term
+   */
   async addToInputHistory(url, input) {
     await lazy.PlacesUtils.withConnectionWrapper("addToInputHistory", db => {
       // use_count will asymptotically approach the max of 10.
@@ -873,6 +884,29 @@ export var UrlbarUtils = {
         LEFT JOIN moz_inputhistory i ON i.place_id = h.id AND i.input = :input
         WHERE url_hash = hash(:url) AND url = :url
       `,
+        { url, input: input.toLowerCase() }
+      );
+    });
+  },
+
+  /**
+   * Remove a (url, input*) tuple from the input history table that drives
+   * adaptive results.
+   * Note the input argument is used as a wildcard so any match starting with
+   * it will also be removed.
+   *
+   * @param {string} url The url to add input history for
+   * @param {string} input The associated search term
+   */
+  async removeInputHistory(url, input) {
+    await lazy.PlacesUtils.withConnectionWrapper("removeInputHistory", db => {
+      return db.executeCached(
+        `
+        DELETE FROM moz_inputhistory
+        WHERE input BETWEEN :input AND :input || X'FFFF'
+          AND place_id =
+            (SELECT id FROM moz_places WHERE url_hash = hash(:url) AND url = :url)
+        `,
         { url, input: input.toLowerCase() }
       );
     });
@@ -1174,6 +1208,9 @@ export var UrlbarUtils = {
       case UrlbarUtils.RESULT_TYPE.TAB_SWITCH:
         return "switchtab";
       case UrlbarUtils.RESULT_TYPE.SEARCH:
+        if (result.providerName == "RecentSearches") {
+          return "recent_search";
+        }
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
           return "formhistory";
         }
@@ -1217,6 +1254,9 @@ export var UrlbarUtils = {
               return "dynamic_wikipedia";
           }
           return "quicksuggest";
+        }
+        if (result.providerName == "UrlbarProviderClipboard") {
+          return "clipboard";
         }
         if (result.providerName == "InputHistory") {
           return result.source == UrlbarUtils.RESULT_SOURCE.BOOKMARKS
@@ -1263,6 +1303,46 @@ export var UrlbarUtils = {
   },
 
   /**
+   * Checks whether a given text has right-to-left direction or not.
+   *
+   * @param {string} value The text which should be check for RTL direction.
+   * @param {Window} window The window where 'value' is going to be displayed.
+   * @returns {boolean} Returns true if text has right-to-left direction and
+   *                    false otherwise.
+   */
+  isTextDirectionRTL(value, window) {
+    let directionality = window.windowUtils.getDirectionFromText(value);
+    return directionality == window.windowUtils.DIRECTION_RTL;
+  },
+
+  /**
+   * Unescape, decode punycode, and trim (both protocol and trailing slash)
+   * the URL.
+   *
+   * @param {string} url The url that should be prepared for display.
+   * @returns {string} Prepared url.
+   */
+  prepareUrlForDisplay(url) {
+    // Some domains are encoded in punycode. The following ensures we display
+    // the url in utf-8.
+    try {
+      url = new URL(url).URI.displaySpec;
+    } catch {} // In some cases url is not a valid url.
+
+    if (url && lazy.UrlbarPrefs.get("trimURLs")) {
+      url = lazy.BrowserUIUtils.removeSingleTrailingSlashFromURL(url);
+      if (url.startsWith("https://")) {
+        url = url.substring(8);
+        if (url.startsWith("www.")) {
+          url = url.substring(4);
+        }
+      }
+    }
+
+    return this.unEscapeURIForUI(url);
+  },
+
+  /**
    * Extracts a group for search engagement telemetry from a result.
    *
    * @param {UrlbarResult} result The result to analyze.
@@ -1282,6 +1362,9 @@ export var UrlbarUtils = {
     switch (this.getResultGroup(result)) {
       case UrlbarUtils.RESULT_GROUP.INPUT_HISTORY: {
         return "adaptive_history";
+      }
+      case UrlbarUtils.RESULT_GROUP.RECENT_SEARCH: {
+        return "recent_search";
       }
       case UrlbarUtils.RESULT_GROUP.FORM_HISTORY: {
         return "search_history";
@@ -1371,7 +1454,9 @@ export var UrlbarUtils = {
           return "tab_to_search";
         }
         if (result.source == UrlbarUtils.RESULT_SOURCE.HISTORY) {
-          return "search_history";
+          return result.providerName == "RecentSearches"
+            ? "recent_search"
+            : "search_history";
         }
         if (result.payload.suggestion) {
           let type = result.payload.trending
@@ -1431,6 +1516,9 @@ export var UrlbarUtils = {
         if (result.providerName === "UrlbarProviderTopSites") {
           return "top_site";
         }
+        if (result.providerName === "UrlbarProviderClipboard") {
+          return "clipboard";
+        }
         return result.source === UrlbarUtils.RESULT_SOURCE.BOOKMARKS
           ? "bookmark"
           : "history";
@@ -1453,7 +1541,7 @@ export var UrlbarUtils = {
 
     if (
       result.providerName === "quickactions" &&
-      element?.classList.contains("urlbarView-quickaction-row")
+      element?.classList.contains("urlbarView-quickaction-button")
     ) {
       return element.dataset.key;
     }
@@ -1467,6 +1555,18 @@ export var UrlbarUtils = {
       source = "rs";
     }
     return `${source}_${result.payload.telemetryType}`;
+  },
+
+  /**
+   * For use when we want to hash a pair of items in a dictionary
+   *
+   * @param {string[]} tokens
+   *   list of tokens to join into a string eg "a" "b" "c"
+   * @returns {string}
+   *   the tokens joined in a string "a|b|c"
+   */
+  tupleString(...tokens) {
+    return tokens.filter(t => t).join("|");
   },
 };
 
@@ -1651,6 +1751,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       },
       icon: {
         type: "string",
+      },
+      iconBlob: {
+        type: "object",
       },
       isBlockable: {
         type: "boolean",

@@ -176,6 +176,11 @@ class HTMLCanvasElement final : public nsGenericHTMLElement,
   nsIntSize GetSize();
 
   /**
+   * Set the size in pixels of this canvas element.
+   */
+  void SetSize(const nsIntSize& aSize, ErrorResult& aRv);
+
+  /**
    * Determine whether the canvas is write-only.
    */
   bool IsWriteOnly() const;
@@ -326,6 +331,10 @@ class HTMLCanvasElement final : public nsGenericHTMLElement,
   nsresult ToDataURLImpl(JSContext* aCx, nsIPrincipal& aSubjectPrincipal,
                          const nsAString& aMimeType,
                          const JS::Value& aEncoderOptions, nsAString& aDataURL);
+
+  UniquePtr<uint8_t[]> GetImageBuffer(int32_t* aOutFormat,
+                                      gfx::IntSize* aOutImageSize) override;
+
   MOZ_CAN_RUN_SCRIPT void CallPrintCallback();
 
   virtual void AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
@@ -356,7 +365,6 @@ class HTMLCanvasElement final : public nsGenericHTMLElement,
   RefPtr<HTMLCanvasPrintState> mPrintState;
   nsTArray<WeakPtr<FrameCaptureListener>> mRequestedFrameListeners;
   RefPtr<RequestedFrameRefreshObserver> mRequestedFrameRefreshObserver;
-  RefPtr<CanvasRenderer> mCanvasRenderer;
   RefPtr<OffscreenCanvas> mOffscreenCanvas;
   RefPtr<OffscreenCanvasDisplayHelper> mOffscreenDisplay;
   RefPtr<layers::ImageContainer> mImageContainer;

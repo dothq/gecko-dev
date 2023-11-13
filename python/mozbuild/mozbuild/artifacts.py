@@ -100,7 +100,6 @@ class ArtifactJob(object):
     ]
     # The list below list should be updated when we have new ESRs.
     esr_candidate_trees = [
-        "releases/mozilla-esr102",
         "releases/mozilla-esr115",
     ]
     try_tree = "try"
@@ -124,6 +123,7 @@ class ArtifactJob(object):
         ("bin/screentopng", ("bin", "bin")),
         ("bin/ssltunnel", ("bin", "bin")),
         ("bin/xpcshell", ("bin", "bin")),
+        ("bin/plugin-container", ("bin", "bin")),
         ("bin/http3server", ("bin", "bin")),
         ("bin/plugins/gmp-*/*/*", ("bin/plugins", "bin")),
         ("bin/plugins/*", ("bin/plugins", "plugins")),
@@ -841,7 +841,6 @@ class ThunderbirdMixin(object):
     ]
     # The list below list should be updated when we have new ESRs.
     esr_candidate_trees = [
-        "releases/comm-esr102",
         "releases/comm-esr115",
     ]
 

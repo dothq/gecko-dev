@@ -56,6 +56,7 @@
 #include "mozilla/StaticPrefs_print.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
+#include "mozilla/Try.h"
 
 #include "nsViewManager.h"
 #include "nsView.h"
@@ -1080,7 +1081,10 @@ nsDocumentViewer::LoadComplete(nsresult aStatus) {
 
       d->SetLoadEventFiring(true);
       RefPtr<nsPresContext> presContext = mPresContext;
-      EventDispatcher::Dispatch(window, presContext, &event, nullptr, &status);
+      // MOZ_KnownLive due to bug 1506441
+      EventDispatcher::Dispatch(
+          MOZ_KnownLive(nsGlobalWindowOuter::Cast(window)), presContext, &event,
+          nullptr, &status);
       d->SetLoadEventFiring(false);
 
       if (docGroup && docShell->TreatAsBackgroundLoad()) {
@@ -1335,9 +1339,8 @@ nsDocumentViewer::DispatchBeforeUnload() {
 
     mInPermitUnload = true;
     RefPtr<nsPresContext> presContext = mPresContext;
-    // TODO: Bug 1506441
-    EventDispatcher::DispatchDOMEvent(MOZ_KnownLive(ToSupports(window)),
-                                      nullptr, event, presContext, nullptr);
+    EventDispatcher::DispatchDOMEvent(window, nullptr, event, presContext,
+                                      nullptr);
     mInPermitUnload = false;
   }
 
@@ -1426,7 +1429,9 @@ nsDocumentViewer::PageHide(bool aIsUnload) {
     Document::PageUnloadingEventTimeStamp timestamp(mDocument);
 
     RefPtr<nsPresContext> presContext = mPresContext;
-    EventDispatcher::Dispatch(window, presContext, &event, nullptr, &status);
+    // MOZ_KnownLive due to bug 1506441
+    EventDispatcher::Dispatch(MOZ_KnownLive(nsGlobalWindowOuter::Cast(window)),
+                              presContext, &event, nullptr, &status);
   }
 
   // look for open menupopups and close them after the unload event, in case
@@ -2149,7 +2154,7 @@ nsDocumentViewer::Show() {
   // from the event loop after we actually draw the page.
   RefPtr<nsDocumentShownDispatcher> event =
       new nsDocumentShownDispatcher(document);
-  document->Dispatch(TaskCategory::Other, event.forget());
+  document->Dispatch(event.forget());
 
   return NS_OK;
 }

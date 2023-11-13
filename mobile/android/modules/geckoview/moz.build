@@ -33,9 +33,12 @@ EXTRA_JS_MODULES += [
     "GeckoViewTab.sys.mjs",
     "GeckoViewTelemetry.sys.mjs",
     "GeckoViewTestUtils.sys.mjs",
+    "GeckoViewTranslations.sys.mjs",
     "GeckoViewUtils.sys.mjs",
     "GeckoViewWebExtension.sys.mjs",
     "LoadURIDelegate.sys.mjs",
     "MediaUtils.sys.mjs",
     "Messaging.sys.mjs",
 ]
+
+XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.ini"]

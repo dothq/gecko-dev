@@ -5,6 +5,11 @@
 
 /* import-globals-from head.js */
 
+ChromeUtils.defineESModuleGetters(this, {
+  UrlbarProviderClipboard:
+    "resource:///modules/UrlbarProviderClipboard.sys.mjs",
+});
+
 async function doHeuristicsTest({ trigger, assert }) {
   await doTest(async browser => {
     await openPopup("x");
@@ -54,6 +59,26 @@ async function doSearchHistoryTest({ trigger, assert }) {
   await SpecialPowers.popPrefEnv();
 }
 
+async function doRecentSearchTest({ trigger, assert }) {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.recentsearches.featureGate", true]],
+  });
+
+  await doTest(async browser => {
+    await UrlbarTestUtils.formHistory.add([
+      { value: "foofoo", source: Services.search.defaultEngine.name },
+    ]);
+
+    await openPopup("");
+    await selectRowByURL("http://mochi.test:8888/?terms=foofoo");
+
+    await trigger();
+    await assert();
+  });
+
+  await SpecialPowers.popPrefEnv();
+}
+
 async function doSearchSuggestTest({ trigger, assert }) {
   await SpecialPowers.pushPrefEnv({
     set: [
@@ -89,24 +114,28 @@ async function doTailSearchSuggestTest({ trigger, assert }) {
 
 async function doTopPickTest({ trigger, assert }) {
   const cleanupQuickSuggest = await ensureQuickSuggestInit({
-    // eslint-disable-next-line mozilla/valid-lazy
-    config: lazy.QuickSuggestTestUtils.BEST_MATCH_CONFIG,
-  });
-
-  await SpecialPowers.pushPrefEnv({
-    set: [["browser.urlbar.bestMatch.enabled", true]],
+    merinoSuggestions: [
+      {
+        title: "Navigational suggestion",
+        url: "https://example.com/navigational-suggestion",
+        provider: "top_picks",
+        is_sponsored: false,
+        score: 0.25,
+        block_id: 0,
+        is_top_pick: true,
+      },
+    ],
   });
 
   await doTest(async browser => {
-    await openPopup("sponsored");
-    await selectRowByURL("https://example.com/sponsored");
+    await openPopup("navigational");
+    await selectRowByURL("https://example.com/navigational-suggestion");
 
     await trigger();
     await assert();
   });
 
-  await SpecialPowers.popPrefEnv();
-  cleanupQuickSuggest();
+  await cleanupQuickSuggest();
 }
 
 async function doTopSiteTest({ trigger, assert }) {
@@ -119,6 +148,26 @@ async function doTopSiteTest({ trigger, assert }) {
     await trigger();
     await assert();
   });
+}
+
+async function doClipboardTest({ trigger, assert }) {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.urlbar.clipboard.featureGate", true],
+      ["browser.urlbar.suggest.clipboard", true],
+    ],
+  });
+  SpecialPowers.clipboardCopyString("https://example.com/clipboard");
+  await doTest(async browser => {
+    await showResultByArrowDown();
+    await selectRowByURL("https://example.com/clipboard");
+
+    await trigger();
+    await assert();
+  });
+  SpecialPowers.clipboardCopyString("");
+  UrlbarProviderClipboard.setPreviousClipboardValue("");
+  await SpecialPowers.popPrefEnv();
 }
 
 async function doRemoteTabTest({ trigger, assert }) {
@@ -198,7 +247,7 @@ async function doSuggestTest({ trigger, assert }) {
   });
 
   await SpecialPowers.popPrefEnv();
-  cleanupQuickSuggest();
+  await cleanupQuickSuggest();
 }
 
 async function doAboutPageTest({ trigger, assert }) {

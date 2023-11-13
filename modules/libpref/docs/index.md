@@ -184,7 +184,7 @@ include:
 
 - `modules/libpref/init/all.js`, used by all products;
 - `browser/app/profile/firefox.js`, used by Firefox desktop;
-- `mobile/android/app/mobile.js`, used by Firefox mobile;
+- `mobile/android/app/geckoview-prefs.js`, used by GeckoView;
 - `mail/app/profile/all-thunderbird.js`, used by Thunderbird (in comm-central);
 - `suite/browser/browser-prefs.js`, used by SeaMonkey (in comm-central).
 
@@ -268,7 +268,8 @@ Prefs are not synced on mobile.
 
 ### Rust
 Static prefs mirror variables can be accessed from Rust code via the
-`static_prefs::pref!` macro. Other prefs currently cannot be accessed. Parts
+`static_prefs::pref!` macro, for prefs which opt into this using
+`rust: true`. Other prefs currently cannot be accessed. Parts
 of libpref's C++ API could be made accessible to Rust code fairly
 straightforwardly via C bindings, either hand-made or generated.
 

@@ -46,10 +46,11 @@ import org.mozilla.gecko.util.GeckoBundle;
 /* package */ class WebAuthnTokenManager {
   private static final String LOGTAG = "WebAuthnTokenManager";
 
-  // from u2fhid-capi.h
+  // from dom/webauthn/WebAuthnTransportIdentifiers.h
   private static final byte AUTHENTICATOR_TRANSPORT_USB = 1;
   private static final byte AUTHENTICATOR_TRANSPORT_NFC = 2;
   private static final byte AUTHENTICATOR_TRANSPORT_BLE = 4;
+  private static final byte AUTHENTICATOR_TRANSPORT_INTERNAL = 8;
 
   private static final Algorithm[] SUPPORTED_ALGORITHMS = {
     EC2Algorithm.ES256,
@@ -76,7 +77,9 @@ import org.mozilla.gecko.util.GeckoBundle;
     if ((transports & AUTHENTICATOR_TRANSPORT_BLE) == AUTHENTICATOR_TRANSPORT_BLE) {
       result.add(Transport.BLUETOOTH_LOW_ENERGY);
     }
-
+    if ((transports & AUTHENTICATOR_TRANSPORT_INTERNAL) == AUTHENTICATOR_TRANSPORT_INTERNAL) {
+      result.add(Transport.INTERNAL);
+    }
     return result;
   }
 
@@ -124,12 +127,17 @@ import org.mozilla.gecko.util.GeckoBundle;
     public final byte[] clientDataJson;
     public final byte[] keyHandle;
     public final byte[] attestationObject;
+    public final String[] transports;
 
     public MakeCredentialResponse(
-        final byte[] clientDataJson, final byte[] keyHandle, final byte[] attestationObject) {
+        final byte[] clientDataJson,
+        final byte[] keyHandle,
+        final byte[] attestationObject,
+        final String[] transports) {
       this.clientDataJson = clientDataJson;
       this.keyHandle = keyHandle;
       this.attestationObject = attestationObject;
+      this.transports = transports;
     }
   }
 
@@ -168,7 +176,7 @@ import org.mozilla.gecko.util.GeckoBundle;
         new PublicKeyCredentialUserEntity(
             userId,
             credentialBundle.getString("userName", ""),
-            credentialBundle.getString("userIcon", ""),
+            /* deprecated userIcon field */ "",
             credentialBundle.getString("userDisplayName", ""));
 
     AttestationConveyancePreference pref = AttestationConveyancePreference.NONE;
@@ -227,7 +235,7 @@ import org.mozilla.gecko.util.GeckoBundle;
         new PublicKeyCredentialRpEntity(
             credentialBundle.getString("rpId"),
             credentialBundle.getString("rpName", ""),
-            credentialBundle.getString("rpIcon", ""));
+            /* deprecated rpIcon field */ "");
 
     final PublicKeyCredentialCreationOptions requestOptions =
         requestBuilder
@@ -308,11 +316,15 @@ import org.mozilla.gecko.util.GeckoBundle;
                               + Base64.encodeToString(
                                   responseData.getAttestationObject(), Base64.DEFAULT));
 
+                      Log.d(
+                          LOGTAG, "transports: " + String.join(", ", responseData.getTransports()));
+
                       result.complete(
                           new WebAuthnTokenManager.MakeCredentialResponse(
                               responseData.getClientDataJSON(),
                               responseData.getKeyHandle(),
-                              responseData.getAttestationObject()));
+                              responseData.getAttestationObject(),
+                              responseData.getTransports()));
                     }
                   },
                   e -> {

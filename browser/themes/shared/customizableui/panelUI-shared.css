@@ -229,40 +229,40 @@ toolbarseparator + .panel-subview-body {
 
 /* Tweaks for menupopups hanging off toolbar buttons to make them feel like panels */
 
-.toolbar-menupopup,
-.toolbar-menupopup menupopup {
-  appearance: none;
-  border: none;
-  font: menu;
-  background-color: transparent;
-  --panel-background: var(--arrowpanel-background);
-  --panel-color: var(--arrowpanel-color);
-  --panel-border-color: var(--arrowpanel-border-color);
-  --panel-border-radius: var(--arrowpanel-border-radius);
-  --panel-padding: var(--panel-subview-body-padding);
-}
+.toolbar-menupopup {
+  &,
+  menupopup {
+    appearance: none;
+    border: none;
+    font: menu;
+    background-color: transparent;
+    --panel-background: var(--arrowpanel-background);
+    --panel-color: var(--arrowpanel-color);
+    --panel-border-color: var(--arrowpanel-border-color);
+    --panel-border-radius: var(--arrowpanel-border-radius);
+    --panel-padding: var(--panel-subview-body-padding);
+  }
 
-.toolbar-menupopup menupopup {
-  /* Align non top-level menupopup's first menuitem with the menuitem that opened it.
-   * The 1px is for the menupopup's border. */
-  margin-top: calc(-1 * (var(--panel-subview-body-padding-block) + var(--panel-shadow-margin) + 1px));
-}
+  menupopup {
+    /* Align non top-level menupopup's first menuitem with the menuitem that opened it.
+     * The 1px is for the menupopup's border. */
+    margin-top: calc(-1 * (var(--panel-subview-body-padding-block) + var(--panel-shadow-margin) + 1px));
+  }
 
-.toolbar-menupopup :is(menu, menuitem)[disabled] {
-  color: var(--panel-disabled-color);
-}
+  :is(menu, menuitem)[disabled] {
+    color: var(--panel-disabled-color);
+  }
 
-.toolbar-menupopup :is(menu, menuitem):not([disabled])[_moz-menuactive] {
-  color: inherit;
-  background-color: var(--panel-item-hover-bgcolor);
-}
+  :is(menu, menuitem):not([disabled])[_moz-menuactive] {
+    color: inherit;
+    background-color: var(--panel-item-hover-bgcolor);
 
-.toolbar-menupopup :is(menu, menuitem):not([disabled])[_moz-menuactive]:active {
-  color: inherit;
-  background-color: var(--panel-item-active-bgcolor);
-}
+    &:active {
+      color: inherit;
+      background-color: var(--panel-item-active-bgcolor);
+    }
+  }
 
-.toolbar-menupopup :is(
   .menu-text,
   .menu-iconic-text,
   .menu-iconic-icon,
@@ -270,39 +270,39 @@ toolbarseparator + .panel-subview-body {
   .menu-iconic-accel,
   .menu-accel-container,
   .menu-accel,
-  .menu-right
-) {
-  /* Reset every spacing and appearance set by the platforms' menu.css
-   * and set the ones we need in the following rules. */
-  margin: 0 !important;
-  padding: 0 !important;
-  appearance: none !important;
-}
+  .menu-right {
+    /* Reset every spacing and appearance set by the platforms' menu.css
+     * and set the ones we need in the following rules. */
+    margin: 0 !important;
+    padding: 0 !important;
+    appearance: none !important;
+  }
 
-.toolbar-menupopup :is(.menu-iconic, .menuitem-iconic) > .menu-iconic-left {
-  margin-inline-end: 8px !important;
-}
+  :is(.menu-iconic, .menuitem-iconic) > .menu-iconic-left {
+    margin-inline-end: 8px !important;
+  }
 
-.toolbar-menupopup .menu-accel-container > :is(.menu-accel, .menu-iconic-accel) {
-  margin-inline-start: 16px !important;
-  color: var(--panel-shortcut-color);
-}
+  .menu-accel,
+  .menu-iconic-accel {
+    margin-inline-start: 16px !important;
+  }
 
-.toolbar-menupopup menu > .menu-right {
-  list-style-image: url(chrome://global/skin/icons/arrow-right.svg);
-  -moz-context-properties: fill, fill-opacity;
-  fill: currentColor;
-  fill-opacity: 0.6;
-  width: unset;
-  height: unset;
-}
+  menu > .menu-right {
+    list-style-image: url(chrome://global/skin/icons/arrow-right.svg);
+    -moz-context-properties: fill, fill-opacity;
+    fill: currentColor;
+    fill-opacity: 0.6;
+    width: unset;
+    height: unset;
 
-.toolbar-menupopup menu > .menu-right:-moz-locale-dir(rtl) {
-  list-style-image: url(chrome://global/skin/icons/arrow-left.svg);
-}
+    &:-moz-locale-dir(rtl) {
+      list-style-image: url(chrome://global/skin/icons/arrow-left.svg);
+    }
+  }
 
-.toolbar-menupopup menuseparator {
-  padding: var(--panel-separator-margin);
+  menuseparator {
+    padding: var(--panel-separator-margin);
+  }
 }
 
 #BMB_bookmarksPopup {
@@ -429,12 +429,12 @@ panelview[id^=PanelUI-webext-] {
   width: 22.5em;
 }
 
-#customizationui-widget-multiview panelview:not([extension]) {
+:where(#customizationui-widget-multiview) panelview:not([extension]) {
   min-width: var(--menu-panel-width);
   max-width: 35em;
 }
 
-#customizationui-widget-multiview #appMenu-libraryView,
+#appMenu-libraryView,
 #pageActionPanel panelview,
 #widget-overflow panelview {
   min-width: var(--menu-panel-width-wide);
@@ -701,7 +701,8 @@ toolbarbutton[constrain-size="true"][cui-areatype="panel"] > .toolbarbutton-badg
   display: none;
 }
 
-@supports not -moz-bool-pref("identity.fxaccounts.toolbar.defaultVisible") {
+/* stylelint-disable-next-line media-query-no-invalid */
+@media not (-moz-bool-pref: "identity.fxaccounts.toolbar.defaultVisible") {
   /* Hide the FxA toolbar button when its in the nav-bar, until in use */
   :root[fxastatus="not_configured"] #widget-overflow-list > #fxa-toolbar-menu-button,
   :root[fxastatus="not_configured"] #nav-bar-customization-target > #fxa-toolbar-menu-button {
@@ -1097,7 +1098,12 @@ panelview .toolbarbutton-1,
 .subviewbutton[shortcut]::after {
   content: attr(shortcut);
   display: flex;
-  color: var(--panel-shortcut-color);
+}
+
+@media not (prefers-contrast) {
+  .subviewbutton[shortcut]:not([disabled])::after {
+    color: var(--panel-disabled-color);
+  }
 }
 
 #protections-popup-mainView .subviewbutton-nav:not(.notFound)::after,
@@ -1380,7 +1386,10 @@ toolbarpaletteitem[place="menu-panel"] > .subviewbutton-nav::after {
 
 #panic-button-success-icon,
 #PanelUI-panic-timeframe-icon {
-  list-style-image: url(chrome://browser/skin/panic-panel/header.png);
+  list-style-image: image-set(
+    url(chrome://browser/skin/panic-panel/header.png),
+    url(chrome://browser/skin/panic-panel/header@2x.png) 2x
+  );
   max-height: 48px;
   width: 48px;
 }
@@ -1431,13 +1440,8 @@ radiogroup:focus-visible > .subviewradio[focused="true"] > .radio-label-box {
 }
 
 .subviewradio > .radio-check[selected] {
-  background-color: #fff;
-  border: 4px solid #177ee6;
-}
-
-:root[lwt-popup-brighttext] .subviewradio > .radio-check[selected] {
-  background-color: transparent;
-  border: 4px solid #00ddff;
+  background-color: light-dark(#fff, transparent);
+  border: 4px solid light-dark(#177ee6, #00ddff);
 }
 
 #PanelUI-panic-explanations {
@@ -1450,32 +1454,32 @@ radiogroup:focus-visible > .subviewradio[focused="true"] > .radio-label-box {
 }
 
 .PanelUI-panic-actionlist {
-  padding-block: 2px;
-  padding-inline-start: 20px;
-  background-size: 16px 16px;
-  background-repeat: no-repeat;
-  background-color: transparent;
-  background-position: left center;
+  padding: 2px 0;
 }
 
-.PanelUI-panic-actionlist:-moz-locale-dir(rtl) {
-  background-position-x: right;
+.PanelUI-panic-actionlist::before {
+  display: inline-block;
+  content: "";
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 4px;
+  background-image: image-set(
+    url(chrome://browser/skin/panic-panel/icons.png),
+    url(chrome://browser/skin/panic-panel/icons@2x.png) 2x
+  );
+  vertical-align: bottom;
 }
 
-#PanelUI-panic-actionlist-cookies {
-  background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons.png), 0, 16, 16, 0);
+#PanelUI-panic-actionlist-history::before {
+  background-position-x: 16px;
 }
 
-#PanelUI-panic-actionlist-history {
-  background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons.png), 0, 32, 16, 16);
+#PanelUI-panic-actionlist-windows::before {
+  background-position-x: 32px;
 }
 
-#PanelUI-panic-actionlist-windows {
-  background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons.png), 0, 48, 16, 32);
-}
-
-#PanelUI-panic-actionlist-newwindow {
-  background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons.png), 0, 64, 16, 48);
+#PanelUI-panic-actionlist-newwindow::before {
+  background-position-x: 48px;
 }
 
 #PanelUI-panic-warning {
@@ -1533,29 +1537,6 @@ radiogroup:focus-visible > .subviewradio[focused="true"] > .radio-label-box {
   background-color: var(--button-active-bgcolor);
 }
 
-@media (min-resolution: 1.1dppx) {
-  #panic-button-success-icon,
-  #PanelUI-panic-timeframe-icon {
-    list-style-image: url(chrome://browser/skin/panic-panel/header@2x.png);
-  }
-
-  #PanelUI-panic-actionlist-cookies {
-    background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons@2x.png), 0, 32, 32, 0);
-  }
-
-  #PanelUI-panic-actionlist-history {
-    background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons@2x.png), 0, 64, 32, 32);
-  }
-
-  #PanelUI-panic-actionlist-windows {
-    background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons@2x.png), 0, 96, 32, 64);
-  }
-
-  #PanelUI-panic-actionlist-newwindow {
-    background-image: -moz-image-rect(url(chrome://browser/skin/panic-panel/icons@2x.png), 0, 128, 32, 96);
-  }
-}
-
 .panel-header {
   display: flex;
   align-items: center;
@@ -1575,8 +1556,6 @@ radiogroup:focus-visible > .subviewradio[focused="true"] > .radio-label-box {
 
 .panel-header > h1 {
   flex: auto;
-  font-size: inherit;
-  font-weight: 600;
   margin: 0;
 }
 
@@ -1998,4 +1977,33 @@ panelview:not([mainview]) #PanelUI-whatsNew-title {
 
 .webextension-popup-stack {
   position: relative;
+}
+
+/* Reset/Restart Private Browsing Panel */
+
+#reset-pbm-panel {
+  max-width: var(--menu-panel-width-wide);
+}
+
+#reset-pbm-panel-container {
+  padding: 16px 16px 0;
+  gap: 8px;
+}
+
+#reset-pbm-panel-header > description {
+  margin-bottom: 0;
+}
+
+#reset-pbm-panel-header > description,
+#reset-pbm-panel-description,
+#reset-pbm-panel-footer {
+  margin-inline: 0;
+}
+
+#reset-pbm-panel-header > description {
+  font-weight: var(--font-weight-bold);
+}
+
+#reset-pbm-panel-checkbox {
+  margin-inline: 0 8px;
 }

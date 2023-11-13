@@ -86,6 +86,7 @@ def run(
     dry_run=False,
     message="{msg}",
     closed_tree=False,
+    push_to_lando=False,
 ):
     app_version = attr.evolve(version, beta_number=None, is_esr=False)
 
@@ -130,7 +131,7 @@ def run(
         migration_configs = yaml.safe_load(f)
     for migration in migrations:
         migration_config = migration_configs["merge-automation"]["behaviors"][migration]
-        for (path, from_, to) in migration_config["replacements"]:
+        for path, from_, to in migration_config["replacements"]:
             if path in files_to_change:
                 contents = files_to_change[path]
             else:
@@ -156,4 +157,5 @@ def run(
         closed_tree=closed_tree,
         try_task_config=task_config,
         files_to_change=files_to_change,
+        push_to_lando=push_to_lando,
     )

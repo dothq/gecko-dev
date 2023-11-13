@@ -16,6 +16,8 @@
 #include "EventLog.h"
 #include "SetDefaultBrowser.h"
 
+namespace mozilla::default_agent {
+
 /*
  * The implementation for setting extension handlers by writing UserChoice.
  *
@@ -26,17 +28,18 @@
  *
  * @param aSid Current user's string SID
  *
- * @param aFileExtensions Optional null-terminated list of file association
- * pairs to set as default, like `{ L".pdf", "FirefoxPDF", nullptr }`.
+ * @param aExtraFileExtensions Optional array of extra file association pairs to
+ * set as default, like `[ ".pdf", "FirefoxPDF" ]`.
  *
- * @returns S_OK           All associations set and checked successfully.
- *          MOZ_E_REJECTED UserChoice was set, but checking the default did not
- *                         return our ProgID.
- *          E_FAIL         Failed to set at least one association.
+ * @returns NS_OK                  All associations set and checked
+ *                                 successfully.
+ *          NS_ERROR_WDBA_REJECTED UserChoice was set, but checking the default
+ *                                 did not return our ProgID.
+ *          NS_ERROR_FAILURE       Failed to set at least one association.
  */
-static HRESULT SetDefaultExtensionHandlersUserChoiceImpl(
+static nsresult SetDefaultExtensionHandlersUserChoiceImpl(
     const wchar_t* aAumi, const wchar_t* const aSid,
-    const wchar_t* const* aFileExtensions);
+    const nsTArray<nsString>& aFileExtensions);
 
 static bool AddMillisecondsToSystemTime(SYSTEMTIME& aSystemTime,
                                         ULONGLONG aIncrementMS) {
@@ -222,39 +225,39 @@ static bool VerifyUserDefault(const wchar_t* aExt, const wchar_t* aProgID) {
   return true;
 }
 
-HRESULT SetDefaultBrowserUserChoice(
-    const wchar_t* aAumi, const wchar_t* const* aExtraFileExtensions) {
+nsresult SetDefaultBrowserUserChoice(
+    const wchar_t* aAumi, const nsTArray<nsString>& aExtraFileExtensions) {
   auto urlProgID = FormatProgID(L"FirefoxURL", aAumi);
   if (!CheckProgIDExists(urlProgID.get())) {
     LOG_ERROR_MESSAGE(L"ProgID %s not found", urlProgID.get());
-    return MOZ_E_NO_PROGID;
+    return NS_ERROR_WDBA_NO_PROGID;
   }
 
   auto htmlProgID = FormatProgID(L"FirefoxHTML", aAumi);
   if (!CheckProgIDExists(htmlProgID.get())) {
     LOG_ERROR_MESSAGE(L"ProgID %s not found", htmlProgID.get());
-    return MOZ_E_NO_PROGID;
+    return NS_ERROR_WDBA_NO_PROGID;
   }
 
   auto pdfProgID = FormatProgID(L"FirefoxPDF", aAumi);
   if (!CheckProgIDExists(pdfProgID.get())) {
     LOG_ERROR_MESSAGE(L"ProgID %s not found", pdfProgID.get());
-    return MOZ_E_NO_PROGID;
+    return NS_ERROR_WDBA_NO_PROGID;
   }
 
   if (!CheckBrowserUserChoiceHashes()) {
     LOG_ERROR_MESSAGE(L"UserChoice Hash mismatch");
-    return MOZ_E_HASH_CHECK;
+    return NS_ERROR_WDBA_HASH_CHECK;
   }
 
   if (!mozilla::IsWin10CreatorsUpdateOrLater()) {
     LOG_ERROR_MESSAGE(L"UserChoice hash matched, but Windows build is too old");
-    return MOZ_E_BUILD;
+    return NS_ERROR_WDBA_BUILD;
   }
 
   auto sid = GetCurrentUserStringSid();
   if (!sid) {
-    return E_FAIL;
+    return NS_ERROR_FAILURE;
   }
 
   bool ok = true;
@@ -281,12 +284,12 @@ HRESULT SetDefaultBrowserUserChoice(
   }
 
   if (ok) {
-    HRESULT hr = SetDefaultExtensionHandlersUserChoiceImpl(
+    nsresult rv = SetDefaultExtensionHandlersUserChoiceImpl(
         aAumi, sid.get(), aExtraFileExtensions);
-    if (hr == MOZ_E_REJECTED) {
+    if (rv == NS_ERROR_WDBA_REJECTED) {
       ok = false;
       defaultRejected = true;
-    } else if (hr == E_FAIL) {
+    } else if (rv == NS_ERROR_FAILURE) {
       ok = false;
     }
   }
@@ -297,30 +300,30 @@ HRESULT SetDefaultBrowserUserChoice(
   if (!ok) {
     LOG_ERROR_MESSAGE(L"Failed setting default with %s", aAumi);
     if (defaultRejected) {
-      return MOZ_E_REJECTED;
+      return NS_ERROR_WDBA_REJECTED;
     }
-    return E_FAIL;
+    return NS_ERROR_FAILURE;
   }
 
-  return S_OK;
+  return NS_OK;
 }
 
-HRESULT SetDefaultExtensionHandlersUserChoice(
-    const wchar_t* aAumi, const wchar_t* const* aFileExtensions) {
+nsresult SetDefaultExtensionHandlersUserChoice(
+    const wchar_t* aAumi, const nsTArray<nsString>& aFileExtensions) {
   auto sid = GetCurrentUserStringSid();
   if (!sid) {
-    return E_FAIL;
+    return NS_ERROR_FAILURE;
   }
 
   bool ok = true;
   bool defaultRejected = false;
 
-  HRESULT hr = SetDefaultExtensionHandlersUserChoiceImpl(aAumi, sid.get(),
-                                                         aFileExtensions);
-  if (hr == MOZ_E_REJECTED) {
+  nsresult rv = SetDefaultExtensionHandlersUserChoiceImpl(aAumi, sid.get(),
+                                                          aFileExtensions);
+  if (rv == NS_ERROR_WDBA_REJECTED) {
     ok = false;
     defaultRejected = true;
-  } else if (hr == E_FAIL) {
+  } else if (rv == NS_ERROR_FAILURE) {
     ok = false;
   }
 
@@ -330,36 +333,36 @@ HRESULT SetDefaultExtensionHandlersUserChoice(
   if (!ok) {
     LOG_ERROR_MESSAGE(L"Failed setting default with %s", aAumi);
     if (defaultRejected) {
-      return MOZ_E_REJECTED;
+      return NS_ERROR_WDBA_REJECTED;
     }
-    return E_FAIL;
+    return NS_ERROR_FAILURE;
   }
 
-  return S_OK;
+  return NS_OK;
 }
 
-HRESULT SetDefaultExtensionHandlersUserChoiceImpl(
+nsresult SetDefaultExtensionHandlersUserChoiceImpl(
     const wchar_t* aAumi, const wchar_t* const aSid,
-    const wchar_t* const* aFileExtensions) {
-  const wchar_t* const* extraFileExtension = aFileExtensions;
-  const wchar_t* const* extraProgIDRoot = aFileExtensions + 1;
-  while (extraFileExtension && *extraFileExtension && extraProgIDRoot &&
-         *extraProgIDRoot) {
+    const nsTArray<nsString>& aFileExtensions) {
+  for (size_t i = 0; i + 1 < aFileExtensions.Length(); i += 2) {
+    const wchar_t* extraFileExtension =
+        PromiseFlatString(aFileExtensions[i]).get();
+    const wchar_t* extraProgIDRoot =
+        PromiseFlatString(aFileExtensions[i + 1]).get();
     // Formatting the ProgID here prevents using this helper to target arbitrary
     // ProgIDs.
-    auto extraProgID = FormatProgID(*extraProgIDRoot, aAumi);
+    auto extraProgID = FormatProgID(extraProgIDRoot, aAumi);
 
-    if (!SetUserChoice(*extraFileExtension, aSid, extraProgID.get())) {
-      return E_FAIL;
+    if (!SetUserChoice(extraFileExtension, aSid, extraProgID.get())) {
+      return NS_ERROR_FAILURE;
     }
 
-    if (!VerifyUserDefault(*extraFileExtension, extraProgID.get())) {
-      return MOZ_E_REJECTED;
+    if (!VerifyUserDefault(extraFileExtension, extraProgID.get())) {
+      return NS_ERROR_WDBA_REJECTED;
     }
-
-    extraFileExtension += 2;
-    extraProgIDRoot += 2;
   }
 
-  return S_OK;
+  return NS_OK;
 }
+
+}  // namespace mozilla::default_agent

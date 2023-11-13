@@ -836,6 +836,12 @@ void nsHttpConnectionMgr::UpdateCoalescingForNewConn(
   MOZ_ASSERT(ent);
   MOZ_ASSERT(mCT.GetWeak(newConn->ConnectionInfo()->HashKey()) == ent);
   LOG(("UpdateCoalescingForNewConn newConn=%p aNoHttp3=%d", newConn, aNoHttp3));
+  if (newConn->ConnectionInfo()->GetWebTransport()) {
+    LOG(("Don't coalesce a WebTransport conn %p", newConn));
+    // TODO: implement this properly in bug 1815735.
+    return;
+  }
+
   HttpConnectionBase* existingConn =
       FindCoalescableConnection(ent, true, false, false);
   if (existingConn) {
@@ -848,6 +854,8 @@ void nsHttpConnectionMgr::UpdateCoalescingForNewConn(
             ("UpdateCoalescingForNewConn() found existing active H2 conn that "
              "could have served newConn, but new connection is H3, therefore "
              "close the H2 conncetion"));
+        existingConn->SetCloseReason(
+            ConnectionCloseReason::CLOSE_EXISTING_CONN_FOR_COALESCING);
         existingConn->DontReuse();
       }
     } else if (existingConn->UsingHttp3() && newConn->UsingSpdy()) {
@@ -858,6 +866,8 @@ void nsHttpConnectionMgr::UpdateCoalescingForNewConn(
              "could have served H2 newConn graceful close of newConn=%p to "
              "migrate to existingConn %p\n",
              newConn, existingConn));
+        existingConn->SetCloseReason(
+            ConnectionCloseReason::CLOSE_NEW_CONN_FOR_COALESCING);
         newConn->DontReuse();
         return;
       }
@@ -867,6 +877,8 @@ void nsHttpConnectionMgr::UpdateCoalescingForNewConn(
            "have served newConn "
            "graceful close of newConn=%p to migrate to existingConn %p\n",
            newConn, existingConn));
+      existingConn->SetCloseReason(
+          ConnectionCloseReason::CLOSE_NEW_CONN_FOR_COALESCING);
       newConn->DontReuse();
       return;
     }
@@ -2051,6 +2063,8 @@ void nsHttpConnectionMgr::AbortAndCloseAllConnections(int32_t, ARefBase*) {
     // Close websocket "fake" connections
     ent->CloseH2WebsocketConnections();
 
+    ent->ClosePendingConnections();
+
     // Close all pending transactions.
     ent->CancelAllTransactions(NS_ERROR_ABORT);
 
@@ -2362,6 +2376,8 @@ void nsHttpConnectionMgr::OnMsgVerifyTraffic(int32_t, ARefBase*) {
     return;
   }
 
+  mCoalescingHash.Clear();
+
   // Mark connections for traffic verification
   for (const auto& entry : mCT.Values()) {
     entry->VerifyTraffic();
@@ -2477,7 +2493,8 @@ void nsHttpConnectionMgr::OnMsgReclaimConnection(HttpConnectionBase* conn) {
     conn->DontReuse();
   }
 
-  if (NS_SUCCEEDED(ent->RemoveActiveConnection(conn))) {
+  if (NS_SUCCEEDED(ent->RemoveActiveConnection(conn)) ||
+      NS_SUCCEEDED(ent->RemovePendingConnection(conn))) {
   } else if (!connTCP || connTCP->EverUsedSpdy()) {
     LOG(("HttpConnectionBase %p not found in its connection entry, try ^anon",
          conn));
@@ -2513,6 +2530,7 @@ void nsHttpConnectionMgr::OnMsgReclaimConnection(HttpConnectionBase* conn) {
       ent->RemoveH2WebsocketConns(conn);
     }
     LOG(("  connection cannot be reused; closing connection\n"));
+    conn->SetCloseReason(ConnectionCloseReason::CANT_REUSED);
     conn->Close(NS_ERROR_ABORT);
   }
 
@@ -2625,7 +2643,7 @@ void nsHttpConnectionMgr::OnMsgCompleteUpgrade(int32_t, ARefBase* param) {
 void nsHttpConnectionMgr::OnMsgUpdateParam(int32_t inParam, ARefBase*) {
   MOZ_ASSERT(OnSocketThread(), "not on socket thread");
   uint32_t param = static_cast<uint32_t>(inParam);
-  uint16_t name = ((param)&0xFFFF0000) >> 16;
+  uint16_t name = ((param) & 0xFFFF0000) >> 16;
   uint16_t value = param & 0x0000FFFF;
 
   switch (name) {

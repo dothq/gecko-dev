@@ -63,6 +63,7 @@
 
 #include "nsAtomTable.h"
 #include "nsISupportsImpl.h"
+#include "nsLanguageAtomService.h"
 
 #include "nsSystemInfo.h"
 #include "nsMemoryReporterManager.h"
@@ -89,6 +90,9 @@
 #include "mozilla/AvailableMemoryTracker.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/CountingAllocatorBase.h"
+#ifdef MOZ_PHC
+#  include "mozilla/PHCManager.h"
+#endif
 #include "mozilla/UniquePtr.h"
 #include "mozilla/ServoStyleConsts.h"
 
@@ -448,6 +452,12 @@ NS_InitXPCOM(nsIServiceManager** aResult, nsIFile* aBinDirectory,
     NS_ADDREF(*aResult = nsComponentManagerImpl::gComponentManager);
   }
 
+#ifdef MOZ_PHC
+  // This is the earliest possible moment we can start PHC while still being
+  // able to read prefs.
+  mozilla::InitPHCState();
+#endif
+
   // After autoreg, but before we actually instantiate any components,
   // add any services listed in the "xpcom-directory-providers" category
   // to the directory service.
@@ -760,6 +770,8 @@ nsresult ShutdownXPCOM(nsIServiceManager* aServMgr) {
   }
   nsComponentManagerImpl::gComponentManager = nullptr;
   nsCategoryManager::Destroy();
+
+  nsLanguageAtomService::Shutdown();
 
   GkRust_Shutdown();
 

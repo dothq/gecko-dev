@@ -11,6 +11,7 @@ ERROR_HELP=""
 trap 'show_error_msg $LINENO' ERR
 
 source dom/media/webrtc/third_party_build/use_config_env.sh
+export HGPLAIN=1
 
 echo "MOZ_LIBWEBRTC_SRC: $MOZ_LIBWEBRTC_SRC"
 echo "MOZ_LIBWEBRTC_BRANCH: $MOZ_LIBWEBRTC_BRANCH"
@@ -95,4 +96,4 @@ if [ "x$NO_OP_FILE_COUNT" != "x0" ]; then
      $STATE_DIR
 fi
 
-bash $SCRIPT_DIR/verify_vendoring.sh || true
+bash $SCRIPT_DIR/verify_vendoring.sh || exit 1

@@ -13,18 +13,24 @@ ChromeUtils.defineESModuleGetters(lazy, {
   PlacesUIUtils: "resource:///modules/PlacesUIUtils.sys.mjs",
   PlacesUtils: "resource://gre/modules/PlacesUtils.sys.mjs",
   Sqlite: "resource://gre/modules/Sqlite.sys.mjs",
-  WindowsRegistry: "resource://gre/modules/WindowsRegistry.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
   MigrationWizardConstants:
     "chrome://browser/content/migration/migration-wizard-constants.mjs",
 });
 
+ChromeUtils.defineLazyGetter(
+  lazy,
+  "gCanGetPermissionsOnPlatformPromise",
+  () => {
+    let fp = Cc["@mozilla.org/filepicker;1"].createInstance(Ci.nsIFilePicker);
+    return fp.isModeSupported(Ci.nsIFilePicker.modeGetFolder);
+  }
+);
+
 var gMigrators = null;
 var gFileMigrators = null;
 var gProfileStartup = null;
 var gL10n = null;
-var gPreviousDefaultBrowserKey = "";
-var gHasOpenedLegacyWizard = false;
 
 let gForceExitSpinResolve = false;
 let gKeepUndoData = false;
@@ -148,6 +154,8 @@ class MigrationUtils {
           "MigrationWizard:RequestSafariPermissions": { wantUntrusted: true },
           "MigrationWizard:SelectSafariPasswordFile": { wantUntrusted: true },
           "MigrationWizard:OpenAboutAddons": { wantUntrusted: true },
+          "MigrationWizard:PermissionsNeeded": { wantUntrusted: true },
+          "MigrationWizard:GetPermissions": { wantUntrusted: true },
         },
       },
 
@@ -161,6 +169,20 @@ class MigrationUtils {
         "chrome://browser/content/spotlight.html",
         "about:firefoxview-next",
       ],
+    });
+
+    XPCOMUtils.defineLazyGetter(this, "IS_LINUX_SNAP_PACKAGE", () => {
+      if (
+        AppConstants.platform != "linux" ||
+        !Cc["@mozilla.org/gio-service;1"]
+      ) {
+        return false;
+      }
+
+      let gIOSvc = Cc["@mozilla.org/gio-service;1"].getService(
+        Ci.nsIGIOService
+      );
+      return gIOSvc.isRunningUnderSnap;
     });
   }
 
@@ -403,18 +425,13 @@ class MigrationUtils {
 
   /**
    * Returns the migrator for the given source, if any data is available
-   * for this source, or null otherwise.
-   *
-   * If null is returned,  either no data can be imported for the given migrator,
-   * or aMigratorKey is invalid  (e.g. ie on mac, or mosaic everywhere).  This
-   * method should be used rather than direct getService for future compatibility
-   * (see bug 718280).
+   * for this source, or if permissions are required in order to read
+   * data from this source. Returns null otherwise.
    *
    * @param {string} aKey
    *   Internal name of the migration source. See `availableMigratorKeys`
    *   for supported values by OS.
-   *
-   * @returns {MigratorBase}
+   * @returns {Promise<MigratorBase|null>}
    *   A profile migrator implementing nsIBrowserProfileMigrator, if it can
    *   import any data, null otherwise.
    */
@@ -426,7 +443,18 @@ class MigrationUtils {
     }
 
     try {
-      return migrator && (await migrator.isSourceAvailable()) ? migrator : null;
+      if (!migrator) {
+        return null;
+      }
+
+      if (
+        (await migrator.isSourceAvailable()) ||
+        (!(await migrator.hasPermissions()) && migrator.canGetPermissions())
+      ) {
+        return migrator;
+      }
+
+      return null;
     } catch (ex) {
       console.error(ex);
       return null;
@@ -500,51 +528,6 @@ class MigrationUtils {
       console.error("Could not detect default browser: ", ex);
     }
 
-    // "firefox" is the least useful entry here, and might just be because we've set
-    // ourselves as the default (on Windows 7 and below). In that case, check if we
-    // have a registry key that tells us where to go:
-    if (
-      key == "firefox" &&
-      AppConstants.isPlatformAndVersionAtMost("win", "6.2")
-    ) {
-      // Because we remove the registry key, reading the registry key only works once.
-      // We save the value for subsequent calls to avoid hard-to-trace bugs when multiple
-      // consumers ask for this key.
-      if (gPreviousDefaultBrowserKey) {
-        key = gPreviousDefaultBrowserKey;
-      } else {
-        // We didn't have a saved value, so check the registry.
-        const kRegPath = "Software\\Mozilla\\Firefox";
-        let oldDefault = lazy.WindowsRegistry.readRegKey(
-          Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
-          kRegPath,
-          "OldDefaultBrowserCommand"
-        );
-        if (oldDefault) {
-          // Remove the key:
-          lazy.WindowsRegistry.removeRegKey(
-            Ci.nsIWindowsRegKey.ROOT_KEY_CURRENT_USER,
-            kRegPath,
-            "OldDefaultBrowserCommand"
-          );
-          try {
-            let file = Cc["@mozilla.org/file/local;1"].createInstance(
-              Ci.nsILocalFileWin
-            );
-            file.initWithCommandLine(oldDefault);
-            key =
-              APP_DESC_TO_KEY[file.getVersionInfoField("FileDescription")] ||
-              key;
-            // Save the value for future callers.
-            gPreviousDefaultBrowserKey = key;
-          } catch (ex) {
-            console.error(
-              "Could not convert old default browser value to description."
-            );
-          }
-        }
-      }
-    }
     return key;
   }
 
@@ -569,8 +552,8 @@ class MigrationUtils {
   }
 
   /**
-   * Show the migration wizard.  On mac, this may just focus the wizard if it's
-   * already running, in which case aOpener and aOptions are ignored.
+   * Show the migration wizard in about:preferences, or if there is not an existing
+   * browser window open, in a new top-level dialog window.
    *
    * NB: If you add new consumers, please add a migration entry point constant to
    * MIGRATION_ENTRYPOINTS and supply that entrypoint with the entrypoint property
@@ -594,10 +577,9 @@ class MigrationUtils {
    * @param {string} [aOptions.profileId]
    *   An identifier for the profile to use when migrating.
    * @returns {Promise<undefined>}
-   *   If the new content-modal migration dialog is enabled and an
-   *   about:preferences tab can be opened, this will resolve when
+   *   If an about:preferences tab can be opened, this will resolve when
    *   that tab has been switched to. Otherwise, this will resolve
-   *   just after opening the dialog window.
+   *   just after opening the top-level dialog window.
    */
   showMigrationWizard(aOpener, aOptions) {
     // When migration is kicked off from about:welcome, there are
@@ -614,10 +596,6 @@ class MigrationUtils {
     //   The migration wizard will open in a new top-level content
     //   window.
     //
-    // "legacy":
-    //   The legacy migration wizard will open, even if the new migration
-    //   wizard is enabled by default.
-    //
     // "default" / other
     //   The user will be directed to the migration wizard in
     //   about:preferences. The tab will not close once the
@@ -627,92 +605,59 @@ class MigrationUtils {
       "default"
     );
 
-    let aboutWelcomeLegacyBehavior =
-      aboutWelcomeBehavior == "legacy" &&
-      aOptions.entrypoint == this.MIGRATION_ENTRYPOINTS.NEWTAB;
+    let entrypoint = aOptions.entrypoint || this.MIGRATION_ENTRYPOINTS.UNKNOWN;
+    Services.telemetry
+      .getHistogramById("FX_MIGRATION_ENTRY_POINT_CATEGORICAL")
+      .add(entrypoint);
 
-    if (
-      Services.prefs.getBoolPref(
-        "browser.migrate.content-modal.enabled",
-        false
-      ) &&
-      !aboutWelcomeLegacyBehavior
-    ) {
-      let entrypoint =
-        aOptions.entrypoint || this.MIGRATION_ENTRYPOINTS.UNKNOWN;
-      Services.telemetry
-        .getHistogramById("FX_MIGRATION_ENTRY_POINT_CATEGORICAL")
-        .add(entrypoint);
+    let openStandaloneWindow = blocking => {
+      let features = "dialog,centerscreen,resizable=no";
 
-      let openStandaloneWindow = blocking => {
-        let features = "dialog,centerscreen,resizable=no";
+      if (blocking) {
+        features += ",modal";
+      }
 
-        if (blocking) {
-          features += ",modal";
+      Services.ww.openWindow(
+        aOpener,
+        "chrome://browser/content/migration/migration-dialog-window.html",
+        "_blank",
+        features,
+        {
+          options: aOptions,
         }
+      );
+      return Promise.resolve();
+    };
 
-        Services.ww.openWindow(
-          aOpener,
-          "chrome://browser/content/migration/migration-dialog-window.html",
-          "_blank",
-          features,
-          {
-            options: aOptions,
-          }
+    if (aOptions.isStartupMigration) {
+      // Record that the uninstaller requested a profile refresh
+      if (Services.env.get("MOZ_UNINSTALLER_PROFILE_REFRESH")) {
+        Services.env.set("MOZ_UNINSTALLER_PROFILE_REFRESH", "");
+        Services.telemetry.scalarSet(
+          "migration.uninstaller_profile_refresh",
+          true
         );
-        return Promise.resolve();
-      };
-
-      if (aOptions.isStartupMigration) {
-        // Record that the uninstaller requested a profile refresh
-        if (Services.env.get("MOZ_UNINSTALLER_PROFILE_REFRESH")) {
-          Services.env.set("MOZ_UNINSTALLER_PROFILE_REFRESH", "");
-          Services.telemetry.scalarSet(
-            "migration.uninstaller_profile_refresh",
-            true
-          );
-        }
-
-        openStandaloneWindow(true /* blocking */);
-        return Promise.resolve();
       }
 
-      if (aOpener?.openPreferences) {
-        if (aOptions.entrypoint == this.MIGRATION_ENTRYPOINTS.NEWTAB) {
-          if (aboutWelcomeBehavior == "autoclose") {
-            return aOpener.openPreferences("general-migrate-autoclose");
-          } else if (aboutWelcomeBehavior == "standalone") {
-            openStandaloneWindow(false /* blocking */);
-            return Promise.resolve();
-          }
-        }
-        return aOpener.openPreferences("general-migrate");
-      }
-
-      // If somehow we failed to open about:preferences, fall back to opening
-      // the top-level window.
-      openStandaloneWindow(false /* blocking */);
+      openStandaloneWindow(true /* blocking */);
       return Promise.resolve();
     }
-    // Legacy migration dialog
-    if (!gHasOpenedLegacyWizard) {
-      gHasOpenedLegacyWizard = true;
-      aOptions.openedTime = Cu.now();
+
+    if (aOpener?.openPreferences) {
+      if (aOptions.entrypoint == this.MIGRATION_ENTRYPOINTS.NEWTAB) {
+        if (aboutWelcomeBehavior == "autoclose") {
+          return aOpener.openPreferences("general-migrate-autoclose");
+        } else if (aboutWelcomeBehavior == "standalone") {
+          openStandaloneWindow(false /* blocking */);
+          return Promise.resolve();
+        }
+      }
+      return aOpener.openPreferences("general-migrate");
     }
 
-    const DIALOG_URL = "chrome://browser/content/migration/migration.xhtml";
-    let features = "chrome,dialog,modal,centerscreen,titlebar,resizable=no";
-    if (AppConstants.platform == "macosx" && !this.isStartupMigration) {
-      let win = Services.wm.getMostRecentWindow("Browser:MigrationWizard");
-      if (win) {
-        win.focus();
-        return Promise.resolve();
-      }
-      // On mac, the migration wiazrd should only be modal in the case of
-      // startup-migration.
-      features = "centerscreen,chrome,resizable=no";
-    }
-    Services.ww.openWindow(aOpener, DIALOG_URL, "_blank", features, aOptions);
+    // If somehow we failed to open about:preferences, fall back to opening
+    // the top-level window.
+    openStandaloneWindow(false /* blocking */);
     return Promise.resolve();
   }
 
@@ -1258,6 +1203,18 @@ class MigrationUtils {
 
   get HISTORY_MAX_AGE_IN_MILLISECONDS() {
     return this.HISTORY_MAX_AGE_IN_DAYS * 24 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Determines whether or not the underlying platform supports creating
+   * native file pickers that can do folder selection, which is a
+   * pre-requisite for getting read-access permissions for data from other
+   * browsers that we can import from.
+   *
+   * @returns {Promise<boolean>}
+   */
+  canGetPermissionsOnPlatform() {
+    return lazy.gCanGetPermissionsOnPlatformPromise;
   }
 }
 

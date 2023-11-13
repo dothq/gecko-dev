@@ -273,6 +273,8 @@ static bool DetectContainerLayerPropertiesBoundsChange(
   if (aItem->GetType() == DisplayItemType::TYPE_FILTER) {
     // Filters get clipped to the BuildingRect since they can
     // have huge bounds outside of the visible area.
+    // This function and similar code in ComputeGeometryChange should be kept in
+    // sync.
     aGeometry.mBounds = aGeometry.mBounds.Intersect(aItem->GetBuildingRect());
   }
 
@@ -554,6 +556,13 @@ struct DIGroup {
           }
         }
       }
+    }
+
+    if (aData->mGeometry && aItem->GetType() == DisplayItemType::TYPE_FILTER) {
+      // This hunk DetectContainerLayerPropertiesBoundsChange should be kept in
+      // sync.
+      aData->mGeometry->mBounds =
+          aData->mGeometry->mBounds.Intersect(aItem->GetBuildingRect());
     }
 
     mHitTestBounds.OrWith(aData->mRect);
@@ -2407,8 +2416,7 @@ WebRenderCommandBuilder::GenerateFallbackData(
     wr::IpcResourceUpdateQueue& aResources, const StackingContextHelper& aSc,
     nsDisplayListBuilder* aDisplayListBuilder, LayoutDeviceRect& aImageRect) {
   const bool paintOnContentSide = aItem->MustPaintOnContentSide();
-  bool useBlobImage =
-      StaticPrefs::gfx_webrender_blob_images() && !paintOnContentSide;
+  bool useBlobImage = !paintOnContentSide;
   Maybe<gfx::DeviceColor> highlight = Nothing();
   if (StaticPrefs::gfx_webrender_debug_highlight_painted_layers()) {
     highlight = Some(useBlobImage ? gfx::DeviceColor(1.0, 0.0, 0.0, 0.5)
@@ -2418,19 +2426,14 @@ WebRenderCommandBuilder::GenerateFallbackData(
   RefPtr<WebRenderFallbackData> fallbackData =
       CreateOrRecycleWebRenderUserData<WebRenderFallbackData>(aItem);
 
-  bool snap;
-  nsRect itemBounds = aItem->GetBounds(aDisplayListBuilder, &snap);
-
   // Blob images will only draw the visible area of the blob so we don't need to
   // clip them here and can just rely on the webrender clipping.
   // TODO We also don't clip native themed widget to avoid over-invalidation
   // during scrolling. It would be better to support a sort of streaming/tiling
   // scheme for large ones but the hope is that we should not have large native
   // themed items.
-  nsRect paintBounds = (useBlobImage || paintOnContentSide)
-                           ? itemBounds
-                           : aItem->GetClippedBounds(aDisplayListBuilder);
-
+  bool snap;
+  nsRect paintBounds = aItem->GetBounds(aDisplayListBuilder, &snap);
   nsRect buildingRect = aItem->GetBuildingRect();
 
   const int32_t appUnitsPerDevPixel =
@@ -2523,7 +2526,7 @@ WebRenderCommandBuilder::GenerateFallbackData(
       aItem->GetType() != DisplayItemType::TYPE_SVG_WRAPPER && differentScale) {
     nsRect invalid;
     if (!aItem->IsInvalid(invalid)) {
-      nsPoint shift = itemBounds.TopLeft() - geometry->mBounds.TopLeft();
+      nsPoint shift = paintBounds.TopLeft() - geometry->mBounds.TopLeft();
       geometry->MoveBy(shift);
 
       nsRegion invalidRegion;

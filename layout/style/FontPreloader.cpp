@@ -21,13 +21,16 @@ namespace mozilla {
 FontPreloader::FontPreloader()
     : FetchPreloader(nsIContentPolicy::TYPE_INTERNAL_FONT_PRELOAD) {}
 
-void FontPreloader::PrioritizeAsPreload() { PrioritizeAsPreload(Channel()); }
-
 nsresult FontPreloader::CreateChannel(
     nsIChannel** aChannel, nsIURI* aURI, const CORSMode aCORSMode,
     const dom::ReferrerPolicy& aReferrerPolicy, dom::Document* aDocument,
     nsILoadGroup* aLoadGroup, nsIInterfaceRequestor* aCallbacks,
     uint64_t aEarlyHintPreloaderId) {
+  // Don't preload fonts if they've been preffed-off.
+  if (!gfxPlatform::GetPlatform()->DownloadableFontsEnabled()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
   return BuildChannel(aChannel, aURI, aCORSMode, aReferrerPolicy, nullptr,
                       nullptr, aDocument, aLoadGroup, aCallbacks, true);
 }

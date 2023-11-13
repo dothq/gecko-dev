@@ -37,6 +37,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
         "/widget/android",
     ]
     UNIFIED_SOURCES += [
+        "android/AndroidHeterogeneousCpuInfo.cpp",
         "android/AndroidPerformanceHintManager.cpp",
         "android/AndroidProcessPriority.cpp",
         "android/AndroidSensor.cpp",
@@ -46,7 +47,6 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
         "android/AndroidHal.cpp",
     ]
 elif CONFIG["OS_TARGET"] == "Linux":
-
     UNIFIED_SOURCES += [
         "fallback/FallbackScreenConfiguration.cpp",
         "fallback/FallbackSensor.cpp",
@@ -64,15 +64,13 @@ elif CONFIG["OS_TARGET"] == "Linux":
 elif CONFIG["OS_TARGET"] == "WINNT":
     UNIFIED_SOURCES += [
         "fallback/FallbackVibration.cpp",
+        "windows/WindowsProcessPriority.cpp",
+        "windows/WindowsScreenConfiguration.cpp",
         "windows/WindowsSensor.cpp",
     ]
     # WindowsBattery.cpp cannot be built in unified mode because it relies on HalImpl.h.
-    # WindowsProcessPriority.cpp needs to set _WIN32_WINNT to Windows 8
-    # WindowsScreenConfiguration.cpp needs to set WINVER to 0x0602.
     SOURCES += [
         "windows/WindowsBattery.cpp",
-        "windows/WindowsProcessPriority.cpp",
-        "windows/WindowsScreenConfiguration.cpp",
     ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     UNIFIED_SOURCES += [
@@ -108,6 +106,7 @@ else:
 # Fallbacks for backends implemented on Android only.
 if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
     UNIFIED_SOURCES += [
+        "fallback/FallbackHeterogeneousCpuInfo.cpp",
         "fallback/FallbackNetwork.cpp",
         "fallback/FallbackPerformanceHintManager.cpp",
     ]
@@ -132,7 +131,5 @@ LOCAL_INCLUDES += [
 
 CFLAGS += CONFIG["GLIB_CFLAGS"]
 CFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
-CFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
 CXXFLAGS += CONFIG["GLIB_CFLAGS"]
 CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
-CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]

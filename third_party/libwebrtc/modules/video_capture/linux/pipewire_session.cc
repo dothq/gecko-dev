@@ -17,7 +17,6 @@
 #include <spa/pod/parser.h>
 
 #include "common_video/libyuv/include/webrtc_libyuv.h"
-#include "modules/portal/pipewire_utils.h"
 #include "modules/video_capture/device_info_impl.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/string_encode.h"
@@ -225,7 +224,8 @@ void CameraPortalNotifier::OnCameraRequestResult(
   }
 }
 
-PipeWireSession::PipeWireSession() {}
+PipeWireSession::PipeWireSession()
+    : status_(VideoCaptureOptions::Status::UNINITIALIZED) {}
 
 PipeWireSession::~PipeWireSession() {
   Cleanup();
@@ -237,7 +237,7 @@ void PipeWireSession::Init(VideoCaptureOptions::Callback* callback, int fd) {
     callback_ = callback;
   }
 
-  if (fd != -1) {
+  if (fd != kInvalidPipeWireFd) {
     InitPipeWire(fd);
   } else {
     portal_notifier_ = std::make_unique<CameraPortalNotifier>(this);
@@ -358,6 +358,10 @@ void PipeWireSession::OnRegistryGlobal(void* data,
     return;
 
   if (!spa_dict_lookup(props, PW_KEY_NODE_DESCRIPTION))
+    return;
+
+  auto node_role = spa_dict_lookup(props, PW_KEY_MEDIA_ROLE);
+  if (!node_role || strcmp(node_role, "Camera"))
     return;
 
   that->nodes_.emplace_back(that, id, props);

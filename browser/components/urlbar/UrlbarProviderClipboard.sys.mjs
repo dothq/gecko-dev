@@ -41,6 +41,10 @@ class ProviderClipboard extends UrlbarProvider {
     return UrlbarUtils.PROVIDER_TYPE.PROFILE;
   }
 
+  setPreviousClipboardValue(newValue) {
+    this.#previousClipboard.value = newValue;
+  }
+
   isActive(queryContext, controller) {
     // Return clipboard results only for empty searches.
     if (
@@ -101,16 +105,13 @@ class ProviderClipboard extends UrlbarProvider {
       {
         url: this.#previousClipboard.value,
         title: this.#previousClipboard.value,
-        icon: "chrome://global/skin/icons/edit-copy.svg",
+        icon: "chrome://global/skin/icons/clipboard.svg",
+        isBlockable: true,
+        blockL10n: {
+          id: "urlbar-result-menu-dismiss-firefox-suggest",
+        },
       }
     );
-
-    if (lazy.UrlbarPrefs.get("resultMenu")) {
-      result.isBlockable = true;
-      result.blockL10n = {
-        id: "urlbar-result-menu-dismiss-firefox-suggest",
-      };
-    }
 
     addCallback(this, result);
   }
@@ -144,23 +145,12 @@ class ProviderClipboard extends UrlbarProvider {
   #handlePossibleCommand(view, result, selType) {
     switch (selType) {
       case RESULT_MENU_COMMANDS.DISMISS:
-        view.onQueryResultRemoved(result.rowIndex);
+        view.controller.removeResult(result);
         this.#previousClipboard.impressionsLeft = 0;
         break;
     }
   }
-
-  getResultCommands(result) {
-    let commands = [
-      {
-        name: RESULT_MENU_COMMANDS.DISMISS,
-        l10n: {
-          id: "urlbar-result-menu-dismiss-firefox-suggest",
-        },
-      },
-    ];
-    return commands;
-  }
 }
 
-export var UrlbarProviderClipboard = new ProviderClipboard();
+const UrlbarProviderClipboard = new ProviderClipboard();
+export { UrlbarProviderClipboard, CLIPBOARD_IMPRESSION_LIMIT };

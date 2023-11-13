@@ -23,6 +23,7 @@ CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-}
 CMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM:-}
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_TEST="${SKIP_TEST:-0}"
+FASTER_MSAN_BUILD="${FASTER_MSAN_BUILD:-0}"
 TARGETS="${TARGETS:-all doc}"
 TEST_SELECTOR="${TEST_SELECTOR:-}"
 BUILD_TARGET="${BUILD_TARGET:-}"
@@ -34,6 +35,8 @@ else
 fi
 # Whether we should post a message in the MR when the build fails.
 POST_MESSAGE_ON_ERROR="${POST_MESSAGE_ON_ERROR:-1}"
+# By default, do a lightweight debian HWY package build.
+HWY_PKG_OPTIONS="${HWY_PKG_OPTIONS:---set-envvar=HWY_EXTRA_CONFIG=-DBUILD_TESTING=OFF -DHWY_ENABLE_EXAMPLES=OFF -DHWY_ENABLE_CONTRIB=OFF}"
 
 # Set default compilers to clang if not already set
 export CC=${CC:-clang}
@@ -224,8 +227,7 @@ merge_request_commits() {
     # changes on the Pull Request if needed. This fetches 10 more commits which
     # should be enough given that PR normally should have 1 commit.
     git -C "${MYDIR}" fetch -q origin "${GITHUB_SHA}" --depth 10
-    MR_HEAD_SHA="$(git rev-parse "FETCH_HEAD^2" 2>/dev/null ||
-                   echo "${GITHUB_SHA}")"
+    MR_HEAD_SHA=$(git -C "${MYDIR}" rev-parse HEAD)
   else
     # CI_BUILD_REF is the reference currently being build in the CI workflow.
     MR_HEAD_SHA=$(git -C "${MYDIR}" rev-parse -q "${CI_BUILD_REF:-HEAD}")
@@ -664,7 +666,6 @@ cmd_msan() {
   local msan_c_flags=(
     -fsanitize=memory
     -fno-omit-frame-pointer
-    -fsanitize-memory-track-origins
 
     -DJXL_ENABLE_ASSERT=1
     -g
@@ -673,6 +674,13 @@ cmd_msan() {
     # Force gtest to not use the cxxbai.
     -DGTEST_HAS_CXXABI_H_=0
   )
+  if [[ "${FASTER_MSAN_BUILD}" -ne "1" ]]; then
+    msan_c_flags=(
+      "${msan_c_flags[@]}"
+      -fsanitize-memory-track-origins
+    )
+  fi
+
   local msan_cxx_flags=(
     "${msan_c_flags[@]}"
 
@@ -736,6 +744,15 @@ cmd_msan_install() {
   local msan_prefix="${HOME}/.msan/${CLANG_VERSION}"
   rm -rf "${msan_prefix}"
 
+  local TARGET_OPTS=""
+  if [[ -n "${BUILD_TARGET}" ]]; then
+    TARGET_OPTS=" \
+      -DCMAKE_C_COMPILER_TARGET=\"${BUILD_TARGET}\" \
+      -DCMAKE_CXX_COMPILER_TARGET=\"${BUILD_TARGET}\" \
+      -DCMAKE_SYSTEM_PROCESSOR=\"${BUILD_TARGET%%-*}\" \
+    "
+  fi
+
   declare -A CMAKE_EXTRAS
   CMAKE_EXTRAS[libcxx]="\
     -DLIBCXX_CXX_ABI=libstdc++ \
@@ -757,6 +774,7 @@ cmd_msan_install() {
       -DCMAKE_EXE_LINKER_FLAGS="${CMAKE_EXE_LINKER_FLAGS}" \
       -DCMAKE_SHARED_LINKER_FLAGS="${CMAKE_SHARED_LINKER_FLAGS}" \
       -DCMAKE_INSTALL_PREFIX="${msan_prefix}" \
+      ${TARGET_OPTS} \
       ${CMAKE_EXTRAS[${project}]}
     cmake --build "${proj_build}"
     ninja -C "${proj_build}" install
@@ -1354,6 +1372,7 @@ cmd_debian_stats() {
 build_debian_pkg() {
   local srcdir="$1"
   local srcpkg="$2"
+  local options="${3:-}"
 
   local debsdir="${BUILD_DIR}/debs"
   local builddir="${debsdir}/${srcpkg}"
@@ -1369,7 +1388,7 @@ build_debian_pkg() {
   done
   (
     cd "${builddir}"
-    debuild -b -uc -us
+    debuild "${options}" -b -uc -us
   )
 }
 
@@ -1381,7 +1400,7 @@ cmd_debian_build() {
       build_debian_pkg "${MYDIR}" "jpeg-xl"
       ;;
     highway)
-      build_debian_pkg "${MYDIR}/third_party/highway" "highway"
+      build_debian_pkg "${MYDIR}/third_party/highway" "highway" "${HWY_PKG_OPTIONS}"
       ;;
     *)
       echo "ERROR: Must pass a valid source package name to build." >&2

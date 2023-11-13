@@ -122,8 +122,7 @@ ImageListener::OnStartRequest(nsIRequest* request) {
 }
 
 ImageDocument::ImageDocument()
-    : MediaDocument(),
-      mVisibleWidth(0.0),
+    : mVisibleWidth(0.0),
       mVisibleHeight(0.0),
       mImageWidth(0),
       mImageHeight(0),
@@ -603,6 +602,10 @@ nsresult ImageDocument::CreateSyntheticDocument() {
   mImageContent->SetLoadingEnabled(false);
   mImageContent->SetAttr(kNameSpaceID_None, nsGkAtoms::src, srcString, false);
   mImageContent->SetAttr(kNameSpaceID_None, nsGkAtoms::alt, srcString, false);
+
+  if (mIsInObjectOrEmbed) {
+    SetModeClass(eIsInObjectOrEmbed);
+  }
 
   body->AppendChildTo(mImageContent, false, IgnoreErrors());
   mImageContent->SetLoadingEnabled(true);

@@ -11,27 +11,27 @@ use api::{BoxShadowClipMode, BorderStyle, ClipMode};
 use api::units::*;
 use euclid::Scale;
 use smallvec::SmallVec;
+use crate::composite::CompositorSurfaceKind;
 use crate::command_buffer::{PrimitiveCommand, QuadFlags, CommandBufferIndex};
 use crate::image_tiling::{self, Repetition};
 use crate::border::{get_max_scale_for_border, build_border_instances};
-use crate::clip::{ClipStore};
+use crate::clip::{ClipStore, ClipNodeRange};
 use crate::spatial_tree::{SpatialNodeIndex, SpatialTree};
 use crate::clip::{ClipDataStore, ClipNodeFlags, ClipChainInstance, ClipItemKind};
 use crate::frame_builder::{FrameBuildingContext, FrameBuildingState, PictureContext, PictureState};
 use crate::gpu_cache::{GpuCacheHandle, GpuDataRequest};
 use crate::gpu_types::{BrushFlags, TransformPaletteId, QuadSegment};
-use crate::internal_types::{FastHashMap, PlaneSplitAnchor};
-use crate::picture::{PicturePrimitive, SliceId, ClusterFlags};
+use crate::internal_types::{FastHashMap, PlaneSplitAnchor, Filter};
+use crate::picture::{PicturePrimitive, SliceId, ClusterFlags, PictureCompositeMode};
 use crate::picture::{PrimitiveList, PrimitiveCluster, SurfaceIndex, TileCacheInstance, SubpixelMode, Picture3DContext};
 use crate::prim_store::line_dec::MAX_LINE_DECORATION_RESOLUTION;
 use crate::prim_store::*;
 use crate::prim_store::gradient::GradientGpuBlockBuilder;
 use crate::render_backend::DataStores;
-use crate::render_target::RenderTargetKind;
 use crate::render_task_graph::{RenderTaskId};
 use crate::render_task_cache::RenderTaskCacheKeyKind;
 use crate::render_task_cache::{RenderTaskCacheKey, to_cache_size, RenderTaskParent};
-use crate::render_task::{RenderTaskKind, RenderTask, SubPass, MaskSubPass};
+use crate::render_task::{RenderTaskKind, RenderTask, SubPass, MaskSubPass, EmptyTask};
 use crate::renderer::{GpuBufferBuilder, GpuBufferAddress};
 use crate::segment::{EdgeAaSegmentMask, SegmentBuilder};
 use crate::space::SpaceMapper;
@@ -318,6 +318,9 @@ fn prepare_prim_for_render(
 
                 *use_legacy_path
             }
+            PrimitiveInstanceKind::Picture { .. } => {
+                false
+            }
             _ => true,
         };
 
@@ -504,10 +507,11 @@ fn prepare_interned_prim_for_render(
                         match pic_context.subpixel_mode {
                             SubpixelMode::Allow => true,
                             SubpixelMode::Deny => false,
-                            SubpixelMode::Conditional { allowed_rect } => {
+                            SubpixelMode::Conditional { allowed_rect, prohibited_rect } => {
                                 // Conditional mode allows subpixel AA to be enabled for this
                                 // text run, so long as it's inside the allowed rect.
-                                allowed_rect.contains_box(&prim_instance.vis.clip_chain.pic_coverage_rect)
+                                allowed_rect.contains_box(&prim_instance.vis.clip_chain.pic_coverage_rect) &&
+                                !prohibited_rect.intersects(&prim_instance.vis.clip_chain.pic_coverage_rect)
                             }
                         }
                     } else {
@@ -1245,9 +1249,180 @@ fn prepare_interned_prim_for_render(
             // TODO(gw): Consider whether it's worth doing segment building
             //           for gradient primitives.
         }
-        PrimitiveInstanceKind::Picture { pic_index, segment_instance_index, .. } => {
+        PrimitiveInstanceKind::Picture { pic_index, .. } => {
             profile_scope!("Picture");
             let pic = &mut store.pictures[pic_index.0];
+
+            if prim_instance.vis.clip_chain.needs_mask {
+                // TODO(gw): Much of the code in this branch could be moved in to a common
+                //           function as we move more primitives to the new clip-mask paths.
+
+                // We are going to split the clip mask tasks in to a list to be rendered
+                // on the source picture, and those to be rendered in to a mask for
+                // compositing the picture in to the target.
+                let mut source_masks = Vec::new();
+                let mut target_masks = Vec::new();
+
+                // For some composite modes, we force target mask due to limitations. That
+                // might results in artifacts for these modes (which are already an existing
+                // problem) but we can handle these cases as follow ups.
+                let force_target_mask = match pic.composite_mode {
+                    // We can't currently render over top of these filters as their size
+                    // may have changed due to downscaling. We could handle this separate
+                    // case as a follow up.
+                    Some(PictureCompositeMode::Filter(Filter::Blur { .. })) |
+                    Some(PictureCompositeMode::Filter(Filter::DropShadows { .. })) => {
+                        true
+                    }
+                    _ => {
+                        false
+                    }
+                };
+
+                // Work out which clips get drawn in to the source / target mask
+                for i in 0 .. prim_instance.vis.clip_chain.clips_range.count {
+                    let clip_instance = frame_state.clip_store.get_instance_from_range(&prim_instance.vis.clip_chain.clips_range, i);
+
+                    if !force_target_mask && clip_instance.flags.contains(ClipNodeFlags::SAME_COORD_SYSTEM) {
+                        source_masks.push(i);
+                    } else {
+                        target_masks.push(i);
+                    }
+                }
+
+                let pic_surface_index = pic.raster_config.as_ref().unwrap().surface_index;
+                let prim_local_rect = frame_state
+                    .surfaces[pic_surface_index.0]
+                    .clipped_local_rect
+                    .cast_unit();
+
+                let main_prim_address = write_prim_blocks(
+                    frame_state.frame_gpu_data,
+                    prim_local_rect,
+                    prim_instance.vis.clip_chain.local_clip_rect,
+                    PremultipliedColorF::WHITE,
+                    &[],
+                );
+
+                // Handle masks on the source. This is the common case, and occurs for:
+                // (a) Any masks in the same coord space as the surface
+                // (b) All masks if the surface and parent are axis-aligned
+                if !source_masks.is_empty() {
+                    let first_clip_node_index = frame_state.clip_store.clip_node_instances.len() as u32;
+                    let parent_task_id = pic.primary_render_task_id.expect("bug: no composite mode");
+
+                    // Construct a new clip node range, also add image-mask dependencies as needed
+                    for instance in source_masks {
+                        let clip_instance = frame_state.clip_store.get_instance_from_range(&prim_instance.vis.clip_chain.clips_range, instance);
+
+                        for tile in frame_state.clip_store.visible_mask_tiles(clip_instance) {
+                            frame_state.rg_builder.add_dependency(
+                                parent_task_id,
+                                tile.task_id,
+                            );
+                        }
+
+                        frame_state.clip_store.clip_node_instances.push(clip_instance.clone());
+                    }
+
+                    let clip_node_range = ClipNodeRange {
+                        first: first_clip_node_index,
+                        count: frame_state.clip_store.clip_node_instances.len() as u32 - first_clip_node_index,
+                    };
+
+                    let masks = MaskSubPass {
+                        clip_node_range,
+                        prim_spatial_node_index,
+                        main_prim_address,
+                    };
+
+                    // Add the mask as a sub-pass of the picture
+                    let pic_task_id = pic.primary_render_task_id.expect("uh oh");
+                    let pic_task = frame_state.rg_builder.get_task_mut(pic_task_id);
+                    pic_task.add_sub_pass(SubPass::Masks {
+                        masks,
+                    });
+                }
+
+                // Handle masks on the target. This is the rare case, and occurs for:
+                // Masks in parent space when non-axis-aligned to source space
+                if !target_masks.is_empty() {
+                    let surface = &frame_state.surfaces[pic_context.surface_index.0];
+                    let coverage_rect = prim_instance.vis.clip_chain.pic_coverage_rect;
+
+                    let device_pixel_scale = surface.device_pixel_scale;
+                    let raster_spatial_node_index = surface.raster_spatial_node_index;
+
+                    let clipped_surface_rect = surface.get_surface_rect(
+                        &coverage_rect,
+                        frame_context.spatial_tree,
+                    ).expect("bug: what can cause this?");
+
+                    let p0 = clipped_surface_rect.min.floor();
+                    let x0 = p0.x;
+                    let y0 = p0.y;
+
+                    let content_origin = DevicePoint::new(x0, y0);
+
+                    // Draw a normal screens-space mask to an alpha target that
+                    // can be sampled when compositing this picture.
+                    let empty_task = EmptyTask {
+                        content_origin,
+                        device_pixel_scale,
+                        raster_spatial_node_index,
+                    };
+
+                    let p1 = clipped_surface_rect.max.ceil();
+                    let x1 = p1.x;
+                    let y1 = p1.y;
+
+                    let task_size = DeviceSize::new(x1 - x0, y1 - y0).round().to_i32();
+
+                    let clip_task_id = frame_state.rg_builder.add().init(RenderTask::new_dynamic(
+                        task_size,
+                        RenderTaskKind::Empty(empty_task),
+                    ));
+
+                    // Construct a new clip node range, also add image-mask dependencies as needed
+                    let first_clip_node_index = frame_state.clip_store.clip_node_instances.len() as u32;
+                    for instance in target_masks {
+                        let clip_instance = frame_state.clip_store.get_instance_from_range(&prim_instance.vis.clip_chain.clips_range, instance);
+
+                        for tile in frame_state.clip_store.visible_mask_tiles(clip_instance) {
+                            frame_state.rg_builder.add_dependency(
+                                clip_task_id,
+                                tile.task_id,
+                            );
+                        }
+
+                        frame_state.clip_store.clip_node_instances.push(clip_instance.clone());
+                    }
+
+                    let clip_node_range = ClipNodeRange {
+                        first: first_clip_node_index,
+                        count: frame_state.clip_store.clip_node_instances.len() as u32 - first_clip_node_index,
+                    };
+
+                    let masks = MaskSubPass {
+                        clip_node_range,
+                        prim_spatial_node_index,
+                        main_prim_address,
+                    };
+
+                    let clip_task = frame_state.rg_builder.get_task_mut(clip_task_id);
+                    clip_task.add_sub_pass(SubPass::Masks {
+                        masks,
+                    });
+
+                    let clip_task_index = ClipTaskIndex(scratch.clip_mask_instances.len() as _);
+                    scratch.clip_mask_instances.push(ClipMaskKind::Mask(clip_task_id));
+                    prim_instance.vis.clip_task_index = clip_task_index;
+                    frame_state.surface_builder.add_child_render_task(
+                        clip_task_id,
+                        frame_state.rg_builder,
+                    );
+                }
+            }
 
             if pic.prepare_for_render(
                 frame_state,
@@ -1268,29 +1443,6 @@ fn prepare_interned_prim_for_render(
                         &prim_instance.vis.clip_chain.local_clip_rect,
                         dirty_rect,
                         plane_split_anchor,
-                    );
-                }
-
-                // If this picture uses segments, ensure the GPU cache is
-                // up to date with segment local rects.
-                // TODO(gw): This entire match statement above can now be
-                //           refactored into prepare_interned_prim_for_render.
-                if pic.can_use_segments() {
-                    write_segment(
-                        *segment_instance_index,
-                        frame_state,
-                        &mut scratch.segments,
-                        &mut scratch.segment_instances,
-                        |request| {
-                            request.push(PremultipliedColorF::WHITE);
-                            request.push(PremultipliedColorF::WHITE);
-                            request.push([
-                                -1.0,       // -ve means use prim rect for stretch size
-                                0.0,
-                                0.0,
-                                0.0,
-                            ]);
-                        }
                     );
                 }
             } else {
@@ -1436,6 +1588,7 @@ fn update_clip_task_for_brush(
     device_pixel_scale: DevicePixelScale,
 ) -> Option<ClipTaskIndex> {
     let segments = match instance.kind {
+        PrimitiveInstanceKind::Picture { .. } |
         PrimitiveInstanceKind::TextRun { .. } |
         PrimitiveInstanceKind::Clear { .. } |
         PrimitiveInstanceKind::LineDecoration { .. } |
@@ -1454,18 +1607,6 @@ fn update_clip_task_for_brush(
 
             let segment_instance = &segment_instances_store[segment_instance_index];
 
-            &segments_store[segment_instance.segments_range]
-        }
-        PrimitiveInstanceKind::Picture { segment_instance_index, .. } => {
-            // Pictures may not support segment rendering at all (INVALID)
-            // or support segment rendering but choose not to due to size
-            // or some other factor (UNUSED).
-            if segment_instance_index == SegmentInstanceIndex::UNUSED ||
-               segment_instance_index == SegmentInstanceIndex::INVALID {
-                return None;
-            }
-
-            let segment_instance = &segment_instances_store[segment_instance_index];
             &segments_store[segment_instance.segments_range]
         }
         PrimitiveInstanceKind::YuvImage { segment_instance_index, .. } => {
@@ -1832,13 +1973,7 @@ fn write_brush_segment_description(
                 continue;
             }
             ClipItemKind::Image { .. } => {
-                // If we encounter an image mask, bail out from segment building.
-                // It's not possible to know which parts of the primitive are affected
-                // by the mask (without inspecting the pixels). We could do something
-                // better here in the future if it ever shows up as a performance issue
-                // (for instance, at least segment based on the bounding rect of the
-                // image mask if it's non-repeating).
-                return false;
+                panic!("bug: masks not supported on old segment path");
             }
         };
 
@@ -1871,43 +2006,33 @@ fn build_segments_if_needed(
             assert!(use_legacy_path);
             segment_instance_index
         }
-        PrimitiveInstanceKind::YuvImage { ref mut segment_instance_index, .. } => {
+        PrimitiveInstanceKind::YuvImage { ref mut segment_instance_index, compositor_surface_kind, .. } => {
+            // Only use segments for YUV images if not drawing as a compositor surface
+            if !compositor_surface_kind.supports_segments() {
+                *segment_instance_index = SegmentInstanceIndex::UNUSED;
+                return;
+            }
+
             segment_instance_index
         }
-        PrimitiveInstanceKind::Image { data_handle, image_instance_index, .. } => {
+        PrimitiveInstanceKind::Image { data_handle, image_instance_index, compositor_surface_kind, .. } => {
             let image_data = &data_stores.image[data_handle].kind;
             let image_instance = &mut prim_store.images[image_instance_index];
+
             //Note: tiled images don't support automatic segmentation,
             // they strictly produce one segment per visible tile instead.
-            if frame_state
-                .resource_cache
-                .get_image_properties(image_data.key)
-                .and_then(|properties| properties.tiling)
-                .is_some()
+            if !compositor_surface_kind.supports_segments() ||
+                frame_state.resource_cache
+                    .get_image_properties(image_data.key)
+                    .and_then(|properties| properties.tiling)
+                    .is_some()
             {
                 image_instance.segment_instance_index = SegmentInstanceIndex::UNUSED;
                 return;
             }
             &mut image_instance.segment_instance_index
         }
-        PrimitiveInstanceKind::Picture { ref mut segment_instance_index, pic_index, .. } => {
-            let pic = &mut prim_store.pictures[pic_index.0];
-
-            // If this picture supports segment rendering
-            if pic.can_use_segments() {
-                // If the segments have been invalidated, ensure the current
-                // index of segments is invalid. This ensures that the segment
-                // building logic below will be run.
-                if !pic.segments_are_valid {
-                    *segment_instance_index = SegmentInstanceIndex::INVALID;
-                    pic.segments_are_valid = true;
-                }
-
-                segment_instance_index
-            } else {
-                return;
-            }
-        }
+        PrimitiveInstanceKind::Picture { .. } |
         PrimitiveInstanceKind::TextRun { .. } |
         PrimitiveInstanceKind::NormalBorder { .. } |
         PrimitiveInstanceKind::ImageBorder { .. } |
@@ -2058,12 +2183,13 @@ fn add_segment(
                 quad_flags,
                 prim_instance.vis.clip_chain.clips_range,
                 needs_scissor_rect,
-                RenderTargetKind::Color,
             ),
         ));
 
         let masks = MaskSubPass {
             clip_node_range: prim_instance.vis.clip_chain.clips_range,
+            prim_spatial_node_index,
+            main_prim_address,
         };
 
         let task = frame_state.rg_builder.get_task_mut(task_id);
@@ -2125,4 +2251,14 @@ fn add_composite_prim(
         ),
         targets,
     );
+}
+
+impl CompositorSurfaceKind {
+    /// Returns true if the compositor surface strategy supports segment rendering
+    fn supports_segments(&self) -> bool {
+        match self {
+            CompositorSurfaceKind::Underlay | CompositorSurfaceKind::Overlay => false,
+            CompositorSurfaceKind::Blit => true,
+        }
+    }
 }

@@ -58,7 +58,7 @@ import {
   lineAtHeight,
   toSourceLine,
   getDocument,
-  scrollToColumn,
+  scrollToPosition,
   toEditorPosition,
   getSourceLocationFromMouseEvent,
   hasDocument,
@@ -141,8 +141,8 @@ class Editor extends PureComponent {
 
     const shouldUpdateText =
       nextProps.selectedSource !== this.props.selectedSource ||
-      nextProps.selectedSourceTextContent !==
-        this.props.selectedSourceTextContent ||
+      nextProps.selectedSourceTextContent?.value !==
+        this.props.selectedSourceTextContent?.value ||
       nextProps.symbols !== this.props.symbols;
 
     const shouldUpdateSize =
@@ -186,10 +186,23 @@ class Editor extends PureComponent {
     }
 
     const { codeMirror } = editor;
-    const codeMirrorWrapper = codeMirror.getWrapperElement();
+
+    this.abortController = new window.AbortController();
+
+    // CodeMirror refreshes its internal state on window resize, but we need to also
+    // refresh it when the side panels are resized.
+    // We could have a ResizeObserver instead, but we wouldn't be able to differentiate
+    // between window resize and side panel resize and as a result, might refresh
+    // codeMirror twice, which is wasteful.
+    window.document
+      .querySelector(".editor-pane")
+      .addEventListener("resizeend", () => codeMirror.refresh(), {
+        signal: this.abortController.signal,
+      });
 
     codeMirror.on("gutterClick", this.onGutterClick);
 
+    const codeMirrorWrapper = codeMirror.getWrapperElement();
     // Set code editor wrapper to be focusable
     codeMirrorWrapper.tabIndex = 0;
     codeMirrorWrapper.addEventListener("keydown", e => this.onKeyDown(e));
@@ -260,6 +273,11 @@ class Editor extends PureComponent {
     shortcuts.off(L10N.getStr("toggleBreakpoint.key"));
     shortcuts.off(L10N.getStr("toggleCondPanel.breakpoint.key"));
     shortcuts.off(L10N.getStr("toggleCondPanel.logPoint.key"));
+
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
   }
 
   getCurrentLine() {
@@ -500,25 +518,21 @@ class Editor extends PureComponent {
   }
 
   shouldScrollToLocation(nextProps, editor) {
-    const { selectedLocation, selectedSource, selectedSourceTextContent } =
-      this.props;
     if (
-      !editor ||
-      !nextProps.selectedSource ||
-      !nextProps.selectedLocation ||
-      !nextProps.selectedLocation.line ||
+      !nextProps.selectedLocation?.line ||
       !nextProps.selectedSourceTextContent
     ) {
       return false;
     }
 
-    const isFirstLoad =
-      (!selectedSource || !selectedSourceTextContent) &&
-      nextProps.selectedSourceTextContent;
+    const { selectedLocation, selectedSourceTextContent } = this.props;
+    const contentChanged =
+      !selectedSourceTextContent?.value &&
+      nextProps.selectedSourceTextContent?.value;
     const locationChanged = selectedLocation !== nextProps.selectedLocation;
     const symbolsChanged = nextProps.symbols != this.props.symbols;
 
-    return isFirstLoad || locationChanged || symbolsChanged;
+    return contentChanged || locationChanged || symbolsChanged;
   }
 
   scrollToLocation(nextProps, editor) {
@@ -532,7 +546,7 @@ class Editor extends PureComponent {
       column = Math.max(column, getIndentation(lineText));
     }
 
-    scrollToColumn(editor.codeMirror, line, column);
+    scrollToPosition(editor.codeMirror, line, column);
   }
 
   setText(props, editor) {

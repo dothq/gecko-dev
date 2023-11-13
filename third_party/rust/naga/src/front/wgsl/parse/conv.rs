@@ -84,6 +84,7 @@ pub fn map_storage_format(word: &str, span: Span) -> Result<crate::StorageFormat
         "rgba8snorm" => Sf::Rgba8Snorm,
         "rgba8uint" => Sf::Rgba8Uint,
         "rgba8sint" => Sf::Rgba8Sint,
+        "rgb10a2uint" => Sf::Rgb10a2Uint,
         "rgb10a2unorm" => Sf::Rgb10a2Unorm,
         "rg11b10float" => Sf::Rg11b10Float,
         "rg32uint" => Sf::Rg32Uint,
@@ -97,6 +98,7 @@ pub fn map_storage_format(word: &str, span: Span) -> Result<crate::StorageFormat
         "rgba32uint" => Sf::Rgba32Uint,
         "rgba32sint" => Sf::Rgba32Sint,
         "rgba32float" => Sf::Rgba32Float,
+        "bgra8unorm" => Sf::Bgra8Unorm,
         _ => return Err(Error::UnknownStorageFormat(span)),
     })
 }
@@ -179,7 +181,6 @@ pub fn map_standard_fun(word: &str) -> Option<crate::MathFunction> {
         "pow" => Mf::Pow,
         // geometry
         "dot" => Mf::Dot,
-        "outerProduct" => Mf::Outer,
         "cross" => Mf::Cross,
         "distance" => Mf::Distance,
         "length" => Mf::Length,

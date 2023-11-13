@@ -386,9 +386,9 @@ bool AntiTrackingUtils::CheckStoragePermission(nsIPrincipal* aPrincipal,
 
 /* static */
 nsresult AntiTrackingUtils::TestStoragePermissionInParent(
-    nsIPrincipal* aTopPrincipal, nsIPrincipal* aPrincipal, bool* aResult) {
+    nsIPrincipal* aTopPrincipal, nsIPrincipal* aPrincipal, uint32_t* aResult) {
   NS_ENSURE_ARG(aResult);
-  *aResult = false;
+  *aResult = nsIPermissionManager::UNKNOWN_ACTION;
   NS_ENSURE_ARG(aTopPrincipal);
   NS_ENSURE_ARG(aPrincipal);
 
@@ -413,8 +413,8 @@ nsresult AntiTrackingUtils::TestStoragePermissionInParent(
       aTopPrincipal, requestPermissionKey, &access);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (access == nsIPermissionManager::ALLOW_ACTION) {
-    *aResult = true;
+  if (access != nsIPermissionManager::UNKNOWN_ACTION) {
+    *aResult = access;
     return NS_OK;
   }
 
@@ -423,7 +423,7 @@ nsresult AntiTrackingUtils::TestStoragePermissionInParent(
       aTopPrincipal, requestFramePermissionKey, &frameAccess);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  *aResult = frameAccess == nsIPermissionManager::ALLOW_ACTION;
+  *aResult = frameAccess;
   return NS_OK;
 }
 
@@ -557,23 +557,23 @@ AntiTrackingUtils::GetStoragePermissionStateInParent(nsIChannel* aChannel) {
       return nsILoadInfo::HasStoragePermission;
     }
   } else if (!bc->IsTop()) {
-    // Only check the frame only permission if the channel is not in the top
-    // browsing context.
-    RefPtr<nsEffectiveTLDService> etld = nsEffectiveTLDService::GetInstance();
-    if (!etld) {
+    // For subframe resources, check if the document has storage access
+    // and that the resource being loaded is same-site to the page.
+    WindowContext* wc = bc->GetCurrentWindowContext();
+    if (!wc) {
       return nsILoadInfo::NoStoragePermission;
     }
-    nsCString trackingSite;
-    rv = etld->GetSite(trackingURI, trackingSite);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
+    WindowGlobalParent* wgp = wc->Canonical();
+    if (!wgp) {
       return nsILoadInfo::NoStoragePermission;
     }
-    nsAutoCString type;
-    AntiTrackingUtils::CreateStorageFramePermissionKey(trackingSite, type);
-
-    if (AntiTrackingUtils::CheckStoragePermission(
-            targetPrincipal, type, NS_UsePrivateBrowsing(aChannel),
-            &unusedReason, unusedReason)) {
+    nsIPrincipal* framePrincipal = wgp->DocumentPrincipal();
+    if (!framePrincipal) {
+      return nsILoadInfo::NoStoragePermission;
+    }
+    bool isThirdParty = true;
+    nsresult rv = framePrincipal->IsThirdPartyURI(trackingURI, &isThirdParty);
+    if (NS_SUCCEEDED(rv) && wc->GetUsingStorageAccess() && !isThirdParty) {
       return nsILoadInfo::HasStoragePermission;
     }
   }
@@ -972,6 +972,21 @@ void AntiTrackingUtils::UpdateAntiTrackingInfoForChannel(nsIChannel* aChannel) {
 
   Unused << loadInfo->SetStoragePermission(
       AntiTrackingUtils::GetStoragePermissionStateInParent(aChannel));
+
+  // Note that we need to put this after computing the IsThirdPartyToTopWindow
+  // flag because it will be used when getting the granular fingerprinting
+  // protections.
+  Maybe<RFPTarget> overriddenFingerprintingSettings =
+      nsRFPService::GetOverriddenFingerprintingSettingsForChannel(aChannel);
+
+  if (overriddenFingerprintingSettings) {
+    loadInfo->SetOverriddenFingerprintingSettings(
+        overriddenFingerprintingSettings.ref());
+  }
+#ifdef DEBUG
+  static_cast<mozilla::net::LoadInfo*>(loadInfo.get())
+      ->MarkOverriddenFingerprintingSettingsAsSet();
+#endif
 
   // We only update the IsOnContentBlockingAllowList flag and the partition key
   // for the top-level http channel.

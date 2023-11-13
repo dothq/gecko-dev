@@ -278,11 +278,8 @@ void WebTransport::Init(const GlobalObject& aGlobal, const nsAString& aURL,
     if (!childEndpoint.Bind(child)) {
       return;
     }
-  } else {
-    if (!childEndpoint.Bind(child,
-                            mGlobal->EventTargetFor(TaskCategory::Other))) {
-      return;
-    }
+  } else if (!childEndpoint.Bind(child, mGlobal->SerialEventTarget())) {
+    return;
   }
 
   mState = WebTransportState::CONNECTING;
@@ -926,7 +923,7 @@ class BFCacheNotifyWTRunnable final : public WorkerProxyToMainThreadRunnable {
 
 void WebTransport::NotifyToWindow(bool aCreated) const {
   if (NS_IsMainThread()) {
-    NotifyBFCacheOnMainThread(GetParentObject()->AsInnerWindow(), aCreated);
+    NotifyBFCacheOnMainThread(GetParentObject()->GetAsInnerWindow(), aCreated);
     return;
   }
 

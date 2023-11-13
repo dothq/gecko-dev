@@ -71,6 +71,10 @@ class ReferrerInfo : public nsIReferrerInfo {
   explicit ReferrerInfo(const Element&);
   explicit ReferrerInfo(const Document&);
 
+  // Creates already initialized ReferrerInfo from an element or a document with
+  // a specific referrer policy.
+  ReferrerInfo(const Element&, ReferrerPolicyEnum);
+
   // create an exact copy of the ReferrerInfo
   already_AddRefed<ReferrerInfo> Clone() const;
 
@@ -169,6 +173,12 @@ class ReferrerInfo : public nsIReferrerInfo {
    * do that in cases where we're going to use this information later on.
    */
   static bool IsCrossOriginRequest(nsIHttpChannel* aChannel);
+
+  /**
+   * Returns true if aReferrer's origin and aChannel's URI are cross-origin.
+   */
+  static bool IsReferrerCrossOrigin(nsIHttpChannel* aChannel,
+                                    nsIURI* aReferrer);
 
   /**
    * Returns true if the given channel is cross-site request.
@@ -328,7 +338,8 @@ class ReferrerInfo : public nsIReferrerInfo {
    * This function is called when we already made sure a nonempty referrer is
    * allowed to send.
    */
-  TrimmingPolicy ComputeTrimmingPolicy(nsIHttpChannel* aChannel) const;
+  TrimmingPolicy ComputeTrimmingPolicy(nsIHttpChannel* aChannel,
+                                       nsIURI* aReferrer) const;
 
   // HttpBaseChannel could access IsInitialized() and ComputeReferrer();
   friend class mozilla::net::HttpBaseChannel;

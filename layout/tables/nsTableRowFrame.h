@@ -39,8 +39,7 @@ class nsTableRowFrame : public nsContainerFrame {
   void Init(nsIContent* aContent, nsContainerFrame* aParent,
             nsIFrame* aPrevInFlow) override;
 
-  void DestroyFrom(nsIFrame* aDestructRoot,
-                   PostDestroyData& aPostDestroyData) override;
+  void Destroy(DestroyContext&) override;
 
   void DidSetComputedStyle(ComputedStyle* aOldComputedStyle) override;
 
@@ -48,7 +47,7 @@ class nsTableRowFrame : public nsContainerFrame {
   void InsertFrames(ChildListID aListID, nsIFrame* aPrevFrame,
                     const nsLineList::iterator* aPrevFrameLine,
                     nsFrameList&& aFrameList) override;
-  void RemoveFrame(ChildListID aListID, nsIFrame* aOldFrame) override;
+  void RemoveFrame(DestroyContext&, ChildListID, nsIFrame*) override;
 
   /** instantiate a new instance of nsTableRowFrame.
    * @param aPresShell the pres shell for this frame
@@ -68,12 +67,12 @@ class nsTableRowFrame : public nsContainerFrame {
     return GetTableRowGroupFrame()->GetTableFrame();
   }
 
-  virtual nsMargin GetUsedMargin() const override;
-  virtual nsMargin GetUsedBorder() const override;
-  virtual nsMargin GetUsedPadding() const override;
+  nsMargin GetUsedMargin() const override;
+  nsMargin GetUsedBorder() const override;
+  nsMargin GetUsedPadding() const override;
 
-  virtual void BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                                const nsDisplayListSet& aLists) override;
+  void BuildDisplayList(nsDisplayListBuilder* aBuilder,
+                        const nsDisplayListSet& aLists) override;
 
   void PaintCellBackgroundsForFrame(nsIFrame* aFrame,
                                     nsDisplayListBuilder* aBuilder,
@@ -101,21 +100,21 @@ class nsTableRowFrame : public nsContainerFrame {
    * @see nsTableFrame::BalanceColumnWidths
    * @see nsTableFrame::ShrinkWrapChildren
    */
-  virtual void Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
-                      const ReflowInput& aReflowInput,
-                      nsReflowStatus& aStatus) override;
+  void Reflow(nsPresContext* aPresContext, ReflowOutput& aDesiredSize,
+              const ReflowInput& aReflowInput,
+              nsReflowStatus& aStatus) override;
 
   void DidResize();
 
 #ifdef DEBUG_FRAME_DUMP
-  virtual nsresult GetFrameName(nsAString& aResult) const override;
+  nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
   void UpdateBSize(nscoord aBSize, nscoord aAscent, nscoord aDescent,
                    nsTableFrame* aTableFrame = nullptr,
                    nsTableCellFrame* aCellFrame = nullptr);
 
-  void ResetBSize(nscoord aRowStyleBSize);
+  void ResetBSize();
 
   // calculate the bsize, considering content bsize of the
   // cells and the style bsize of the row and cells, excluding pct bsizes
@@ -173,9 +172,17 @@ class nsTableRowFrame : public nsContainerFrame {
    */
   void InsertCellFrame(nsTableCellFrame* aFrame, int32_t aColIndex);
 
-  nsresult CalculateCellActualBSize(nsTableCellFrame* aCellFrame,
-                                    nscoord& aDesiredBSize,
-                                    mozilla::WritingMode aWM);
+  /**
+   * Calculate the cell frame's actual block-size given its desired block-size
+   * (the border-box block-size in the last reflow). This method takes into
+   * account the specified bsize (in the style).
+   *
+   * @return the specified block-size if it is larger than the desired
+   *         block-size. Otherwise, the desired block-size.
+   */
+  nscoord CalcCellActualBSize(nsTableCellFrame* aCellFrame,
+                              const nscoord& aDesiredBSize,
+                              mozilla::WritingMode aWM);
 
   bool IsFirstInserted() const;
   void SetFirstInserted(bool aValue);
@@ -201,10 +208,11 @@ class nsTableRowFrame : public nsContainerFrame {
 
   nsTableRowFrame* GetNextRow() const;
 
-  bool HasUnpaginatedBSize();
-  void SetHasUnpaginatedBSize(bool aValue);
-  nscoord GetUnpaginatedBSize();
-  void SetUnpaginatedBSize(nsPresContext* aPresContext, nscoord aValue);
+  bool HasUnpaginatedBSize() const {
+    return HasAnyStateBits(NS_TABLE_ROW_HAS_UNPAGINATED_BSIZE);
+  }
+  nscoord GetUnpaginatedBSize() const;
+  void SetUnpaginatedBSize(nscoord aValue);
 
   BCPixelSize GetBStartBCBorderWidth() const { return mBStartBorderWidth; }
   BCPixelSize GetBEndBCBorderWidth() const { return mBEndBorderWidth; }
@@ -234,7 +242,7 @@ class nsTableRowFrame : public nsContainerFrame {
   void SetContinuousBCBorderWidth(mozilla::LogicalSide aForSide,
                                   BCPixelSize aPixelValue);
 
-  virtual bool IsFrameOfType(uint32_t aFlags) const override {
+  bool IsFrameOfType(uint32_t aFlags) const override {
     if (aFlags & (eSupportsContainLayoutAndPaint | eSupportsAspectRatio)) {
       return false;
     }
@@ -242,17 +250,15 @@ class nsTableRowFrame : public nsContainerFrame {
     return nsContainerFrame::IsFrameOfType(aFlags & ~(nsIFrame::eTablePart));
   }
 
-  virtual void InvalidateFrame(uint32_t aDisplayItemKey = 0,
+  void InvalidateFrame(uint32_t aDisplayItemKey = 0,
+                       bool aRebuildDisplayItems = true) override;
+  void InvalidateFrameWithRect(const nsRect& aRect,
+                               uint32_t aDisplayItemKey = 0,
                                bool aRebuildDisplayItems = true) override;
-  virtual void InvalidateFrameWithRect(
-      const nsRect& aRect, uint32_t aDisplayItemKey = 0,
-      bool aRebuildDisplayItems = true) override;
-  virtual void InvalidateFrameForRemoval() override {
-    InvalidateFrameSubtree();
-  }
+  void InvalidateFrameForRemoval() override { InvalidateFrameSubtree(); }
 
 #ifdef ACCESSIBILITY
-  virtual mozilla::a11y::AccType AccessibleType() override;
+  mozilla::a11y::AccType AccessibleType() override;
 #endif
 
  protected:
@@ -397,18 +403,6 @@ inline float nsTableRowFrame::GetPctBSize() const {
     return (float)mStylePctBSize / 100.0f;
   }
   return 0.0f;
-}
-
-inline bool nsTableRowFrame::HasUnpaginatedBSize() {
-  return HasAnyStateBits(NS_TABLE_ROW_HAS_UNPAGINATED_BSIZE);
-}
-
-inline void nsTableRowFrame::SetHasUnpaginatedBSize(bool aValue) {
-  if (aValue) {
-    AddStateBits(NS_TABLE_ROW_HAS_UNPAGINATED_BSIZE);
-  } else {
-    RemoveStateBits(NS_TABLE_ROW_HAS_UNPAGINATED_BSIZE);
-  }
 }
 
 inline mozilla::LogicalMargin nsTableRowFrame::GetBCBorderWidth(

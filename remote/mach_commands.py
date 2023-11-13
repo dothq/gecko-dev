@@ -258,7 +258,7 @@ class MochaOutputHandler(object):
         if testIdPattern.find("*") == -1:
             return expected_name == testIdPattern
         else:
-            return re.compile(re.escape(testIdPattern).replace("\*", ".*")).search(
+            return re.compile(re.escape(testIdPattern).replace(r"\*", ".*")).search(
                 expected_name
             )
 
@@ -634,7 +634,6 @@ def puppeteer_test(
     product="firefox",
     **kwargs,
 ):
-
     logger = mozlog.commandline.setup_logging(
         "puppeteer-test", kwargs, {"mach": sys.stdout}
     )

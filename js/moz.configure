@@ -173,11 +173,47 @@ def enable_decorators(value):
 set_config("ENABLE_DECORATORS", enable_decorators)
 set_define("ENABLE_DECORATORS", enable_decorators)
 
+
+# Portable Baseline Intepreter
+# =======================================================
+option(
+    "--enable-portable-baseline-interp",
+    default=False,
+    help="{Enable|Disable} the portable baseline interpreter.",
+)
+set_define(
+    "ENABLE_PORTABLE_BASELINE_INTERP",
+    depends_if("--enable-portable-baseline-interp")(lambda _: True),
+)
+set_config(
+    "ENABLE_PORTABLE_BASELINE_INTERP",
+    depends_if("--enable-portable-baseline-interp")(lambda _: True),
+)
+
+# Option to always force PBL tier.
+option(
+    "--enable-portable-baseline-interp-force",
+    default=False,
+    help="{Enable|Disable} forcing use of the portable baseline interpreter.",
+)
+
+set_define(
+    "ENABLE_PORTABLE_BASELINE_INTERP_FORCE",
+    depends_if("--enable-portable-baseline-interp-force")(lambda _: True),
+)
+set_config(
+    "ENABLE_PORTABLE_BASELINE_INTERP_FORCE",
+    depends_if("--enable-portable-baseline-interp-force")(lambda _: True),
+)
+
+
 # JIT support
 # =======================================================
-@depends(target, "--enable-record-tuple")
-def jit_default(target, enable_record_tuple):
+@depends(target, "--enable-record-tuple", "--enable-portable-baseline-interp")
+def jit_default(target, enable_record_tuple, enable_portable_baseline_interp):
     if enable_record_tuple:
+        return False
+    if enable_portable_baseline_interp:
         return False
     if target.cpu in (
         "x86",
@@ -506,6 +542,7 @@ set_config("JS_MASM_VERBOSE", depends_if("--enable-masm-verbose")(lambda _: True
 # Architecture feature flags
 # =======================================================
 
+
 # Apple silicon does not seem to have any way to query the OS for the JSCVT
 # flag stored in the ID_AA64ISAR1_EL1 system register. In the mean time, we
 # hard code the value of the JSCVT flag which guards the implementation of
@@ -520,6 +557,7 @@ option(
     default=is_apple_silicon,
     help="{Enable|Disable} static use of FJCVTZS instruction on Aarch64 targets.",
 )
+
 
 # The "ARM Architecture Reference Manual" for ARMv8 defines the JSCVT flag as
 # being a 4 bit integer (D12.2.52) and it can be manipulated using >= operator
@@ -548,6 +586,7 @@ def has_pthread_jit_write_protect_np(target):
 # On Apple Silicon we use MAP_JIT with pthread_jit_write_protect_np to implement
 # JIT code write protection.
 set_define("JS_USE_APPLE_FAST_WX", True, when=has_pthread_jit_write_protect_np)
+
 
 # CTypes
 # =======================================================
@@ -675,9 +714,9 @@ set_define("ENABLE_WASM_FUNCTION_REFERENCES", wasm_function_references)
 # ===========================
 
 
-@depends(milestone.is_nightly)
-def default_wasm_tail_calls(is_nightly):
-    if is_nightly:
+@depends(target)
+def default_wasm_tail_calls(target):
+    if target.cpu in ("x86", "x86_64", "arm", "aarch64", "loongarch64", "mips64"):
         return True
 
 
@@ -695,6 +734,10 @@ def wasm_tail_calls(value, target):
 
     if target.cpu in ("x86", "x86_64", "arm", "aarch64", "loongarch64", "mips64"):
         return True
+
+    die(
+        "--enable-wasm-tail-calls only possible when targeting the x86_64/x86/arm64/arm/loongarch64/mips64 jits"
+    )
 
 
 set_config("ENABLE_WASM_TAIL_CALLS", wasm_tail_calls)
@@ -1331,10 +1374,7 @@ with only_when(compile_environment & depends(target.os)(lambda os: os != "WINNT"
 
     set_define("MOZ_DEMANGLE_SYMBOLS", demangle_symbols)
 
-    set_define(
-        "HAVE__UNWIND_BACKTRACE",
-        check_symbol("_Unwind_Backtrace", when=check_header("unwind.h")),
-    )
+    set_define("HAVE__UNWIND_BACKTRACE", True, when=have_unwind)
 
 with only_when(compile_environment):
     set_define("HAVE__GETC_NOLOCK", check_symbol("_getc_nolock"))

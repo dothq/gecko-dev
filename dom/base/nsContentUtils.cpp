@@ -122,7 +122,6 @@
 #include "mozilla/StaticPrefs_test.h"
 #include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/TaskCategory.h"
 #include "mozilla/TextControlState.h"
 #include "mozilla/TextEditor.h"
 #include "mozilla/TextEvents.h"
@@ -424,7 +423,6 @@ nsIXPConnect* nsContentUtils::sXPConnect;
 nsIScriptSecurityManager* nsContentUtils::sSecurityManager;
 nsIPrincipal* nsContentUtils::sSystemPrincipal;
 nsIPrincipal* nsContentUtils::sNullSubjectPrincipal;
-nsIIOService* nsContentUtils::sIOService;
 nsIConsoleService* nsContentUtils::sConsoleService;
 
 static nsTHashMap<RefPtr<nsAtom>, EventNameMapping>* sAtomEventTable;
@@ -804,13 +802,6 @@ nsresult nsContentUtils::Init() {
 
   nullPrincipal.forget(&sNullSubjectPrincipal);
 
-  nsresult rv = CallGetService(NS_IOSERVICE_CONTRACTID, &sIOService);
-  if (NS_FAILED(rv)) {
-    // This makes life easier, but we can live without it.
-
-    sIOService = nullptr;
-  }
-
   if (!InitializeEventTable()) return NS_ERROR_FAILURE;
 
   if (!sEventListenerManagersHash) {
@@ -833,7 +824,8 @@ nsresult nsContentUtils::Init() {
 
   Element::InitCCCallbacks();
 
-  Unused << nsRFPService::GetOrCreate();
+  RefPtr<nsRFPService> rfpService = nsRFPService::GetOrCreate();
+  MOZ_ASSERT(rfpService);
 
   if (XRE_IsParentProcess()) {
     AsyncPrecreateStringBundles();
@@ -1880,7 +1872,6 @@ void nsContentUtils::Shutdown() {
   NS_IF_RELEASE(sSecurityManager);
   NS_IF_RELEASE(sSystemPrincipal);
   NS_IF_RELEASE(sNullSubjectPrincipal);
-  NS_IF_RELEASE(sIOService);
 
   sBidiKeyboard = nullptr;
 
@@ -2084,8 +2075,15 @@ bool nsContentUtils::IsAbsoluteURL(const nsACString& aURL) {
     return true;
   }
 
+  nsresult rv = NS_OK;
+  nsCOMPtr<nsIIOService> io = mozilla::components::IO::Service(&rv);
+  MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+
   uint32_t flags;
-  if (NS_SUCCEEDED(sIOService->GetProtocolFlags(scheme.get(), &flags))) {
+  if (NS_SUCCEEDED(io->GetProtocolFlags(scheme.get(), &flags))) {
     return flags & nsIProtocolHandler::URI_NORELATIVE;
   }
 
@@ -2137,7 +2135,7 @@ bool nsContentUtils::IsCallerChromeOrElementTransformGettersEnabled(
 
 /* static */
 bool nsContentUtils::ShouldResistFingerprinting(RFPTarget aTarget) {
-  return nsRFPService::IsRFPEnabledFor(aTarget);
+  return nsRFPService::IsRFPEnabledFor(aTarget, Nothing());
 }
 
 /* static */
@@ -4575,34 +4573,27 @@ EventMessage nsContentUtils::GetEventMessageAndAtomForListener(
   return msg;
 }
 
-static nsresult GetEventAndTarget(Document* aDoc, nsISupports* aTarget,
-                                  const nsAString& aEventName,
-                                  CanBubble aCanBubble, Cancelable aCancelable,
-                                  Composed aComposed, Trusted aTrusted,
-                                  Event** aEvent, EventTarget** aTargetOut) {
-  nsCOMPtr<EventTarget> target(do_QueryInterface(aTarget));
-  NS_ENSURE_TRUE(aDoc && target, NS_ERROR_INVALID_ARG);
-
-  ErrorResult err;
+static already_AddRefed<Event> GetEventWithTarget(
+    Document* aDoc, EventTarget* aTarget, const nsAString& aEventName,
+    CanBubble aCanBubble, Cancelable aCancelable, Composed aComposed,
+    Trusted aTrusted, ErrorResult& aErrorResult) {
   RefPtr<Event> event =
-      aDoc->CreateEvent(u"Events"_ns, CallerType::System, err);
-  if (NS_WARN_IF(err.Failed())) {
-    return err.StealNSResult();
+      aDoc->CreateEvent(u"Events"_ns, CallerType::System, aErrorResult);
+  if (aErrorResult.Failed()) {
+    return nullptr;
   }
 
   event->InitEvent(aEventName, aCanBubble, aCancelable, aComposed);
   event->SetTrusted(aTrusted == Trusted::eYes);
 
-  event->SetTarget(target);
+  event->SetTarget(aTarget);
 
-  event.forget(aEvent);
-  target.forget(aTargetOut);
-  return NS_OK;
+  return event.forget();
 }
 
 // static
 nsresult nsContentUtils::DispatchTrustedEvent(
-    Document* aDoc, nsISupports* aTarget, const nsAString& aEventName,
+    Document* aDoc, EventTarget* aTarget, const nsAString& aEventName,
     CanBubble aCanBubble, Cancelable aCancelable, Composed aComposed,
     bool* aDefaultAction) {
   MOZ_ASSERT(!aEventName.EqualsLiteral("input") &&
@@ -4614,31 +4605,35 @@ nsresult nsContentUtils::DispatchTrustedEvent(
 
 // static
 nsresult nsContentUtils::DispatchUntrustedEvent(
-    Document* aDoc, nsISupports* aTarget, const nsAString& aEventName,
+    Document* aDoc, EventTarget* aTarget, const nsAString& aEventName,
     CanBubble aCanBubble, Cancelable aCancelable, bool* aDefaultAction) {
   return DispatchEvent(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
                        Composed::eDefault, Trusted::eNo, aDefaultAction);
 }
 
 // static
-nsresult nsContentUtils::DispatchEvent(Document* aDoc, nsISupports* aTarget,
+nsresult nsContentUtils::DispatchEvent(Document* aDoc, EventTarget* aTarget,
                                        const nsAString& aEventName,
                                        CanBubble aCanBubble,
                                        Cancelable aCancelable,
                                        Composed aComposed, Trusted aTrusted,
                                        bool* aDefaultAction,
                                        ChromeOnlyDispatch aOnlyChromeDispatch) {
-  RefPtr<Event> event;
-  nsCOMPtr<EventTarget> target;
-  nsresult rv = GetEventAndTarget(
-      aDoc, aTarget, aEventName, aCanBubble, aCancelable, aComposed, aTrusted,
-      getter_AddRefs(event), getter_AddRefs(target));
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (!aDoc || !aTarget) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  ErrorResult err;
+  RefPtr<Event> event =
+      GetEventWithTarget(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
+                         aComposed, aTrusted, err);
+  if (err.Failed()) {
+    return err.StealNSResult();
+  }
   event->WidgetEventPtr()->mFlags.mOnlyChromeDispatch =
       aOnlyChromeDispatch == ChromeOnlyDispatch::eYes;
 
-  ErrorResult err;
-  bool doDefault = target->DispatchEvent(*event, CallerType::System, err);
+  bool doDefault = aTarget->DispatchEvent(*event, CallerType::System, err);
   if (aDefaultAction) {
     *aDefaultAction = doDefault;
   }
@@ -4646,7 +4641,7 @@ nsresult nsContentUtils::DispatchEvent(Document* aDoc, nsISupports* aTarget,
 }
 
 // static
-nsresult nsContentUtils::DispatchEvent(Document* aDoc, nsISupports* aTarget,
+nsresult nsContentUtils::DispatchEvent(Document* aDoc, EventTarget* aTarget,
                                        WidgetEvent& aEvent,
                                        EventMessage aEventMessage,
                                        CanBubble aCanBubble,
@@ -4655,8 +4650,6 @@ nsresult nsContentUtils::DispatchEvent(Document* aDoc, nsISupports* aTarget,
                                        ChromeOnlyDispatch aOnlyChromeDispatch) {
   MOZ_ASSERT_IF(aOnlyChromeDispatch == ChromeOnlyDispatch::eYes,
                 aTrusted == Trusted::eYes);
-
-  nsCOMPtr<EventTarget> target(do_QueryInterface(aTarget));
 
   aEvent.mSpecifiedEventType = GetEventTypeFromMessage(aEventMessage);
   aEvent.SetDefaultComposed();
@@ -4667,10 +4660,10 @@ nsresult nsContentUtils::DispatchEvent(Document* aDoc, nsISupports* aTarget,
   aEvent.mFlags.mOnlyChromeDispatch =
       aOnlyChromeDispatch == ChromeOnlyDispatch::eYes;
 
-  aEvent.mTarget = target;
+  aEvent.mTarget = aTarget;
 
   nsEventStatus status = nsEventStatus_eIgnore;
-  nsresult rv = EventDispatcher::DispatchDOMEvent(target, &aEvent, nullptr,
+  nsresult rv = EventDispatcher::DispatchDOMEvent(aTarget, &aEvent, nullptr,
                                                   nullptr, &status);
   if (aDefaultAction) {
     *aDefaultAction = (status != nsEventStatus_eConsumeNoDefault);
@@ -4846,22 +4839,29 @@ nsresult nsContentUtils::DispatchInputEvent(
 }
 
 nsresult nsContentUtils::DispatchChromeEvent(
-    Document* aDoc, nsISupports* aTarget, const nsAString& aEventName,
+    Document* aDoc, EventTarget* aTarget, const nsAString& aEventName,
     CanBubble aCanBubble, Cancelable aCancelable, bool* aDefaultAction) {
-  RefPtr<Event> event;
-  nsCOMPtr<EventTarget> target;
-  nsresult rv = GetEventAndTarget(
-      aDoc, aTarget, aEventName, aCanBubble, aCancelable, Composed::eDefault,
-      Trusted::eYes, getter_AddRefs(event), getter_AddRefs(target));
-  NS_ENSURE_SUCCESS(rv, rv);
+  if (!aDoc || !aTarget) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
-  NS_ASSERTION(aDoc, "GetEventAndTarget lied?");
-  if (!aDoc->GetWindow()) return NS_ERROR_INVALID_ARG;
+  if (!aDoc->GetWindow()) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   EventTarget* piTarget = aDoc->GetWindow()->GetParentTarget();
-  if (!piTarget) return NS_ERROR_INVALID_ARG;
+  if (!piTarget) {
+    return NS_ERROR_INVALID_ARG;
+  }
 
   ErrorResult err;
+  RefPtr<Event> event =
+      GetEventWithTarget(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
+                         Composed::eDefault, Trusted::eYes, err);
+  if (err.Failed()) {
+    return err.StealNSResult();
+  }
+
   bool defaultActionEnabled =
       piTarget->DispatchEvent(*event, CallerType::System, err);
   if (aDefaultAction) {
@@ -4901,7 +4901,7 @@ void nsContentUtils::RequestFrameFocus(Element& aFrameElement, bool aCanRaise,
 }
 
 nsresult nsContentUtils::DispatchEventOnlyToChrome(
-    Document* aDoc, nsISupports* aTarget, const nsAString& aEventName,
+    Document* aDoc, EventTarget* aTarget, const nsAString& aEventName,
     CanBubble aCanBubble, Cancelable aCancelable, Composed aComposed,
     bool* aDefaultAction) {
   return DispatchEvent(aDoc, aTarget, aEventName, aCanBubble, aCancelable,
@@ -6253,7 +6253,7 @@ bool nsContentUtils::CheckForSubFrameDrop(nsIDragSession* aDragSession,
 /* static */
 bool nsContentUtils::URIIsLocalFile(nsIURI* aURI) {
   bool isFile;
-  nsCOMPtr<nsINetUtil> util = do_QueryInterface(sIOService);
+  nsCOMPtr<nsINetUtil> util = mozilla::components::IO::Service();
 
   // Important: we do NOT test the entire URI chain here!
   return util &&
@@ -6506,12 +6506,13 @@ SameOriginCheckerImpl::GetInterface(const nsIID& aIID, void** aResult) {
 /* static */
 nsresult nsContentUtils::GetWebExposedOriginSerialization(nsIURI* aURI,
                                                           nsACString& aOrigin) {
+  nsresult rv;
   MOZ_ASSERT(aURI, "missing uri");
 
   // For Blob URI, the path is the URL of the owning page.
   if (aURI->SchemeIs(BLOBURI_SCHEME)) {
     nsAutoCString path;
-    nsresult rv = aURI->GetPathQueryRef(path);
+    rv = aURI->GetPathQueryRef(path);
     NS_ENSURE_SUCCESS(rv, rv);
 
     nsCOMPtr<nsIURI> uri;
@@ -6524,13 +6525,30 @@ nsresult nsContentUtils::GetWebExposedOriginSerialization(nsIURI* aURI,
     return GetWebExposedOriginSerialization(uri, aOrigin);
   }
 
+  nsAutoCString scheme;
+  aURI->GetScheme(scheme);
+
+  // If the protocol doesn't have URI_HAS_WEB_EXPOSED_ORIGIN, then
+  // return "null" as the origin serialization.
+  // We make an exception for "ftp" since we don't have a protocol handler
+  // for this scheme
+  uint32_t flags = 0;
+  nsCOMPtr<nsIIOService> io = mozilla::components::IO::Service(&rv);
+  if (!scheme.Equals("ftp") && NS_SUCCEEDED(rv) &&
+      NS_SUCCEEDED(io->GetProtocolFlags(scheme.get(), &flags))) {
+    if (!(flags & nsIProtocolHandler::URI_HAS_WEB_EXPOSED_ORIGIN)) {
+      aOrigin.AssignLiteral("null");
+      return NS_OK;
+    }
+  }
+
   aOrigin.Truncate();
 
   nsCOMPtr<nsIURI> uri = NS_GetInnermostURI(aURI);
   NS_ENSURE_TRUE(uri, NS_ERROR_UNEXPECTED);
 
   nsAutoCString host;
-  nsresult rv = uri->GetAsciiHost(host);
+  rv = uri->GetAsciiHost(host);
 
   if (NS_SUCCEEDED(rv) && !host.IsEmpty()) {
     nsAutoCString userPass;
@@ -10439,27 +10457,6 @@ uint32_t nsContentUtils::HtmlObjectContentTypeForMIMEType(
 }
 
 /* static */
-already_AddRefed<nsISerialEventTarget> nsContentUtils::GetEventTargetByLoadInfo(
-    nsILoadInfo* aLoadInfo, TaskCategory aCategory) {
-  if (NS_WARN_IF(!aLoadInfo)) {
-    return nullptr;
-  }
-
-  RefPtr<Document> doc;
-  aLoadInfo->GetLoadingDocument(getter_AddRefs(doc));
-  nsCOMPtr<nsISerialEventTarget> target;
-  if (doc) {
-    if (DocGroup* group = doc->GetDocGroup()) {
-      target = group->EventTargetFor(aCategory);
-    }
-  } else {
-    target = GetMainThreadSerialEventTarget();
-  }
-
-  return target.forget();
-}
-
-/* static */
 bool nsContentUtils::IsLocalRefURL(const nsAString& aString) {
   return !aString.IsEmpty() && aString[0] == '#';
 }
@@ -10886,7 +10883,7 @@ bool nsContentUtils::
 static nsGlobalWindowInner* GetInnerWindowForGlobal(nsIGlobalObject* aGlobal) {
   NS_ENSURE_TRUE(aGlobal, nullptr);
 
-  if (auto* window = aGlobal->AsInnerWindow()) {
+  if (auto* window = aGlobal->GetAsInnerWindow()) {
     return nsGlobalWindowInner::Cast(window);
   }
 
@@ -10910,7 +10907,7 @@ static nsGlobalWindowInner* GetInnerWindowForGlobal(nsIGlobalObject* aGlobal) {
 
   // The calling window must be holding a reference, so we can return a weak
   // pointer.
-  return nsGlobalWindowInner::Cast(aGlobal->AsInnerWindow());
+  return nsGlobalWindowInner::Cast(aGlobal->GetAsInnerWindow());
 }
 
 /* static */

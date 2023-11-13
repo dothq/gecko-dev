@@ -76,7 +76,6 @@ class HTMLImageElement final : public nsGenericHTMLElement,
   nsresult BindToTree(BindContext&, nsINode& aParent) override;
   void UnbindFromTree(bool aNullParent) override;
 
-  ElementState IntrinsicState() const override;
   nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
   void NodeInfoChanged(Document* aOldDoc) override;
@@ -186,23 +185,15 @@ class HTMLImageElement final : public nsGenericHTMLElement,
   }
   void GetDecoding(nsAString& aValue);
 
-  enum class Loading : uint8_t {
-    Eager,
-    Lazy,
-  };
-
   void SetLoading(const nsAString& aLoading, ErrorResult& aError) {
     SetHTMLAttr(nsGkAtoms::loading, aLoading, aError);
   }
-  void GetLoading(nsAString&) const;
 
   bool IsAwaitingLoadOrLazyLoading() const {
     return mLazyLoading || mPendingImageLoadTask;
   }
 
   bool IsLazyLoading() const { return mLazyLoading; }
-
-  Loading LoadingState() const;
 
   already_AddRefed<Promise> Decode(ErrorResult& aRv);
 

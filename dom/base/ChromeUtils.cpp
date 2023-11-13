@@ -117,29 +117,17 @@ void ChromeUtils::Base64URLEncode(GlobalObject& aGlobal,
                                   const ArrayBufferViewOrArrayBuffer& aSource,
                                   const Base64URLEncodeOptions& aOptions,
                                   nsACString& aResult, ErrorResult& aRv) {
-  size_t length = 0;
-  uint8_t* data = nullptr;
-  if (aSource.IsArrayBuffer()) {
-    const ArrayBuffer& buffer = aSource.GetAsArrayBuffer();
-    buffer.ComputeState();
-    length = buffer.Length();
-    data = buffer.Data();
-  } else if (aSource.IsArrayBufferView()) {
-    const ArrayBufferView& view = aSource.GetAsArrayBufferView();
-    view.ComputeState();
-    length = view.Length();
-    data = view.Data();
-  } else {
-    MOZ_CRASH("Uninitialized union: expected buffer or view");
-  }
-
   auto paddingPolicy = aOptions.mPad ? Base64URLEncodePaddingPolicy::Include
                                      : Base64URLEncodePaddingPolicy::Omit;
-  nsresult rv = mozilla::Base64URLEncode(length, data, paddingPolicy, aResult);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    aResult.Truncate();
-    aRv.Throw(rv);
-  }
+  ProcessTypedArrays(
+      aSource, [&](const Span<uint8_t>& aData, JS::AutoCheckCannotGC&&) {
+        nsresult rv = mozilla::Base64URLEncode(aData.Length(), aData.Elements(),
+                                               paddingPolicy, aResult);
+        if (NS_WARN_IF(NS_FAILED(rv))) {
+          aResult.Truncate();
+          aRv.Throw(rv);
+        }
+      });
 }
 
 /* static */
@@ -1430,8 +1418,7 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
   }
 
   // Now place background request.
-  RefPtr<nsISerialEventTarget> target =
-      global->EventTargetFor(TaskCategory::Performance);
+  RefPtr<nsISerialEventTarget> target = global->SerialEventTarget();
   mozilla::GetProcInfo(std::move(requests))
       ->Then(
           target, __func__,
@@ -1889,8 +1876,9 @@ void ChromeUtils::GetAllPossibleUtilityActorNames(GlobalObject& aGlobal,
 }
 
 /* static */
-bool ChromeUtils::ShouldResistFingerprinting(GlobalObject& aGlobal,
-                                             JSRFPTarget aTarget) {
+bool ChromeUtils::ShouldResistFingerprinting(
+    GlobalObject& aGlobal, JSRFPTarget aTarget,
+    const Nullable<uint64_t>& aOverriddenFingerprintingSettings) {
   RFPTarget target;
   switch (aTarget) {
     case JSRFPTarget::RoundWindowSize:
@@ -1903,7 +1891,14 @@ bool ChromeUtils::ShouldResistFingerprinting(GlobalObject& aGlobal,
       MOZ_CRASH("Unhandled JSRFPTarget enum value");
   }
 
-  return nsRFPService::IsRFPEnabledFor(target);
+  Maybe<RFPTarget> overriddenFingerprintingSettings;
+  if (!aOverriddenFingerprintingSettings.IsNull()) {
+    overriddenFingerprintingSettings.emplace(
+        RFPTarget(aOverriddenFingerprintingSettings.Value()));
+  }
+
+  return nsRFPService::IsRFPEnabledFor(target,
+                                       overriddenFingerprintingSettings);
 }
 
 std::atomic<uint32_t> ChromeUtils::sDevToolsOpenedCount = 0;

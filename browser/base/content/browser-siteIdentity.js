@@ -228,6 +228,12 @@ var gIdentityHandler = {
       "identity-popup-securityView"
     ));
   },
+  get _identityPopupHttpsOnlyMode() {
+    delete this._identityPopupHttpsOnlyMode;
+    return (this._identityPopupHttpsOnlyMode = document.getElementById(
+      "identity-popup-security-httpsonlymode"
+    ));
+  },
   get _identityPopupHttpsOnlyModeMenuList() {
     delete this._identityPopupHttpsOnlyModeMenuList;
     return (this._identityPopupHttpsOnlyModeMenuList = document.getElementById(
@@ -298,25 +304,6 @@ var gIdentityHandler = {
       "identity-popup-clear-sitedata-footer"
     ));
   },
-
-  get _insecureConnectionIconEnabled() {
-    delete this._insecureConnectionIconEnabled;
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_insecureConnectionIconEnabled",
-      "security.insecure_connection_icon.enabled"
-    );
-    return this._insecureConnectionIconEnabled;
-  },
-  get _insecureConnectionIconPBModeEnabled() {
-    delete this._insecureConnectionIconPBModeEnabled;
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_insecureConnectionIconPBModeEnabled",
-      "security.insecure_connection_icon.pbmode.enabled"
-    );
-    return this._insecureConnectionIconPBModeEnabled;
-  },
   get _insecureConnectionTextEnabled() {
     delete this._insecureConnectionTextEnabled;
     XPCOMUtils.defineLazyPreferenceGetter(
@@ -371,6 +358,15 @@ var gIdentityHandler = {
     );
     return this._httpsFirstModeEnabledPBM;
   },
+  get _schemelessHttpsFirstModeEnabled() {
+    delete this._schemelessHttpsFirstModeEnabled;
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "_schemelessHttpsFirstModeEnabled",
+      "dom.security.https_first_schemeless"
+    );
+    return this._schemelessHttpsFirstModeEnabled;
+  },
 
   _isHttpsOnlyModeActive(isWindowPrivate) {
     return (
@@ -383,6 +379,12 @@ var gIdentityHandler = {
       !this._isHttpsOnlyModeActive(isWindowPrivate) &&
       (this._httpsFirstModeEnabled ||
         (isWindowPrivate && this._httpsFirstModeEnabledPBM))
+    );
+  },
+  _isSchemelessHttpsFirstModeActive(isWindowPrivate) {
+    return (
+      !this._isHttpsFirstModeActive(isWindowPrivate) &&
+      this._schemelessHttpsFirstModeEnabled
     );
   },
 
@@ -868,15 +870,9 @@ var gIdentityHandler = {
       this._identityBox.className = "localResource";
     } else {
       // This is an insecure connection.
-      let warnOnInsecure =
-        this._insecureConnectionIconEnabled ||
-        (this._insecureConnectionIconPBModeEnabled &&
-          PrivateBrowsingUtils.isWindowPrivate(window));
-      let className = warnOnInsecure ? "notSecure" : "unknownIdentity";
+      let className = "notSecure";
       this._identityBox.className = className;
-      tooltip = warnOnInsecure
-        ? gNavigatorBundle.getString("identity.notSecure.tooltip")
-        : "";
+      tooltip = gNavigatorBundle.getString("identity.notSecure.tooltip");
 
       let warnTextOnInsecure =
         this._insecureConnectionTextEnabled ||
@@ -1042,11 +1038,22 @@ var gIdentityHandler = {
     const isHttpsFirstModeActive = this._isHttpsFirstModeActive(
       privateBrowsingWindow
     );
+    const isSchemelessHttpsFirstModeActive =
+      this._isSchemelessHttpsFirstModeActive(privateBrowsingWindow);
     let httpsOnlyStatus = "";
-    if (isHttpsFirstModeActive || isHttpsOnlyModeActive) {
+    if (
+      isHttpsFirstModeActive ||
+      isHttpsOnlyModeActive ||
+      isSchemelessHttpsFirstModeActive
+    ) {
       // Note: value and permission association is laid out
       //       in _getHttpsOnlyPermission
       let value = this._getHttpsOnlyPermission();
+
+      // We do not want to display the exception ui for schemeless
+      // HTTPS-First, but we still want the "Upgraded to HTTPS" label.
+      this._identityPopupHttpsOnlyMode.hidden =
+        isSchemelessHttpsFirstModeActive;
 
       this._identityPopupHttpsOnlyModeMenuListOffItem.hidden =
         privateBrowsingWindow && value != 1;

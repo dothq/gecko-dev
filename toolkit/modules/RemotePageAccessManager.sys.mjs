@@ -66,6 +66,7 @@ export let RemotePageAccessManager = {
     },
     "about:httpsonlyerror": {
       RPMGetFormatURLPref: ["app.support.baseURL"],
+      RPMGetIntPref: ["security.dialog_enable_delay"],
       RPMSendAsyncMessage: ["goBack", "openInsecure"],
       RPMAddMessageListener: ["WWWReachable"],
       RPMTryPingSecureWWWLink: ["*"],
@@ -169,6 +170,7 @@ export let RemotePageAccessManager = {
         "browser.privatebrowsing.vpnpromourl",
       ],
       RPMIsWindowPrivate: ["*"],
+      RPMGetBoolPref: ["browser.privatebrowsing.felt-privacy-v1"],
     },
     "about:protections": {
       RPMSendAsyncMessage: [
@@ -240,6 +242,7 @@ export let RemotePageAccessManager = {
       RPMSetPref: [
         "browser.shopping.experience2023.optedIn",
         "browser.shopping.experience2023.active",
+        "browser.shopping.experience2023.ads.userEnabled",
       ],
       RPMGetFormatURLPref: ["app.support.baseURL"],
     },

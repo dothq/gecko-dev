@@ -135,8 +135,7 @@ if CONFIG["OS_TARGET"] == "OpenBSD":
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     SOURCES += [
@@ -164,6 +163,7 @@ if CONFIG["OS_TARGET"] == "WINNT":
     DEFINES["NOMINMAX"] = True
     DEFINES["NTDDI_VERSION"] = "0x0A000000"
     DEFINES["PSAPI_VERSION"] = "2"
+    DEFINES["RTC_ENABLE_WIN_WGC"] = True
     DEFINES["UNICODE"] = True
     DEFINES["USE_AURA"] = "1"
     DEFINES["WEBRTC_WIN"] = True
@@ -187,6 +187,7 @@ if CONFIG["OS_TARGET"] == "WINNT":
     OS_LIBS += [
         "crypt32",
         "d3d11",
+        "dwmapi",
         "dxgi",
         "iphlpapi",
         "secur32",
@@ -222,6 +223,10 @@ if CONFIG["OS_TARGET"] == "WINNT":
         "/third_party/libwebrtc/modules/desktop_capture/win/screen_capturer_win_directx.cc",
         "/third_party/libwebrtc/modules/desktop_capture/win/screen_capturer_win_magnifier.cc",
         "/third_party/libwebrtc/modules/desktop_capture/win/selected_window_context.cc",
+        "/third_party/libwebrtc/modules/desktop_capture/win/wgc_capture_session.cc",
+        "/third_party/libwebrtc/modules/desktop_capture/win/wgc_capture_source.cc",
+        "/third_party/libwebrtc/modules/desktop_capture/win/wgc_capturer_win.cc",
+        "/third_party/libwebrtc/modules/desktop_capture/win/wgc_desktop_frame.cc",
         "/third_party/libwebrtc/modules/desktop_capture/win/window_capture_utils.cc",
         "/third_party/libwebrtc/modules/desktop_capture/win/window_capturer_win_gdi.cc",
         "/third_party/libwebrtc/modules/desktop_capture/window_capturer_win.cc",
@@ -341,8 +346,7 @@ if CONFIG["CPU_ARCH"] == "ppc64":
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -370,8 +374,7 @@ if CONFIG["CPU_ARCH"] == "riscv64":
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -514,8 +517,7 @@ if CONFIG["CPU_ARCH"] == "aarch64" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_T
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -543,8 +545,7 @@ if CONFIG["CPU_ARCH"] == "arm" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TARGE
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -572,8 +573,7 @@ if CONFIG["CPU_ARCH"] == "mips32" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TA
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -601,8 +601,7 @@ if CONFIG["CPU_ARCH"] == "mips64" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TA
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -630,8 +629,7 @@ if CONFIG["CPU_ARCH"] == "x86" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TARGE
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [
@@ -659,8 +657,7 @@ if CONFIG["CPU_ARCH"] == "x86_64" and CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TA
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
     UNIFIED_SOURCES += [

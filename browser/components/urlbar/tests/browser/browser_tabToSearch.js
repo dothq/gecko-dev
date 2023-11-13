@@ -36,7 +36,7 @@ add_setup(async function () {
   for (let i = 0; i < 3; i++) {
     await PlacesTestUtils.addVisits([`https://${TEST_ENGINE_DOMAIN}/`]);
   }
-
+  await PlacesFrecencyRecalculator.recalculateAnyOutdatedFrecencies();
   registerCleanupFunction(async () => {
     await PlacesUtils.history.clear();
   });
@@ -407,6 +407,12 @@ add_task(async function onboard() {
     ).textContent,
     descriptionOnboarding,
     "The correct description was set."
+  );
+  Assert.ok(
+    BrowserTestUtils.is_visible(
+      onboardingDetails.element.row.querySelector(".urlbarView-title-separator")
+    ),
+    "The title separator should be visible."
   );
 
   // Check that the onboarding result enters search mode.

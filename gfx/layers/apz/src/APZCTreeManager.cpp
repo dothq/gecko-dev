@@ -356,11 +356,12 @@ void APZCTreeManager::NotifyLayerTreeRemoved(LayersId aLayersId) {
   }
 }
 
-AsyncPanZoomController* APZCTreeManager::NewAPZCInstance(
+already_AddRefed<AsyncPanZoomController> APZCTreeManager::NewAPZCInstance(
     LayersId aLayersId, GeckoContentController* aController) {
-  return new AsyncPanZoomController(
-      aLayersId, this, mInputQueue, aController,
-      AsyncPanZoomController::USE_GESTURE_DETECTOR);
+  return MakeRefPtr<AsyncPanZoomController>(
+             aLayersId, this, mInputQueue, aController,
+             AsyncPanZoomController::USE_GESTURE_DETECTOR)
+      .forget();
 }
 
 void APZCTreeManager::SetTestSampleTime(const Maybe<TimeStamp>& aTime) {
@@ -1155,7 +1156,7 @@ HitTestingTreeNode* APZCTreeManager::PrepareNodeForLayer(
     return node;
   }
 
-  AsyncPanZoomController* apzc = nullptr;
+  RefPtr<AsyncPanZoomController> apzc;
   // If we get here, aLayer is a scrollable layer and somebody
   // has registered a GeckoContentController for it, so we need to ensure
   // it has an APZC instance to manage its scrolling.
@@ -1173,9 +1174,9 @@ HitTestingTreeNode* APZCTreeManager::PrepareNodeForLayer(
     apzc = insertResult.first->second.apzc;
     PrintLayerInfo(aLayer);
   }
-  APZCTM_LOG("Found APZC %p for layer %p with identifiers %" PRIx64 " %" PRId64
-             "\n",
-             apzc, aLayer.GetLayer(), uint64_t(guid.mLayersId), guid.mScrollId);
+  APZCTM_LOG(
+      "Found APZC %p for layer %p with identifiers %" PRIx64 " %" PRId64 "\n",
+      apzc.get(), aLayer.GetLayer(), uint64_t(guid.mLayersId), guid.mScrollId);
 
   // If we haven't encountered a layer already with the same metrics, then we
   // need to do the full reuse-or-make-an-APZC algorithm, which is contained
@@ -1246,9 +1247,10 @@ HitTestingTreeNode* APZCTreeManager::PrepareNodeForLayer(
       aState.mZoomAnimationId = Nothing();
     }
 
-    APZCTM_LOG(
-        "Using APZC %p for layer %p with identifiers %" PRIx64 " %" PRId64 "\n",
-        apzc, aLayer.GetLayer(), uint64_t(aLayersId), aMetrics.GetScrollId());
+    APZCTM_LOG("Using APZC %p for layer %p with identifiers %" PRIx64
+               " %" PRId64 "\n",
+               apzc.get(), aLayer.GetLayer(), uint64_t(aLayersId),
+               aMetrics.GetScrollId());
 
     apzc->NotifyLayersUpdated(aLayer.Metadata(), aState.mIsFirstPaint,
                               aLayersId == aState.mOriginatingLayersId);
@@ -2411,6 +2413,26 @@ void APZCTreeManager::ZoomToRect(const ScrollableLayerGuid& aGuid,
   APZThreadUtils::AssertOnControllerThread();
 
   RefPtr<AsyncPanZoomController> apzc = GetTargetAPZC(aGuid);
+  if (aFlags & ZOOM_TO_FOCUSED_INPUT) {
+    // In the case of ZoomToFocusInput the targetRect is in the in-process root
+    // content coordinates. We need to convert it to the top level content
+    // coordiates.
+    if (apzc) {
+      CSSRect transformedRect =
+          ConvertRectInApzcToRoot(apzc, aZoomTarget.targetRect);
+
+      transformedRect.Inflate(15.0f, 0.0f);
+      // Note that ZoomToFocusedInput doesn't use the other fields of
+      // ZoomTarget.
+      ZoomTarget zoomTarget{transformedRect};
+
+      apzc = FindZoomableApzc(apzc);
+      if (apzc) {
+        apzc->ZoomToRect(zoomTarget, aFlags);
+      }
+    }
+    return;
+  }
   if (apzc) {
     apzc->ZoomToRect(aZoomTarget, aFlags);
   }
@@ -3174,43 +3196,43 @@ ScreenToParentLayerMatrix4x4 APZCTreeManager::GetScreenToApzcTransform(
  * See the long comment above GetScreenToApzcTransform() for a detailed
  * explanation of this function.
  */
-ParentLayerToScreenMatrix4x4 APZCTreeManager::GetApzcToGeckoTransform(
-    const AsyncPanZoomController* aApzc,
+ParentLayerToParentLayerMatrix4x4 APZCTreeManager::GetApzcToApzcTransform(
+    const AsyncPanZoomController* aStartApzc,
+    const AsyncPanZoomController* aStopApzc,
     const AsyncTransformComponents& aComponents) const {
   Matrix4x4 result;
   RecursiveMutexAutoLock lock(mTreeLock);
 
   // The comments below assume there is a chain of layers L..R with L and P
-  // having APZC instances as explained in the comment above. This function is
-  // called with aApzc at L, and the loop below performs one iteration, where
-  // parent is at P. The comments explain what values are stored in the
-  // variables at these two levels. All the comments use standard matrix
-  // notation where the leftmost matrix in a multiplication is applied first.
+  // having APZC instances as explained in the comment above, and |aStopApzc| is
+  // nullptr. This function is called with aStartApzc at L, and the loop below
+  // performs one iteration, where parent is at P. The comments explain what
+  // values are stored in the variables at these two levels. All the comments
+  // use standard matrix notation where the leftmost matrix in a multiplication
+  // is applied first.
 
   // asyncUntransform is LA.Inverse()
-  Matrix4x4 asyncUntransform = aApzc
+  Matrix4x4 asyncUntransform = aStartApzc
                                    ->GetAsyncTransformForInputTransformation(
-                                       aComponents, aApzc->GetLayersId())
+                                       aComponents, aStartApzc->GetLayersId())
                                    .Inverse()
                                    .ToUnknownMatrix();
 
-  // aTransformToGeckoOut is initialized to LA.Inverse() * LD * MC * NC * OC *
-  // PC
+  // result is initialized to LA.Inverse() * LD * MC * NC * OC * PC
   result = asyncUntransform *
-           aApzc->GetTransformToLastDispatchedPaint(aComponents,
-                                                    aApzc->GetLayersId()) *
-           aApzc->GetAncestorTransform();
+           aStartApzc->GetTransformToLastDispatchedPaint(
+               aComponents, aStartApzc->GetLayersId()) *
+           aStartApzc->GetAncestorTransform();
 
-  for (AsyncPanZoomController* parent = aApzc->GetParent(); parent;
-       parent = parent->GetParent()) {
-    // aTransformToGeckoOut is LA.Inverse() * LD * MC * NC * OC * PC * PD * QC *
-    // RC
+  for (AsyncPanZoomController* parent = aStartApzc->GetParent();
+       parent && parent != aStopApzc; parent = parent->GetParent()) {
+    // result is LA.Inverse() * LD * MC * NC * OC * PC * PD * QC * RC
     //
     // Note: Do not pass the async transform components for the current target
     // to the parent.
     result = result *
-             parent->GetTransformToLastDispatchedPaint(LayoutAndVisual,
-                                                       aApzc->GetLayersId()) *
+             parent->GetTransformToLastDispatchedPaint(
+                 LayoutAndVisual, aStartApzc->GetLayersId()) *
              parent->GetAncestorTransform();
 
     // The above value for result when parent == P matches the required output
@@ -3218,7 +3240,15 @@ ParentLayerToScreenMatrix4x4 APZCTreeManager::GetApzcToGeckoTransform(
     // terms are guaranteed to be identity transforms.
   }
 
-  return ViewAs<ParentLayerToScreenMatrix4x4>(result);
+  return ViewAs<ParentLayerToParentLayerMatrix4x4>(result);
+}
+
+ParentLayerToScreenMatrix4x4 APZCTreeManager::GetApzcToGeckoTransform(
+    const AsyncPanZoomController* aApzc,
+    const AsyncTransformComponents& aComponents) const {
+  return ViewAs<ParentLayerToScreenMatrix4x4>(
+      GetApzcToApzcTransform(aApzc, nullptr, aComponents),
+      PixelCastJustification::ScreenIsParentLayerForRoot);
 }
 
 ParentLayerToScreenMatrix4x4 APZCTreeManager::GetApzcToGeckoTransformForHit(
@@ -3230,6 +3260,49 @@ ParentLayerToScreenMatrix4x4 APZCTreeManager::GetApzcToGeckoTransformForHit(
           ? LayoutAndVisual
           : AsyncTransformComponents{AsyncTransformComponent::eVisual};
   return GetApzcToGeckoTransform(aHitResult.mTargetApzc, components);
+}
+
+ParentLayerToParentLayerMatrix4x4
+APZCTreeManager::GetOopifApzcToRootContentApzcTransform(
+    AsyncPanZoomController* aApzc) const {
+  ParentLayerToParentLayerMatrix4x4 result;
+  MOZ_ASSERT(aApzc->IsRootForLayersId());
+
+  RefPtr<AsyncPanZoomController> rootContentApzc = FindZoomableApzc(aApzc);
+  MOZ_ASSERT(aApzc->GetLayersId() != rootContentApzc->GetLayersId(),
+             "aApzc must be out-of-process of the rootContentApzc");
+  if (!rootContentApzc || rootContentApzc == aApzc ||
+      rootContentApzc->GetLayersId() == aApzc->GetLayersId()) {
+    return result;
+  }
+
+  return GetApzcToApzcTransform(aApzc, rootContentApzc,
+                                AsyncTransformComponent::eLayout) *
+         // We need to multiply by the root content APZC's
+         // GetPaintedResolutionTransform() here; See
+         // https://phabricator.services.mozilla.com/D184440?vs=755900&id=757585#6173584
+         // for the details.
+         ViewAs<AsyncTransformComponentMatrix>(
+             rootContentApzc->GetPaintedResolutionTransform());
+}
+
+CSSRect APZCTreeManager::ConvertRectInApzcToRoot(AsyncPanZoomController* aApzc,
+                                                 const CSSRect& aRect) const {
+  MOZ_ASSERT(aApzc->IsRootForLayersId());
+  RefPtr<AsyncPanZoomController> rootContentApzc = FindZoomableApzc(aApzc);
+  if (!rootContentApzc || rootContentApzc == aApzc) {
+    return aRect;
+  }
+
+  ParentLayerRect rectInParent = aRect * aApzc->GetZoom();
+  ParentLayerRect rectInRoot =
+      GetOopifApzcToRootContentApzcTransform(aApzc).TransformBounds(
+          rectInParent);
+
+  if (rootContentApzc->GetZoom() != CSSToParentLayerScale(0)) {
+    return rectInRoot / rootContentApzc->GetZoom();
+  }
+  return rectInRoot / CSSToParentLayerScale(1);
 }
 
 ScreenPoint APZCTreeManager::GetCurrentMousePosition() const {

@@ -502,7 +502,7 @@ _____________
 
    + ``MacSandboxInfo::AppendAsParams()`` in the `switch statement
      <https://searchfox.org/mozilla-central/rev/d4b9c457db637fde655592d9e2048939b7ab2854/security/sandbox/mac/Sandbox.mm#164-188>`_
-   + ``StartMacSandbox()`` in the `serie of if/else statements
+   + ``StartMacSandbox()`` in the `series of if/else statements
      <https://searchfox.org/mozilla-central/rev/d4b9c457db637fde655592d9e2048939b7ab2854/security/sandbox/mac/Sandbox.mm#286-436>`_.
      This code sets template values for the sandbox string rendering, and is
      running on the side of the main process.
@@ -1160,7 +1160,7 @@ section on :ref:`Message Logging`.  We just need to set an environment variable
 before starting the browser.  Let's turn it on for all ``PDemo`` and
 ``PDemoHelpline`` actors: ::
 
-    MOZ_IPC_MESSAGE_LOG="PDemoParent,PDemoChild,PDemoHelplineParent,PDemoHelplineChild"
+    MOZ_IPC_MESSAGE_LOG="PDemo,PDemoHelpline"
 
 To underscore what we said above, when logging is active, the change in timing
 makes the error message go away and everything closes properly on a tested

@@ -269,6 +269,14 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
   nsresult rv = NS_OK;
 
   switch (aID) {
+    case IntID::ScrollbarFadeBeginDelay:
+      aResult = 450;
+      break;
+
+    case IntID::ScrollbarFadeDuration:
+      aResult = 0;
+      break;
+
     case IntID::ScrollButtonLeftMouseButtonAction:
       aResult = 0;
       break;
@@ -338,8 +346,11 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       aResult = java::GeckoSystemStateListener::PrefersReducedMotion();
       break;
 
+    case IntID::UseAccessibilityTheme:
+    // If high contrast is enabled, enable prefers-reduced-transparency media
+    // query as well as there is no dedicated option.
     case IntID::PrefersReducedTransparency:
-      aResult = 0;
+      aResult = java::GeckoSystemStateListener::PrefersContrast();
       break;
 
     case IntID::InvertedColors:

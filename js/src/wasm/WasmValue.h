@@ -118,6 +118,8 @@ class FuncRef {
   // FuncRef.
   static FuncRef fromAnyRefUnchecked(AnyRef p);
 
+  static FuncRef null() { return FuncRef(nullptr); }
+
   AnyRef toAnyRef() { return AnyRef::fromJSObjectOrNull((JSObject*)value_); }
 
   void* forCompiledCode() const { return value_; }
@@ -170,7 +172,7 @@ class LitVal {
   Cell cell_;
 
  public:
-  LitVal() : type_(ValType()), cell_{} {}
+  LitVal() = default;
 
   explicit LitVal(ValType type) : type_(type) {
     switch (type.kind()) {
@@ -257,7 +259,7 @@ WASM_DECLARE_CACHEABLE_POD(LitVal::Cell);
 
 class MOZ_NON_PARAM Val : public LitVal {
  public:
-  Val() : LitVal() {}
+  Val() = default;
   explicit Val(ValType type) : LitVal(type) {}
   explicit Val(const LitVal& val);
   explicit Val(uint32_t i32) : LitVal(i32) {}
@@ -306,6 +308,11 @@ class MOZ_NON_PARAM Val : public LitVal {
     MOZ_ASSERT(isAnyRef());
     return cell_.ref_;
   }
+
+  // Updates the type of the Val. Does not check that the type is valid for the
+  // actual value, so make sure the type is definitely correct via validation or
+  // something.
+  void unsafeSetType(ValType type) { type_ = type; }
 
   // Initialize from `loc` which is a rooted location and needs no barriers.
   void initFromRootedLocation(ValType type, const void* loc);
@@ -537,5 +544,10 @@ struct InternalBarrierMethods<wasm::Val> {
 };
 
 }  // namespace js
+
+template <>
+struct JS::SafelyInitialized<js::wasm::AnyRef> {
+  static js::wasm::AnyRef create() { return js::wasm::AnyRef::null(); }
+};
 
 #endif  // wasm_val_h

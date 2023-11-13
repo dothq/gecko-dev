@@ -11,6 +11,7 @@
 
 [package]
 edition = "2021"
+rust-version = "1.65"
 name = "wgpu-types"
 version = "0.17.0"
 authors = ["wgpu developers"]
@@ -44,7 +45,7 @@ features = ["serde_derive"]
 optional = true
 
 [dev-dependencies]
-serde_json = "1.0.104"
+serde_json = "1.0.107"
 
 [dev-dependencies.serde]
 version = "1"

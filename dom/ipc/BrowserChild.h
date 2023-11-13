@@ -13,7 +13,6 @@
 #include "nsCOMPtr.h"
 #include "nsIWebBrowserChrome.h"
 #include "nsIWebBrowserChromeFocus.h"
-#include "nsIDOMEventListener.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIWindowProvider.h"
 #include "nsIDocShell.h"
@@ -33,16 +32,14 @@
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventForwards.h"
-#include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/CompositorOptions.h"
+#include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/GeckoContentControllerTypes.h"
 #include "mozilla/dom/ipc/IdType.h"
-#include "AudioChannelService.h"
 #include "PuppetWidget.h"
 #include "nsDeque.h"
 #include "nsIRemoteTab.h"
-#include "nsTHashSet.h"
 
 class nsBrowserStatusFilter;
 class nsIDOMWindow;
@@ -91,7 +88,6 @@ class WebProgressData;
 
 class BrowserChildMessageManager : public ContentFrameMessageManager,
                                    public nsIMessageSender,
-                                   public DispatcherTrait,
                                    public nsSupportsWeakReference {
  public:
   explicit BrowserChildMessageManager(BrowserChild* aBrowserChild);
@@ -105,10 +101,9 @@ class BrowserChildMessageManager : public ContentFrameMessageManager,
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
 
-  virtual Nullable<WindowProxyHolder> GetContent(ErrorResult& aError) override;
-  virtual already_AddRefed<nsIDocShell> GetDocShell(
-      ErrorResult& aError) override;
-  virtual already_AddRefed<nsIEventTarget> GetTabEventTarget() override;
+  Nullable<WindowProxyHolder> GetContent(ErrorResult& aError) override;
+  already_AddRefed<nsIDocShell> GetDocShell(ErrorResult& aError) override;
+  already_AddRefed<nsIEventTarget> GetTabEventTarget() override;
 
   NS_FORWARD_SAFE_NSIMESSAGESENDER(mMessageManager)
 
@@ -117,14 +112,7 @@ class BrowserChildMessageManager : public ContentFrameMessageManager,
   }
 
   // Dispatch a runnable related to the global.
-  virtual nsresult Dispatch(mozilla::TaskCategory aCategory,
-                            already_AddRefed<nsIRunnable>&& aRunnable) override;
-
-  virtual nsISerialEventTarget* EventTargetFor(
-      mozilla::TaskCategory aCategory) const override;
-
-  virtual AbstractThread* AbstractMainThreadFor(
-      mozilla::TaskCategory aCategory) override;
+  nsresult Dispatch(already_AddRefed<nsIRunnable>&& aRunnable) const;
 
   RefPtr<BrowserChild> mBrowserChild;
 
@@ -456,8 +444,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
    * activated widget, retained layer tree, etc.  (Respectively,
    * made not visible.)
    */
-  MOZ_CAN_RUN_SCRIPT void UpdateVisibility();
-  MOZ_CAN_RUN_SCRIPT void MakeVisible();
+  void UpdateVisibility();
+  void MakeVisible();
   void MakeHidden();
   void PresShellActivenessMaybeChanged();
 
@@ -572,7 +560,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId);
 
   bool UpdateFrame(const layers::RepaintRequest& aRequest);
-  bool NotifyAPZStateChange(
+  void NotifyAPZStateChange(
       const ViewID& aViewId,
       const layers::GeckoContentController_APZStateChange& aChange,
       const int& aArg, Maybe<uint64_t> aInputBlockId);
@@ -582,18 +570,13 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                   const CSSRect& aRect, const uint32_t& aFlags);
 
   // Request that the docshell be marked as active.
-  void PaintWhileInterruptingJS(const layers::LayersObserverEpoch& aEpoch);
+  void PaintWhileInterruptingJS();
 
-  void UnloadLayersWhileInterruptingJS(
-      const layers::LayersObserverEpoch& aEpoch);
+  void UnloadLayersWhileInterruptingJS();
 
   nsresult CanCancelContentJS(nsIRemoteTab::NavigationType aNavigationType,
                               int32_t aNavigationIndex, nsIURI* aNavigationURI,
                               int32_t aEpoch, bool* aCanCancel);
-
-  layers::LayersObserverEpoch LayersObserverEpoch() const {
-    return mLayersObserverEpoch;
-  }
 
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   uintptr_t GetNativeWindowHandle() const { return mNativeWindowHandle; }
@@ -678,8 +661,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   mozilla::ipc::IPCResult RecvDestroy();
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
-  mozilla::ipc::IPCResult RecvRenderLayers(
-      const bool& aEnabled, const layers::LayersObserverEpoch& aEpoch);
+  mozilla::ipc::IPCResult RecvRenderLayers(const bool& aEnabled);
 
   mozilla::ipc::IPCResult RecvPreserveLayers(bool);
 
@@ -847,9 +829,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   RefPtr<layers::IAPZCTreeManager> mApzcTreeManager;
   RefPtr<SessionStoreChild> mSessionStoreChild;
-
-  // The most recently seen layer observer epoch in RecvSetDocShellIsActive.
-  layers::LayersObserverEpoch mLayersObserverEpoch;
 
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
   // The handle associated with the native window that contains this tab

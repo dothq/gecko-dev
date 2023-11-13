@@ -40,7 +40,7 @@ use function::*;
 use crate::{
     arena::{Arena, Handle, UniqueArena},
     proc::{Alignment, Layouter},
-    FastHashMap, FastHashSet,
+    FastHashMap, FastHashSet, FastIndexMap,
 };
 
 use num_traits::cast::FromPrimitive;
@@ -255,6 +255,7 @@ impl Decoration {
                 location,
                 interpolation,
                 sampling,
+                second_blend_source: false,
             }),
             _ => Err(Error::MissingDecoration(spirv::Decoration::Location)),
         }
@@ -595,11 +596,7 @@ pub struct Frontend<I> {
     /// use that target block id.
     ///
     /// Used to preserve allocations between instruction parsing.
-    switch_cases: indexmap::IndexMap<
-        spirv::Word,
-        (BodyIndex, Vec<i32>),
-        std::hash::BuildHasherDefault<rustc_hash::FxHasher>,
-    >,
+    switch_cases: FastIndexMap<spirv::Word, (BodyIndex, Vec<i32>)>,
 
     /// Tracks access to gl_PerVertex's builtins, it is used to cull unused builtins since initializing those can
     /// affect performance and the mere presence of some of these builtins might cause backends to error since they
@@ -640,7 +637,7 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
             dummy_functions: Arena::new(),
             function_call_graph: GraphMap::new(),
             options: options.clone(),
-            switch_cases: indexmap::IndexMap::default(),
+            switch_cases: FastIndexMap::default(),
             gl_per_vertex_builtin_access: FastHashSet::default(),
         }
     }
@@ -2695,19 +2692,11 @@ impl<I: Iterator<Item = u32>> Frontend<I> {
                 }
                 Op::ImageQueryLevels => {
                     inst.expect(4)?;
-                    self.parse_image_query_other(
-                        crate::ImageQuery::NumLevels,
-                        ctx.expressions,
-                        block_id,
-                    )?;
+                    self.parse_image_query_other(crate::ImageQuery::NumLevels, ctx, block_id)?;
                 }
                 Op::ImageQuerySamples => {
                     inst.expect(4)?;
-                    self.parse_image_query_other(
-                        crate::ImageQuery::NumSamples,
-                        ctx.expressions,
-                        block_id,
-                    )?;
+                    self.parse_image_query_other(crate::ImageQuery::NumSamples, ctx, block_id)?;
                 }
                 // other ops
                 Op::Select => {

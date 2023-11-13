@@ -433,11 +433,17 @@ export class TranslationsParent extends JSWindowActorParent {
     }
 
     // Only offer the translation if it's still the current page.
-    if (
-      documentURI.spec ===
-      this.browsingContext.topChromeWindow.gBrowser.selectedBrowser.documentURI
-        .spec
-    ) {
+    var isCurrentPage = false;
+    if (AppConstants.platform !== "android") {
+      isCurrentPage =
+        documentURI.spec ===
+        this.browsingContext.topChromeWindow.gBrowser.selectedBrowser
+          .documentURI.spec;
+    } else {
+      // In Android, the active window is the active tab.
+      isCurrentPage = documentURI.spec === browser.documentURI.spec;
+    }
+    if (isCurrentPage) {
       lazy.console.log(
         "maybeOfferTranslations - Offering a translation",
         documentURI.spec,
@@ -1080,6 +1086,37 @@ export class TranslationsParent extends JSWindowActorParent {
         .map(addDisplayName)
         .sort(sort),
     };
+  }
+
+  /**
+   * Create a unique list of languages, sorted by the display name.
+   *
+   * @param {Object} supportedLanguages
+   * @returns {Array<{ langTag: string, displayName: string}}
+   */
+  static getLanguageList(supportedLanguages) {
+    const displayNames = new Map();
+    for (const languages of [
+      supportedLanguages.fromLanguages,
+      supportedLanguages.toLanguages,
+    ]) {
+      for (const { langTag, displayName } of languages) {
+        displayNames.set(langTag, displayName);
+      }
+    }
+
+    let appLangTag = new Intl.Locale(Services.locale.appLocaleAsBCP47).language;
+
+    // Don't offer to download the app's language.
+    displayNames.delete(appLangTag);
+
+    // Sort the list of languages by the display names.
+    return [...displayNames.entries()]
+      .map(([langTag, displayName]) => ({
+        langTag,
+        displayName,
+      }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
   }
 
   /**

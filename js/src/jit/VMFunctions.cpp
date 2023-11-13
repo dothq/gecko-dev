@@ -387,6 +387,8 @@ static DynFn GetVMFunctionTarget(VMFunctionId id) {
   return DynFn{vmFunctionTargets[size_t(id)]};
 }
 
+size_t NumVMFunctions() { return size_t(VMFunctionId::Count); }
+
 bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm,
                                     PerfSpewerRangeRecorder& rangeRecorder) {
   // Generate all VM function wrappers.
@@ -417,7 +419,8 @@ bool JitRuntime::generateVMWrappers(JSContext* cx, MacroAssembler& masm,
     JitSpew(JitSpew_Codegen, "# VM function wrapper (%s)", fun.name());
 
     uint32_t offset;
-    if (!generateVMWrapper(cx, masm, fun, GetVMFunctionTarget(id), &offset)) {
+    if (!generateVMWrapper(cx, masm, id, fun, GetVMFunctionTarget(id),
+                           &offset)) {
       return false;
     }
 #if defined(JS_ION_PERF)
@@ -581,10 +584,18 @@ bool MutatePrototype(JSContext* cx, Handle<PlainObject*> obj,
 template <EqualityKind Kind>
 bool StringsEqual(JSContext* cx, HandleString lhs, HandleString rhs,
                   bool* res) {
-  if (!js::EqualStrings(cx, lhs, rhs, res)) {
+  JSLinearString* linearLhs = lhs->ensureLinear(cx);
+  if (!linearLhs) {
     return false;
   }
-  if (Kind != EqualityKind::Equal) {
+  JSLinearString* linearRhs = rhs->ensureLinear(cx);
+  if (!linearRhs) {
+    return false;
+  }
+
+  *res = EqualChars(linearLhs, linearRhs);
+
+  if constexpr (Kind == EqualityKind::NotEqual) {
     *res = !*res;
   }
   return true;

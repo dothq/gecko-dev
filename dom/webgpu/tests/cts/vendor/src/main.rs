@@ -123,8 +123,7 @@ fn run(args: CliArgs) -> miette::Result<()> {
         let child = gecko_ckt.child(join_path(["testing", "web-platform", "mozilla", "tests"]));
         ensure!(
             child.is_dir(),
-            "WPT tests dir ({}) does not appear to exist",
-            child,
+            "WPT tests dir ({child}) does not appear to exist"
         );
         child
     };
@@ -273,15 +272,6 @@ fn run(args: CliArgs) -> miette::Result<()> {
     );
     npm_ci_cmd.spawn()?;
 
-    let out_dir = cts_ckt.regen_dir("out", |out_dir| {
-        let mut npm_run_standalone_cmd =
-            EasyCommand::new(&npm_bin, |cmd| cmd.args(["run", "standalone"]));
-        log::info!(
-            "generating standalone runner files into {out_dir} with {npm_run_standalone_cmd}…"
-        );
-        npm_run_standalone_cmd.spawn()
-    })?;
-
     let out_wpt_dir = cts_ckt.regen_dir("out-wpt", |out_wpt_dir| {
         let mut npm_run_wpt_cmd = EasyCommand::new(&npm_bin, |cmd| cmd.args(["run", "wpt"]));
         log::info!("generating WPT test cases into {out_wpt_dir} with {npm_run_wpt_cmd}…");
@@ -291,36 +281,17 @@ fn run(args: CliArgs) -> miette::Result<()> {
     let cts_https_html_path = out_wpt_dir.child("cts.https.html");
     log::info!("refining the output of {cts_https_html_path} with `npm run gen_wpt_cts_html …`…");
     EasyCommand::new(&npm_bin, |cmd| {
-        cmd.args(["run", "gen_wpt_cts_html"])
-            .arg(existing_file(&cts_https_html_path))
-            .args([
-                existing_file(cts_ckt.child(join_path([
-                    "src",
-                    "common",
-                    "templates",
-                    "cts.https.html",
-                ]))),
-                existing_file(cts_vendor_dir.child("arguments.txt")),
-                existing_file(cts_vendor_dir.child("myexpectations.txt")),
-            ])
-            .arg("")
+        cmd.args(["run", "gen_wpt_cts_html"]).arg(existing_file(
+            &cts_ckt.child("tools/gen_wpt_cfg_unchunked.json"),
+        ))
     })
     .spawn()?;
 
-    log::info!("stealing standalone runtime files from {out_dir} for {out_wpt_dir}…");
-    for subdir in [
-        &["external"] as &[_],
-        &["common", "internal"],
-        &["common", "util"],
-    ]
-    .map(join_path)
     {
-        let out_subdir = out_dir.child(&subdir);
-        let out_wpt_subdir = out_wpt_dir.child(subdir);
-        log::info!("  …copying from {out_subdir} to {out_wpt_subdir}…");
-        copy_dir(out_subdir, out_wpt_subdir)?
+        let extra_cts_https_html_path = out_wpt_dir.child("cts-chunked2sec.https.html");
+        log::info!("removing extraneous {extra_cts_https_html_path}…");
+        remove_file(&*extra_cts_https_html_path)?;
     }
-    log::info!("  …done stealing!");
 
     log::info!("analyzing {cts_https_html_path}…");
     let cts_https_html_content = fs::read_to_string(&*cts_https_html_path)?;
@@ -358,6 +329,7 @@ fn run(args: CliArgs) -> miette::Result<()> {
                         }
                     );
                 }
+
                 // NOTE: Adding `_mozilla` is necessary because [that's how it's mounted][source].
                 //
                 // [source]: https://searchfox.org/mozilla-central/rev/cd2121e7d83af1b421c95e8c923db70e692dab5f/testing/web-platform/mozilla/README#1-4]
@@ -370,21 +342,47 @@ fn run(args: CliArgs) -> miette::Result<()> {
                 ensure!(
                     boilerplate.contains(expected_wpt_script_tag),
                     "failed to find expected `script` tag for `wpt.js` \
-                    ({:?}); did something change upstream?",
-                    expected_wpt_script_tag
+                    ({expected_wpt_script_tag:?}); did something change upstream?",
                 );
-                boilerplate.replacen(
+                let mut boilerplate = boilerplate.replacen(
                     expected_wpt_script_tag,
                     "<script type=module src=/_mozilla/webgpu/common/runtime/wpt.js></script>",
                     1,
-                )
+                );
+
+                // TODO: remove this?
+                log::info!(
+                    "  …adding long timeouts to WPT boilerplate to reduce timeout failures…"
+                );
+                let timeout_insert_idx = {
+                    let meta_charset_utf8 = "\n<meta charset=utf-8>\n";
+                    let meta_charset_utf8_idx =
+                        boilerplate.find(meta_charset_utf8).ok_or_else(|| {
+                            miette!(
+                                "could not find {meta_charset_utf8:?} in document; did something \
+                                change upstream?"
+                            )
+                        })?;
+                    meta_charset_utf8_idx + meta_charset_utf8.len()
+                };
+                boilerplate.insert_str(
+                    timeout_insert_idx,
+                    concat!(
+                        r#"<meta name="timeout" content="long">"#,
+                        " <!-- TODO: narrow to only where it's needed, see ",
+                        "https://bugzilla.mozilla.org/show_bug.cgi?id=1850537",
+                        " -->\n"
+                    ),
+                );
+
+                boilerplate
             };
 
             log::info!("  …parsing test variants in {cts_https_html_path}…");
             cts_cases = cases_start.split_terminator('\n').collect::<Vec<_>>();
             let mut parsing_failed = false;
             let meta_variant_regex =
-                Regex::new("^<meta name=variant content='([^']*?)'>$").unwrap();
+                Regex::new(concat!("^", "<meta name=variant content='([^']*?)'>", "$")).unwrap();
             cts_cases.iter().for_each(|line| {
                 if !meta_variant_regex.is_match(line) {
                     parsing_failed = true;
@@ -396,7 +394,7 @@ fn run(args: CliArgs) -> miette::Result<()> {
                 "one or more test case lines failed to parse, fix it and try again"
             );
         };
-        log::trace!("\"original\" HTML boilerplate:\n\n{}", cts_boilerplate);
+        log::trace!("\"original\" HTML boilerplate:\n\n{cts_boilerplate}");
 
         ensure!(
             !cts_cases.is_empty(),

@@ -65,6 +65,8 @@
 
 // radio buttons
 #include "mozilla/dom/HTMLInputElement.h"
+#include "mozilla/dom/HTMLButtonElement.h"
+#include "mozilla/dom/HTMLSelectElement.h"
 #include "nsIRadioVisitor.h"
 #include "RadioNodeList.h"
 
@@ -143,21 +145,18 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(HTMLFormElement,
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPastNameLookupTable)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mRelList)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTargetContext)
-  RadioGroupManager::Traverse(tmp, cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(HTMLFormElement,
                                                 nsGenericHTMLElement)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mRelList)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTargetContext)
-  RadioGroupManager::Unlink(tmp);
   tmp->Clear();
   tmp->mExpandoAndGeneration.OwnerUnlinked();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
-NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(HTMLFormElement,
-                                             nsGenericHTMLElement,
-                                             nsIRadioGroupContainer)
+NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(HTMLFormElement,
+                                               nsGenericHTMLElement)
 
 // EventTarget
 void HTMLFormElement::AsyncEventRunning(AsyncEventDispatcher* aEvent) {
@@ -177,7 +176,7 @@ nsDOMTokenList* HTMLFormElement::RelList() {
 
 NS_IMPL_ELEMENT_CLONE(HTMLFormElement)
 
-nsIHTMLCollection* HTMLFormElement::Elements() { return mControls; }
+HTMLFormControlsCollection* HTMLFormElement::Elements() { return mControls; }
 
 void HTMLFormElement::BeforeSetAttr(int32_t aNamespaceID, nsAtom* aName,
                                     const nsAttrValue* aValue, bool aNotify) {
@@ -318,7 +317,7 @@ void HTMLFormElement::RequestSubmit(nsGenericHTMLElement* aSubmitter,
 
 void HTMLFormElement::Reset() {
   InternalFormEvent event(true, eFormReset);
-  EventDispatcher::Dispatch(static_cast<nsIContent*>(this), nullptr, &event);
+  EventDispatcher::Dispatch(this, nullptr, &event);
 }
 
 bool HTMLFormElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
@@ -388,9 +387,6 @@ static void CollectOrphans(nsINode* aRemovalRoot,
         nsCOMPtr<nsIFormControl> fc = do_QueryInterface(node);
         MOZ_ASSERT(fc);
         fc->ClearForm(true, false);
-
-        // When a form control loses its form owner, its state can change.
-        node->UpdateState(true);
 #ifdef DEBUG
         removed = true;
 #endif
@@ -1040,9 +1036,7 @@ nsresult HTMLFormElement::ConstructEntryList(FormData* aFormData) {
       FormDataEvent::Constructor(this, u"formdata"_ns, init);
   event->SetTrusted(true);
 
-  // TODO: Bug 1506441
-  EventDispatcher::DispatchDOMEvent(MOZ_KnownLive(ToSupports(this)), nullptr,
-                                    event, nullptr, nullptr);
+  EventDispatcher::DispatchDOMEvent(this, nullptr, event, nullptr, nullptr);
 
   return NS_OK;
 }
@@ -1217,7 +1211,6 @@ nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
     // unless it replaces what's in the slot.  If it _does_ replace what's in
     // the slot, it becomes the default submit if either the default submit is
     // what's in the slot or the child is earlier than the default submit.
-    nsGenericHTMLFormElement* oldDefaultSubmit = mDefaultSubmitElement;
     if (!*firstSubmitSlot ||
         (!lastElement && nsContentUtils::CompareTreePosition(
                              aChild, *firstSubmitSlot, this) < 0)) {
@@ -1229,7 +1222,7 @@ nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
           (*firstSubmitSlot == mDefaultSubmitElement ||
            nsContentUtils::CompareTreePosition(aChild, mDefaultSubmitElement,
                                                this) < 0)) {
-        mDefaultSubmitElement = aChild;
+        SetDefaultSubmitElement(aChild);
       }
       *firstSubmitSlot = aChild;
     }
@@ -1238,13 +1231,6 @@ nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
                    mDefaultSubmitElement == mFirstSubmitNotInElements ||
                    !mDefaultSubmitElement,
                "What happened here?");
-
-    // Notify that the state of the previous default submit element has changed
-    // if the element which is the default submit element has changed.  The new
-    // default submit element is responsible for its own state update.
-    if (oldDefaultSubmit && oldDefaultSubmit != mDefaultSubmitElement) {
-      oldDefaultSubmit->UpdateState(aNotify);
-    }
   }
 
   // If the element is subject to constraint validaton and is invalid, we need
@@ -1262,7 +1248,7 @@ nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
   // being count twice.
   if (type == FormControlType::InputRadio) {
     RefPtr<HTMLInputElement> radio = static_cast<HTMLInputElement*>(aChild);
-    radio->AddedToRadioGroup();
+    radio->AddToRadioGroup();
   }
 
   return NS_OK;
@@ -1271,6 +1257,19 @@ nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
 nsresult HTMLFormElement::AddElementToTable(nsGenericHTMLFormElement* aChild,
                                             const nsAString& aName) {
   return mControls->AddElementToTable(aChild, aName);
+}
+
+void HTMLFormElement::SetDefaultSubmitElement(
+    nsGenericHTMLFormElement* aElement) {
+  if (mDefaultSubmitElement) {
+    // It just so happens that a radio button or an <option> can't be our
+    // default submit element, so we can just blindly remove the bit.
+    mDefaultSubmitElement->RemoveStates(ElementState::DEFAULT);
+  }
+  mDefaultSubmitElement = aElement;
+  if (mDefaultSubmitElement) {
+    mDefaultSubmitElement->AddStates(ElementState::DEFAULT);
+  }
 }
 
 nsresult HTMLFormElement::RemoveElement(nsGenericHTMLFormElement* aChild,
@@ -1285,7 +1284,7 @@ nsresult HTMLFormElement::RemoveElement(nsGenericHTMLFormElement* aChild,
   MOZ_ASSERT(fc);
   if (fc->ControlType() == FormControlType::InputRadio) {
     RefPtr<HTMLInputElement> radio = static_cast<HTMLInputElement*>(aChild);
-    radio->WillRemoveFromRadioGroup();
+    radio->RemoveFromRadioGroup();
   }
 
   // Determine whether to remove the child from the elements list
@@ -1322,7 +1321,7 @@ nsresult HTMLFormElement::RemoveElement(nsGenericHTMLFormElement* aChild,
   if (aChild == mDefaultSubmitElement) {
     // Need to reset mDefaultSubmitElement.  Do this asynchronously so
     // that we're not doing it while the DOM is in flux.
-    mDefaultSubmitElement = nullptr;
+    SetDefaultSubmitElement(nullptr);
     nsContentUtils::AddScriptRunner(new RemoveElementRunnable(this));
 
     // Note that we don't need to notify on the old default submit (which is
@@ -1331,7 +1330,7 @@ nsresult HTMLFormElement::RemoveElement(nsGenericHTMLFormElement* aChild,
     // own notifications.
   }
 
-  // If the element was subject to constraint validaton and is invalid, we need
+  // If the element was subject to constraint validation and is invalid, we need
   // to update our internal counter.
   if (aUpdateValidity) {
     nsCOMPtr<nsIConstraintValidation> cvElmt = do_QueryObject(aChild);
@@ -1350,29 +1349,26 @@ void HTMLFormElement::HandleDefaultSubmitRemoval() {
     return;
   }
 
+  nsGenericHTMLFormElement* newDefaultSubmit;
   if (!mFirstSubmitNotInElements) {
-    mDefaultSubmitElement = mFirstSubmitInElements;
+    newDefaultSubmit = mFirstSubmitInElements;
   } else if (!mFirstSubmitInElements) {
-    mDefaultSubmitElement = mFirstSubmitNotInElements;
+    newDefaultSubmit = mFirstSubmitNotInElements;
   } else {
     NS_ASSERTION(mFirstSubmitInElements != mFirstSubmitNotInElements,
                  "How did that happen?");
     // Have both; use the earlier one
-    mDefaultSubmitElement =
+    newDefaultSubmit =
         nsContentUtils::CompareTreePosition(mFirstSubmitInElements,
                                             mFirstSubmitNotInElements, this) < 0
             ? mFirstSubmitInElements
             : mFirstSubmitNotInElements;
   }
+  SetDefaultSubmitElement(newDefaultSubmit);
 
   MOZ_ASSERT(mDefaultSubmitElement == mFirstSubmitInElements ||
                  mDefaultSubmitElement == mFirstSubmitNotInElements,
              "What happened here?");
-
-  // Notify about change if needed.
-  if (mDefaultSubmitElement) {
-    mDefaultSubmitElement->UpdateState(true);
-  }
 }
 
 nsresult HTMLFormElement::RemoveElementFromTableInternal(
@@ -1681,40 +1677,6 @@ nsGenericHTMLFormElement* HTMLFormElement::GetDefaultSubmitElement() const {
   return mDefaultSubmitElement;
 }
 
-bool HTMLFormElement::IsDefaultSubmitElement(
-    const nsGenericHTMLFormElement* aElement) const {
-  MOZ_ASSERT(aElement, "Unexpected call");
-
-  if (aElement == mDefaultSubmitElement) {
-    // Yes, it is
-    return true;
-  }
-
-  if (mDefaultSubmitElement || (aElement != mFirstSubmitInElements &&
-                                aElement != mFirstSubmitNotInElements)) {
-    // It isn't
-    return false;
-  }
-
-  // mDefaultSubmitElement is null, but we have a non-null submit around
-  // (aElement, in fact).  figure out whether it's in fact the default submit
-  // and just hasn't been set that way yet.  Note that we can't just call
-  // HandleDefaultSubmitRemoval because we might need to notify to handle that
-  // correctly and we don't know whether that's safe right here.
-  if (!mFirstSubmitInElements || !mFirstSubmitNotInElements) {
-    // We only have one first submit; aElement has to be it
-    return true;
-  }
-
-  // We have both kinds of submits.  Check which comes first.
-  nsGenericHTMLFormElement* defaultSubmit =
-      nsContentUtils::CompareTreePosition(mFirstSubmitInElements,
-                                          mFirstSubmitNotInElements, this) < 0
-          ? mFirstSubmitInElements
-          : mFirstSubmitNotInElements;
-  return aElement == defaultSubmit;
-}
-
 bool HTMLFormElement::ImplicitSubmissionIsDisabled() const {
   // Input text controls are always in the elements list.
   uint32_t numDisablingControlsFound = 0;
@@ -1820,30 +1782,27 @@ bool HTMLFormElement::CheckValidFormSubmission() {
 
     nsAutoScriptBlocker scriptBlocker;
 
-    for (uint32_t i = 0, length = mControls->mElements.Length(); i < length;
-         ++i) {
+    for (nsGenericHTMLFormElement* element : mControls->mElements) {
       // Input elements can trigger a form submission and we want to
       // update the style in that case.
-      if (mControls->mElements[i]->IsHTMLElement(nsGkAtoms::input) &&
-          // We don't use nsContentUtils::IsFocusedContent here, because it
-          // doesn't really do what we want for number controls: it's true
-          // for the anonymous textnode inside, but not the number control
-          // itself.  We can use the focus state, though, because that gets
-          // synced to the number control by the anonymous text control.
-          mControls->mElements[i]->State().HasState(ElementState::FOCUS)) {
-        static_cast<HTMLInputElement*>(mControls->mElements[i])
-            ->UpdateValidityUIBits(true);
+      if (auto* input = HTMLInputElement::FromNode(*element)) {
+        // We don't use nsContentUtils::IsFocusedContent here, because it
+        // doesn't really do what we want for number controls: it's true
+        // for the anonymous textnode inside, but not the number control
+        // itself.  We can use the focus state, though, because that gets
+        // synced to the number control by the anonymous text control.
+        if (input->State().HasState(ElementState::FOCUS)) {
+          input->UpdateValidityUIBits(true);
+        }
       }
-
-      mControls->mElements[i]->UpdateState(true);
+      element->UpdateValidityElementStates(true);
     }
 
     // Because of backward compatibility, <input type='image'> is not in
     // elements but can be invalid.
     // TODO: should probably be removed when bug 606491 will be fixed.
-    for (uint32_t i = 0, length = mControls->mNotInElements.Length();
-         i < length; ++i) {
-      mControls->mNotInElements[i]->UpdateState(true);
+    for (nsGenericHTMLFormElement* element : mControls->mNotInElements) {
+      element->UpdateValidityElementStates(true);
     }
   }
 
@@ -1887,77 +1846,15 @@ void HTMLFormElement::UpdateValidity(bool aElementValidity) {
     return;
   }
 
-  UpdateState(true);
+  AutoStateChangeNotifier notifier(*this, true);
+  RemoveStatesSilently(ElementState::VALID | ElementState::INVALID);
+  AddStatesSilently(mInvalidElementsCount ? ElementState::INVALID
+                                          : ElementState::VALID);
 }
 
 int32_t HTMLFormElement::IndexOfContent(nsIContent* aContent) {
   int32_t index = 0;
   return mControls->IndexOfContent(aContent, &index) == NS_OK ? index : 0;
-}
-
-void HTMLFormElement::SetCurrentRadioButton(const nsAString& aName,
-                                            HTMLInputElement* aRadio) {
-  RadioGroupManager::SetCurrentRadioButton(aName, aRadio);
-}
-
-HTMLInputElement* HTMLFormElement::GetCurrentRadioButton(
-    const nsAString& aName) {
-  return RadioGroupManager::GetCurrentRadioButton(aName);
-}
-
-NS_IMETHODIMP
-HTMLFormElement::GetNextRadioButton(const nsAString& aName,
-                                    const bool aPrevious,
-                                    HTMLInputElement* aFocusedRadio,
-                                    HTMLInputElement** aRadioOut) {
-  return RadioGroupManager::GetNextRadioButton(aName, aPrevious, aFocusedRadio,
-                                               aRadioOut);
-}
-
-NS_IMETHODIMP
-HTMLFormElement::WalkRadioGroup(const nsAString& aName,
-                                nsIRadioVisitor* aVisitor) {
-  return RadioGroupManager::WalkRadioGroup(aName, aVisitor);
-}
-
-void HTMLFormElement::AddToRadioGroup(const nsAString& aName,
-                                      HTMLInputElement* aRadio) {
-  RadioGroupManager::AddToRadioGroup(aName, aRadio, this);
-}
-
-void HTMLFormElement::RemoveFromRadioGroup(const nsAString& aName,
-                                           HTMLInputElement* aRadio) {
-  RadioGroupManager::RemoveFromRadioGroup(aName, aRadio);
-}
-
-uint32_t HTMLFormElement::GetRequiredRadioCount(const nsAString& aName) const {
-  return RadioGroupManager::GetRequiredRadioCount(aName);
-}
-
-void HTMLFormElement::RadioRequiredWillChange(const nsAString& aName,
-                                              bool aRequiredAdded) {
-  RadioGroupManager::RadioRequiredWillChange(aName, aRequiredAdded);
-}
-
-bool HTMLFormElement::GetValueMissingState(const nsAString& aName) const {
-  return RadioGroupManager::GetValueMissingState(aName);
-}
-
-void HTMLFormElement::SetValueMissingState(const nsAString& aName,
-                                           bool aValue) {
-  RadioGroupManager::SetValueMissingState(aName, aValue);
-}
-
-ElementState HTMLFormElement::IntrinsicState() const {
-  ElementState state = nsGenericHTMLElement::IntrinsicState();
-
-  if (mInvalidElementsCount) {
-    state |= ElementState::INVALID;
-  } else {
-    state |= ElementState::VALID;
-  }
-
-  return state;
 }
 
 void HTMLFormElement::Clear() {

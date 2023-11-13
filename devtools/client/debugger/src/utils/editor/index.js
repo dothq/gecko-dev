@@ -3,10 +3,9 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 export * from "./source-documents";
-export * from "./get-token-location";
 export * from "./source-search";
 export * from "../ui";
-export { onMouseOver } from "./token-events";
+export * from "./tokens";
 
 import { createEditor } from "./create-editor";
 
@@ -87,7 +86,14 @@ export function toSourceLine(sourceId, line) {
   return isWasm(sourceId) ? lineToWasmOffset(sourceId, line) : line + 1;
 }
 
-export function scrollToColumn(codeMirror, line, column) {
+export function scrollToPosition(codeMirror, line, column) {
+  // For all cases where these are on the first line and column,
+  // avoid the possibly slow computation of cursor location on large bundles.
+  if (!line && !column) {
+    codeMirror.scrollTo(0, 0);
+    return;
+  }
+
   const { top, left } = codeMirror.charCoords({ line, ch: column }, "local");
 
   if (!isVisible(codeMirror, top, left)) {
@@ -218,14 +224,4 @@ export function getCursorLine(codeMirror) {
 
 export function getCursorColumn(codeMirror) {
   return codeMirror.getCursor().ch;
-}
-
-export function getTokenEnd(codeMirror, line, column) {
-  const token = codeMirror.getTokenAt({
-    line,
-    ch: column + 1,
-  });
-  const tokenString = token.string;
-
-  return tokenString === "{" || tokenString === "[" ? null : token.end;
 }

@@ -393,7 +393,7 @@ GENERATED_BLOCKLIST_FILES = [
 
 class PETimeStamp(object):
     def __init__(self, ts):
-        max_timestamp = (2 ** 32) - 1
+        max_timestamp = (2**32) - 1
         if ts < 0 or ts > max_timestamp:
             raise ValueError("Invalid timestamp value")
         self._value = ts
@@ -562,7 +562,7 @@ class DllBlocklistEntry(object):
 
         flags_str = ""
 
-        flags = self.get_flags_list()
+        flags = sorted(self.get_flags_list())
         if flags:
             flags_str = ", " + " | ".join(map(self.get_flag_string, flags))
 
@@ -713,7 +713,6 @@ def exec_script_file(script_name, globals):
 
 
 def gen_blocklists(first_fd, defs_filename):
-
     BlocklistDescriptor.set_output_fd(first_fd)
 
     # exec_env defines the global variables that will be present in the

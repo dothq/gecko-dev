@@ -89,7 +89,7 @@ static Atomic<bool> sSupportedTypesInitialized(false);
 static EnumSet<WMFStreamType> sSupportedTypes;
 
 /* static */
-void WMFDecoderModule::Init() {
+void WMFDecoderModule::Init(Config aConfig) {
   MOZ_DIAGNOSTIC_ASSERT(NS_IsMainThread());
   if (XRE_IsContentProcess()) {
     // If we're in the content process and the UseGPUDecoder pref is set, it
@@ -99,6 +99,14 @@ void WMFDecoderModule::Init() {
   } else if (XRE_IsGPUProcess()) {
     // Always allow DXVA in the GPU process.
     sDXVAEnabled = true;
+    if (aConfig == Config::ForceEnableHEVC) {
+      WmfDecoderModuleMarkerAndLog(
+          "ReportHardwareSupport",
+          "Enable HEVC for reporting hardware support telemetry");
+      sForceEnableHEVC = true;
+    } else {
+      sForceEnableHEVC = false;
+    }
   } else if (XRE_IsRDDProcess()) {
     // Hardware accelerated decoding is explicitly only done in the GPU process
     // to avoid copying textures whenever possible. Previously, detecting
@@ -177,6 +185,7 @@ HRESULT WMFDecoderModule::CreateMFTDecoder(const WMFStreamType& aType,
       case WMFStreamType::VP8:
       case WMFStreamType::VP9:
       case WMFStreamType::AV1:
+      case WMFStreamType::HEVC:
         return E_FAIL;
       default:
         break;
@@ -235,6 +244,12 @@ HRESULT WMFDecoderModule::CreateMFTDecoder(const WMFStreamType& aType,
       return aDecoder->Create(MFT_CATEGORY_VIDEO_DECODER, MFVideoFormat_AV1,
                               MFVideoFormat_NV12);
 #endif
+    case WMFStreamType::HEVC:
+      if (!WMFDecoderModule::IsHEVCSupported() || !sDXVAEnabled) {
+        return E_FAIL;
+      }
+      return aDecoder->Create(MFT_CATEGORY_VIDEO_DECODER, MFVideoFormat_HEVC,
+                              MFVideoFormat_NV12);
     case WMFStreamType::MP3:
       return aDecoder->Create(CLSID_CMP3DecMediaObject);
     case WMFStreamType::AAC:
@@ -275,6 +290,11 @@ bool WMFDecoderModule::CanCreateMFTDecoder(const WMFStreamType& aType) {
       }
       break;
 #endif
+    case WMFStreamType::HEVC:
+      if (!WMFDecoderModule::IsHEVCSupported()) {
+        return false;
+      }
+      break;
     case WMFStreamType::MP3:
       // Prefer ffvpx mp3 decoder over WMF.
       if (StaticPrefs::media_ffvpx_mp3_enabled()) {
@@ -293,6 +313,7 @@ bool WMFDecoderModule::CanCreateMFTDecoder(const WMFStreamType& aType) {
       case WMFStreamType::VP8:
       case WMFStreamType::VP9:
       case WMFStreamType::AV1:
+      case WMFStreamType::HEVC:
         return false;
       default:
         break;
@@ -313,14 +334,14 @@ media::DecodeSupportSet WMFDecoderModule::Supports(
     DecoderDoctorDiagnostics* aDiagnostics) const {
   // This should only be supported by MFMediaEngineDecoderModule.
   if (aParams.mMediaEngineId) {
-    return media::DecodeSupport::Unsupported;
+    return media::DecodeSupportSet{};
   }
   // In GPU process, only support decoding if video. This only gives a hint of
   // what the GPU decoder *may* support. The actual check will occur in
   // CreateVideoDecoder.
   const auto& trackInfo = aParams.mConfig;
   if (XRE_IsGPUProcess() && !trackInfo.GetAsVideoInfo()) {
-    return media::DecodeSupport::Unsupported;
+    return media::DecodeSupportSet{};
   }
 
   const auto* videoInfo = trackInfo.GetAsVideoInfo();
@@ -330,12 +351,19 @@ media::DecodeSupportSet WMFDecoderModule::Supports(
   // check.
   if (videoInfo && (!SupportsColorDepth(videoInfo->mColorDepth, aDiagnostics) ||
                     videoInfo->HasAlpha())) {
-    return media::DecodeSupport::Unsupported;
+    return media::DecodeSupportSet{};
+  }
+
+  if (videoInfo && VPXDecoder::IsVP9(aParams.MimeType()) &&
+      aParams.mOptions.contains(CreateDecoderParams::Option::LowLatency)) {
+    // SVC layers are unsupported, and may be used in low latency use cases
+    // (WebRTC).
+    return media::DecodeSupportSet{};
   }
 
   WMFStreamType type = GetStreamTypeFromMimeType(aParams.MimeType());
   if (type == WMFStreamType::Unknown) {
-    return media::DecodeSupport::Unsupported;
+    return media::DecodeSupportSet{};
   }
 
   if (CanCreateMFTDecoder(type)) {
@@ -348,7 +376,7 @@ media::DecodeSupportSet WMFDecoderModule::Supports(
     }
   }
 
-  return media::DecodeSupport::Unsupported;
+  return media::DecodeSupportSet{};
 }
 
 nsresult WMFDecoderModule::Startup() {
@@ -437,15 +465,19 @@ media::DecodeSupportSet WMFDecoderModule::SupportsMimeType(
     const nsACString& aMimeType, DecoderDoctorDiagnostics* aDiagnostics) const {
   UniquePtr<TrackInfo> trackInfo = CreateTrackInfoWithMIMEType(aMimeType);
   if (!trackInfo) {
-    return media::DecodeSupport::Unsupported;
+    return media::DecodeSupportSet{};
   }
   auto supports = Supports(SupportDecoderParams(*trackInfo), aDiagnostics);
   MOZ_LOG(
       sPDMLog, LogLevel::Debug,
       ("WMF decoder %s requested type '%s'",
-       supports != media::DecodeSupport::Unsupported ? "supports" : "rejects",
-       aMimeType.BeginReading()));
+       !supports.isEmpty() ? "supports" : "rejects", aMimeType.BeginReading()));
   return supports;
+}
+
+/* static */
+bool WMFDecoderModule::IsHEVCSupported() {
+  return sForceEnableHEVC || StaticPrefs::media_wmf_hevc_enabled() == 1;
 }
 
 }  // namespace mozilla

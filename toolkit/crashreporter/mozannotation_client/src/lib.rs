@@ -27,26 +27,52 @@ pub struct Annotation {
     pub address: usize,
 }
 
-pub type AnnotationTable = Vec<Annotation>;
+pub struct AnnotationTable {
+    data: Vec<Annotation>,
+    magic_number: u32,
+}
+
+impl AnnotationTable {
+    const fn new() -> AnnotationTable {
+        AnnotationTable {
+            data: Vec::new(),
+            magic_number: ANNOTATION_TYPE,
+        }
+    }
+
+    pub const fn verify(&self) -> bool {
+        self.magic_number == ANNOTATION_TYPE
+    }
+
+    pub fn get_ptr(&self) -> *const Annotation {
+        self.data.as_ptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+}
+
 pub type AnnotationMutex = Mutex<AnnotationTable>;
 
 #[cfg(target_os = "windows")]
 #[link_section = "mozannot"]
-static MOZANNOTATIONS: AnnotationMutex = Mutex::new(Vec::new());
+static MOZANNOTATIONS: AnnotationMutex = Mutex::new(AnnotationTable::new());
 #[cfg(any(target_os = "linux", target_os = "android"))]
-static MOZANNOTATIONS: AnnotationMutex = Mutex::new(Vec::new());
+static MOZANNOTATIONS: AnnotationMutex = Mutex::new(AnnotationTable::new());
 #[cfg(target_os = "macos")]
 #[link_section = "__DATA,mozannotation"]
-static MOZANNOTATIONS: AnnotationMutex = Mutex::new(Vec::new());
+static MOZANNOTATIONS: AnnotationMutex = Mutex::new(AnnotationTable::new());
 
 #[no_mangle]
 unsafe fn mozannotation_get() -> *const AnnotationMutex {
     &MOZANNOTATIONS as _
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 extern "C" {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub static MOZANNOTATION_NOTE_REFERENCE: &'static u32;
+    pub static __ehdr_start: [u8; 0];
 }
 
 #[cfg(target_os = "windows")]
@@ -58,7 +84,6 @@ pub const ANNOTATION_SECTION: &'static [u8; 8] = b"mozannot";
 const _ANNOTATION_NOTE_ALIGNMENT: u32 = 4;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub const ANNOTATION_NOTE_NAME: &str = "mozannotation";
-#[cfg(any(target_os = "linux", target_os = "android"))]
 pub const ANNOTATION_TYPE: u32 = u32::from_le_bytes(*b"MOZA");
 
 // We use the crashpad crash info trick here. We create a program note which
@@ -76,6 +101,11 @@ pub const ANNOTATION_TYPE: u32 = u32::from_le_bytes(*b"MOZA");
 // address of the `desc` field, load its contents (that is the offset we stored
 // at link time) and add them together. The resulting address is the location of
 // the MOZANNOTATIONS static in memory.
+//
+// When elfhack is used, the note might be moved after the aforementioned offset
+// is calculated, without it being updated. To compensate for this we store the
+// offset between the `ehdr` field and the ELF header. At runtime we can
+// use this offset to adjust for the shift of the `desc` field.
 #[cfg(all(
     target_pointer_width = "64",
     any(target_os = "linux", target_os = "android")
@@ -99,9 +129,12 @@ global_asm!(
     "  .balign 4", // TODO: _ANNOTATION_NOTE_ALIGNMENT
     "desc:",
     "  .quad {mozannotation_symbol} - desc",
+    "ehdr:",
+    "  .quad {__ehdr_start} - ehdr",
     "desc_end:",
     "  .size MOZANNOTATION_NOTE, .-MOZANNOTATION_NOTE",
-    mozannotation_symbol = sym MOZANNOTATIONS
+    mozannotation_symbol = sym MOZANNOTATIONS,
+    __ehdr_start = sym __ehdr_start
 );
 
 // The following global_asm!() expressions for other targets because Rust's
@@ -126,9 +159,12 @@ global_asm!(
     "  .balign 4",
     "desc:",
     "  .long {mozannotation_symbol} - desc",
+    "ehdr:",
+    "  .long {__ehdr_start} - ehdr",
     "desc_end:",
     "  .size MOZANNOTATION_NOTE, .-MOZANNOTATION_NOTE",
-    mozannotation_symbol = sym MOZANNOTATIONS
+    mozannotation_symbol = sym MOZANNOTATIONS,
+    __ehdr_start = sym __ehdr_start
 );
 
 #[cfg(all(
@@ -183,6 +219,7 @@ pub struct MozAnnotationNote {
     pub note_type: u32,
     pub name: [u8; 16], // "mozannotation" plus padding to next 4-bytes boundary
     pub desc: usize,
+    pub ehdr: isize,
 }
 
 /// Register an annotation containing an nsCString.
@@ -191,7 +228,7 @@ pub struct MozAnnotationNote {
 /// This function will be exposed to C++
 #[no_mangle]
 pub extern "C" fn mozannotation_register_nscstring(id: u32, address: *const nsCString) -> bool {
-    let mut annotations = MOZANNOTATIONS.lock().unwrap();
+    let annotations = &mut MOZANNOTATIONS.lock().unwrap().data;
 
     if annotations.iter().any(|e| e.id == id) {
         return false;
@@ -215,7 +252,7 @@ pub extern "C" fn mozannotation_register_cstring(
     id: u32,
     address: *const *const std::ffi::c_char,
 ) -> bool {
-    let mut annotations = MOZANNOTATIONS.lock().unwrap();
+    let annotations = &mut MOZANNOTATIONS.lock().unwrap().data;
 
     if annotations.iter().any(|e| e.id == id) {
         return false;
@@ -239,7 +276,7 @@ pub extern "C" fn mozannotation_register_char_buffer(
     id: u32,
     address: *const std::ffi::c_char,
 ) -> bool {
-    let mut annotations = MOZANNOTATIONS.lock().unwrap();
+    let annotations = &mut MOZANNOTATIONS.lock().unwrap().data;
 
     if annotations.iter().any(|e| e.id == id) {
         return false;
@@ -260,7 +297,7 @@ pub extern "C" fn mozannotation_register_char_buffer(
 /// This function will be exposed to C++
 #[no_mangle]
 pub extern "C" fn mozannotation_register_usize(id: u32, address: *const usize) -> bool {
-    let mut annotations = MOZANNOTATIONS.lock().unwrap();
+    let annotations = &mut MOZANNOTATIONS.lock().unwrap().data;
 
     if annotations.iter().any(|e| e.id == id) {
         return false;
@@ -285,7 +322,7 @@ pub extern "C" fn mozannotation_register_bytebuffer(
     address: *const c_void,
     size: u32,
 ) -> bool {
-    let mut annotations = MOZANNOTATIONS.lock().unwrap();
+    let annotations = &mut MOZANNOTATIONS.lock().unwrap().data;
 
     if annotations.iter().any(|e| e.id == id) {
         return false;
@@ -305,7 +342,7 @@ pub extern "C" fn mozannotation_register_bytebuffer(
 /// This function will be exposed to C++
 #[no_mangle]
 pub extern "C" fn mozannotation_unregister(id: u32) -> bool {
-    let mut annotations = MOZANNOTATIONS.lock().unwrap();
+    let annotations = &mut MOZANNOTATIONS.lock().unwrap().data;
     let index = annotations.iter().position(|e| e.id == id);
 
     if let Some(index) = index {

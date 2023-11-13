@@ -14,22 +14,11 @@ connectFluent();
 // Any fluent imports should go through MozXULElement.insertFTLIfNeeded.
 window.MozXULElement = {
   insertFTLIfNeeded,
+};
 
-  // For some reason Storybook doesn't watch the static folder. By creating a
-  // method with a dynamic import we can pull the desired files into the bundle.
-  async importCss(resourceName) {
-    // eslint-disable-next-line no-unsanitized/method
-    let file = await import(
-      /* webpackInclude: /.*[\/\\].*\.css$/ */
-      `browser/themes/shared/${resourceName}`
-    );
-    // eslint-disable-next-line no-unsanitized/method
-    file = await import(
-      /* webpackInclude: /.*[\/\\].*\.css$/ */
-      `browser/components/firefoxview/${resourceName}`
-    );
-    return file;
-  },
+// Used to set prefs in unprivileged contexts.
+window.RPMSetPref = () => {
+  /* NOOP */
 };
 
 /**
@@ -60,15 +49,15 @@ class WithCommonStyles extends MozLitElement {
     :host,
     :root {
       font: message-box;
+      font-size: var(--font-size-root);
       appearance: none;
-      background-color: var(--in-content-page-background);
-      color: var(--in-content-page-color);
+      background-color: var(--color-canvas);
+      color: var(--text-color);
       -moz-box-layout: flex;
     }
 
-    :host,
-    :root:not(.system-font-size) {
-      font-size: 15px;
+    :host {
+      font-size: var(--font-size-root);
     }
   `;
 
@@ -76,6 +65,11 @@ class WithCommonStyles extends MozLitElement {
     story: { type: Function },
     context: { type: Object },
   };
+
+  connectedCallback() {
+    super.connectedCallback();
+    this.classList.add("anonymous-content-host");
+  }
 
   storyContent() {
     if (this.story) {

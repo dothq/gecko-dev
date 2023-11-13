@@ -222,7 +222,6 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["browser.cache.disk.capacity", { what: RECORD_PREF_VALUE }],
   ["browser.cache.memory.enable", { what: RECORD_PREF_VALUE }],
   ["browser.formfill.enable", { what: RECORD_PREF_VALUE }],
-  ["browser.fixup.alternate.enabled", { what: RECORD_DEFAULTPREF_VALUE }],
   ["browser.migrate.interactions.bookmarks", { what: RECORD_PREF_VALUE }],
   ["browser.migrate.interactions.csvpasswords", { what: RECORD_PREF_VALUE }],
   ["browser.migrate.interactions.history", { what: RECORD_PREF_VALUE }],
@@ -264,7 +263,6 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
     "browser.urlbar.suggest.quicksuggest.sponsored",
     { what: RECORD_DEFAULTPREF_VALUE },
   ],
-  ["browser.urlbar.suggest.bestmatch", { what: RECORD_DEFAULTPREF_VALUE }],
   ["browser.urlbar.suggest.searches", { what: RECORD_PREF_VALUE }],
   ["devtools.chrome.enabled", { what: RECORD_PREF_VALUE }],
   ["devtools.debugger.enabled", { what: RECORD_PREF_VALUE }],
@@ -272,6 +270,7 @@ const DEFAULT_ENVIRONMENT_PREFS = new Map([
   ["doh-rollout.doorhanger-decision", { what: RECORD_PREF_VALUE }],
   ["dom.ipc.processCount", { what: RECORD_PREF_VALUE }],
   ["dom.max_script_run_time", { what: RECORD_PREF_VALUE }],
+  ["dom.popup_allowed_events", { what: RECORD_PREF_VALUE }],
   ["editor.truncate_user_pastes", { what: RECORD_PREF_VALUE }],
   ["extensions.InstallTrigger.enabled", { what: RECORD_PREF_VALUE }],
   ["extensions.InstallTriggerImpl.enabled", { what: RECORD_PREF_VALUE }],
@@ -2082,13 +2081,9 @@ EnvironmentCache.prototype = {
         data = { winPackageFamilyName, ...data };
       }
       data = { ...this._getProcessData(), ...data };
+      data.sec = this._getSecurityAppData();
     } else if (AppConstants.platform == "android") {
       data.device = this._getDeviceData();
-    }
-
-    // Windows 8+
-    if (AppConstants.isPlatformAndVersionAtLeast("win", "6.2")) {
-      data.sec = this._getSecurityAppData();
     }
 
     return data;

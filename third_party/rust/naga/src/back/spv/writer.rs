@@ -356,7 +356,7 @@ impl Writer {
                     crate::TypeInner::RayQuery => None,
                     _ => {
                         let type_id = self.get_type_id(LookupType::Handle(variable.ty));
-                        Some(self.write_constant_null(type_id))
+                        Some(self.get_constant_null(type_id))
                     }
                 }),
             );
@@ -1016,11 +1016,26 @@ impl Writer {
                     ref members,
                     span: _,
                 } => {
+                    let mut has_runtime_array = false;
                     let mut member_ids = Vec::with_capacity(members.len());
                     for (index, member) in members.iter().enumerate() {
+                        let member_ty = &arena[member.ty];
+                        match member_ty.inner {
+                            crate::TypeInner::Array {
+                                base: _,
+                                size: crate::ArraySize::Dynamic,
+                                stride: _,
+                            } => {
+                                has_runtime_array = true;
+                            }
+                            _ => (),
+                        }
                         self.decorate_struct_member(id, index, member, arena)?;
                         let member_id = self.get_type_id(LookupType::Handle(member.ty));
                         member_ids.push(member_id);
+                    }
+                    if has_runtime_array {
+                        self.decorate(id, Decoration::Block, &[]);
                     }
                     Instruction::type_struct(id, member_ids.as_slice())
                 }
@@ -1206,6 +1221,16 @@ impl Writer {
             .to_words(&mut self.logical_layout.declarations);
     }
 
+    pub(super) fn get_constant_null(&mut self, type_id: Word) -> Word {
+        let null = CachedConstant::ZeroValue(type_id);
+        if let Some(&id) = self.cached_constants.get(&null) {
+            return id;
+        }
+        let id = self.write_constant_null(type_id);
+        self.cached_constants.insert(null, id);
+        id
+    }
+
     pub(super) fn write_constant_null(&mut self, type_id: Word) -> Word {
         let null_id = self.id_gen.next();
         Instruction::constant_null(type_id, null_id)
@@ -1226,7 +1251,7 @@ impl Writer {
             }
             crate::Expression::ZeroValue(ty) => {
                 let type_id = self.get_type_id(LookupType::Handle(ty));
-                self.write_constant_null(type_id)
+                self.get_constant_null(type_id)
             }
             crate::Expression::Compose { ty, ref components } => {
                 let component_ids: Vec<_> = components
@@ -1289,7 +1314,7 @@ impl Writer {
                 // get wrapped, and we're initializing `WorkGroup` variables.
                 let var_id = self.global_variables[handle.index()].var_id;
                 let var_type_id = self.get_type_id(LookupType::Handle(var.ty));
-                let init_word = self.write_constant_null(var_type_id);
+                let init_word = self.get_constant_null(var_type_id);
                 Instruction::store(var_id, init_word, None)
             })
             .collect::<Vec<_>>();
@@ -1327,7 +1352,7 @@ impl Writer {
             id
         };
 
-        let zero_id = self.write_constant_null(uint3_type_id);
+        let zero_id = self.get_constant_null(uint3_type_id);
         let bool3_type_id = self.get_bool3_type_id();
 
         let eq_id = self.id_gen.next();
@@ -1424,6 +1449,7 @@ impl Writer {
                 location,
                 interpolation,
                 sampling,
+                second_blend_source,
             } => {
                 self.decorate(id, Decoration::Location, &[location]);
 
@@ -1463,6 +1489,9 @@ impl Writer {
                         }
                     }
                 }
+                if second_blend_source {
+                    self.decorate(id, Decoration::Index, &[1]);
+                }
             }
             crate::Binding::BuiltIn(built_in) => {
                 use crate::BuiltIn as Bi;
@@ -1485,8 +1514,20 @@ impl Writer {
                     // vertex
                     Bi::BaseInstance => BuiltIn::BaseInstance,
                     Bi::BaseVertex => BuiltIn::BaseVertex,
-                    Bi::ClipDistance => BuiltIn::ClipDistance,
-                    Bi::CullDistance => BuiltIn::CullDistance,
+                    Bi::ClipDistance => {
+                        self.require_any(
+                            "`clip_distance` built-in",
+                            &[spirv::Capability::ClipDistance],
+                        )?;
+                        BuiltIn::ClipDistance
+                    }
+                    Bi::CullDistance => {
+                        self.require_any(
+                            "`cull_distance` built-in",
+                            &[spirv::Capability::CullDistance],
+                        )?;
+                        BuiltIn::CullDistance
+                    }
                     Bi::InstanceIndex => BuiltIn::InstanceIndex,
                     Bi::PointSize => BuiltIn::PointSize,
                     Bi::VertexIndex => BuiltIn::VertexIndex,
@@ -1607,7 +1648,6 @@ impl Writer {
                             space: global_variable.space,
                         }))
                 }
-            } else {
             }
         };
 
@@ -1642,16 +1682,17 @@ impl Writer {
         } else {
             // This is a global variable in the Storage address space. The only
             // way it could have `global_needs_wrapper() == false` is if it has
-            // a runtime-sized array. In this case, we need to decorate it with
-            // Block.
+            // a runtime-sized or binding array.
+            // Runtime-sized arrays were decorated when iterating through struct content.
+            // Now binding arrays require Block decorating.
             if let crate::AddressSpace::Storage { .. } = global_variable.space {
-                let decorated_id = match ir_module.types[global_variable.ty].inner {
+                match ir_module.types[global_variable.ty].inner {
                     crate::TypeInner::BindingArray { base, .. } => {
-                        self.get_type_id(LookupType::Handle(base))
+                        let decorated_id = self.get_type_id(LookupType::Handle(base));
+                        self.decorate(decorated_id, Decoration::Block, &[]);
                     }
-                    _ => inner_type_id,
+                    _ => (),
                 };
-                self.decorate(decorated_id, Decoration::Block, &[]);
             }
             if substitute_inner_type_lookup.is_some() {
                 inner_type_id
@@ -1663,7 +1704,7 @@ impl Writer {
         let init_word = match (global_variable.space, self.zero_initialize_workgroup_memory) {
             (crate::AddressSpace::Private, _)
             | (crate::AddressSpace::WorkGroup, super::ZeroInitializeWorkgroupMemoryMode::Native) => {
-                init_word.or_else(|| Some(self.write_constant_null(inner_type_id)))
+                init_word.or_else(|| Some(self.get_constant_null(inner_type_id)))
             }
             _ => init_word,
         };
@@ -1811,8 +1852,10 @@ impl Writer {
         if self.flags.contains(WriterFlags::DEBUG) {
             if let Some(debug_info) = debug_info.as_ref() {
                 let source_file_id = self.id_gen.next();
-                self.debugs
-                    .push(Instruction::string(debug_info.file_name, source_file_id));
+                self.debugs.push(Instruction::string(
+                    &debug_info.file_name.display().to_string(),
+                    source_file_id,
+                ));
 
                 debug_info_inner = Some(DebugInfoInner {
                     source_code: debug_info.source_code,

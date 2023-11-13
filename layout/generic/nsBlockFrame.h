@@ -121,7 +121,7 @@ class nsBlockFrame : public nsContainerFrame {
   void InsertFrames(ChildListID aListID, nsIFrame* aPrevFrame,
                     const nsLineList::iterator* aPrevFrameLine,
                     nsFrameList&& aFrameList) override;
-  void RemoveFrame(ChildListID aListID, nsIFrame* aOldFrame) override;
+  void RemoveFrame(DestroyContext&, ChildListID, nsIFrame* aOldFrame) override;
   nsContainerFrame* GetContentInsertionFrame() override;
   void AppendDirectlyOwnedAnonBoxes(nsTArray<OwnedAnonBox>& aResult) override;
   const nsFrameList& GetChildList(ChildListID aListID) const override;
@@ -136,8 +136,8 @@ class nsBlockFrame : public nsContainerFrame {
       mozilla::WritingMode aWM, BaselineSharingGroup aBaselineGroup,
       BaselineExportContext aExportContext) const override;
   nscoord GetCaretBaseline() const override;
-  void DestroyFrom(nsIFrame* aDestructRoot,
-                   PostDestroyData& aPostDestroyData) override;
+  void Destroy(DestroyContext&) override;
+
   bool IsFloatContainingBlock() const override;
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                         const nsDisplayListSet& aLists) override;
@@ -323,7 +323,7 @@ class nsBlockFrame : public nsContainerFrame {
 
   void StealFrame(nsIFrame* aChild) override;
 
-  void DeleteNextInFlowChild(nsIFrame* aNextInFlow,
+  void DeleteNextInFlowChild(DestroyContext&, nsIFrame* aNextInFlow,
                              bool aDeletingEmptyFrames) override;
 
   /**
@@ -481,9 +481,9 @@ class nsBlockFrame : public nsContainerFrame {
   // helper for SlideLine and UpdateLineContainerSize
   void MoveChildFramesOfLine(nsLineBox* aLine, nscoord aDeltaBCoord);
 
-  void ComputeFinalSize(const ReflowInput& aReflowInput,
-                        BlockReflowState& aState, ReflowOutput& aMetrics,
-                        nscoord* aBEndEdgeOfChildren);
+  // Returns block-end edge of children.
+  nscoord ComputeFinalSize(const ReflowInput& aReflowInput,
+                           BlockReflowState& aState, ReflowOutput& aMetrics);
 
   /**
    * Helper method for Reflow(). Computes the overflow areas created by our
@@ -534,6 +534,61 @@ class nsBlockFrame : public nsContainerFrame {
    */
   bool IsVisualFormControl(nsPresContext* aPresContext);
 
+  /**
+   * For text-wrap:balance, we iteratively try reflowing with adjusted inline
+   * size to find the "best" result (the tightest size that can be applied
+   * without increasing the total line count of the block).
+   * This record is used to manage the state of these "trial reflows", and
+   * return results from the final trial.
+   */
+  struct TrialReflowState {
+    // Values pre-computed at start of Reflow(), constant across trials.
+    const nscoord mConsumedBSize;
+    const nscoord mEffectiveContentBoxBSize;
+    bool mNeedFloatManager;
+    // Settings for the current trial.
+    bool mBalancing = false;
+    nscoord mInset = 0;
+    // Results computed during the trial reflow. Values from the final trial
+    // will be used by the remainder of Reflow().
+    mozilla::OverflowAreas mOcBounds;
+    mozilla::OverflowAreas mFcBounds;
+    nscoord mBlockEndEdgeOfChildren = 0;
+    nscoord mContainerWidth = 0;
+
+    // Initialize for the initial trial reflow, with zero inset.
+    TrialReflowState(nscoord aConsumedBSize, nscoord aEffectiveContentBoxBSize,
+                     bool aNeedFloatManager)
+        : mConsumedBSize(aConsumedBSize),
+          mEffectiveContentBoxBSize(aEffectiveContentBoxBSize),
+          mNeedFloatManager(aNeedFloatManager) {}
+
+    // Adjust the inset amount, and reset state for a new trial.
+    void ResetForBalance(nscoord aInsetDelta) {
+      // Tells the reflow-lines loop we must consider all lines "dirty" (as we
+      // are modifying the effective inline-size to be used).
+      mBalancing = true;
+      // Adjust inset to apply.
+      mInset += aInsetDelta;
+      // Re-initialize state that the reflow loop will compute.
+      mOcBounds.Clear();
+      mFcBounds.Clear();
+      mBlockEndEdgeOfChildren = 0;
+      mContainerWidth = 0;
+    }
+  };
+
+  /**
+   * Internal helper for Reflow(); may be called repeatedly during a single
+   * Reflow() in order to implement text-wrap:balance.
+   * This method applies aTrialState.mInset during line-breaking to reduce
+   * the effective available inline-size (without affecting alignment).
+   */
+  nsReflowStatus TrialReflow(nsPresContext* aPresContext,
+                             ReflowOutput& aMetrics,
+                             const ReflowInput& aReflowInput,
+                             TrialReflowState& aTrialState);
+
  public:
   /**
    * Helper function for the frame ctor to register a ::marker frame.
@@ -551,19 +606,14 @@ class nsBlockFrame : public nsContainerFrame {
    * -- destroys all removed frames
    */
   enum { REMOVE_FIXED_CONTINUATIONS = 0x02, FRAMES_ARE_EMPTY = 0x04 };
-  void DoRemoveFrame(nsIFrame* aDeletedFrame, uint32_t aFlags) {
-    AutoPostDestroyData data(PresContext());
-    DoRemoveFrameInternal(aDeletedFrame, aFlags, data.mData);
-  }
+  void DoRemoveFrame(DestroyContext&, nsIFrame* aDeletedFrame, uint32_t aFlags);
 
   void ReparentFloats(nsIFrame* aFirstFrame, nsBlockFrame* aOldParent,
                       bool aReparentSiblings);
 
-  virtual bool ComputeCustomOverflow(
-      mozilla::OverflowAreas& aOverflowAreas) override;
+  bool ComputeCustomOverflow(mozilla::OverflowAreas&) override;
 
-  virtual void UnionChildOverflow(
-      mozilla::OverflowAreas& aOverflowAreas) override;
+  void UnionChildOverflow(mozilla::OverflowAreas&) override;
 
   /**
    * Load all of aFrame's floats into the float manager iff aFrame is not a
@@ -601,10 +651,6 @@ class nsBlockFrame : public nsContainerFrame {
   bool IsInLineClampContext() const;
 
  protected:
-  /** @see DoRemoveFrame */
-  void DoRemoveFrameInternal(nsIFrame* aDeletedFrame, uint32_t aFlags,
-                             PostDestroyData& data);
-
   /** grab overflow lines from this block's prevInFlow, and make them
    * part of this block's mLines list.
    * @return true if any lines were drained.
@@ -677,7 +723,7 @@ class nsBlockFrame : public nsContainerFrame {
                        bool aCollectFromSiblings);
 
   // Remove a float, abs, rel positioned frame from the appropriate block's list
-  static void DoRemoveOutOfFlowFrame(nsIFrame* aFrame);
+  static void DoRemoveOutOfFlowFrame(DestroyContext&, nsIFrame*);
 
   /** set up the conditions necessary for an resize reflow
    * the primary task is to mark the minimumly sufficient lines dirty.

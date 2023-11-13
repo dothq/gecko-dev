@@ -71,15 +71,10 @@ groupbox[data-category] {
 
 html|h1 {
   margin: 0 0 8px;
-  font-size: 1.46em;
-  font-weight: 300;
-  line-height: 1.3em;
 }
 
 html|h2 {
   margin: 16px 0 4px;
-  font-size: 1.14em;
-  line-height: normal;
 }
 
 description.indent,
@@ -93,6 +88,10 @@ menulist,
 html|select {
   /* override the root rule */
   user-select: none;
+}
+
+.section-description {
+  color: var(--text-color-deemphasized);
 }
 
 /* Buttons get a default min-width in XUL. When they also have flex, they will
@@ -243,10 +242,11 @@ checkbox {
 
 #isDefaultLabel,
 #isNotDefaultLabel {
-  font-weight: 600;
+  font-weight: var(--font-weight-bold);
 }
 
-@supports not -moz-bool-pref("browser.migrate.preferences-entrypoint.enabled") {
+/* stylelint-disable-next-line media-query-no-invalid */
+@media not (-moz-bool-pref: "browser.migrate.preferences-entrypoint.enabled") {
   #dataMigrationGroup {
     display: none;
   }
@@ -467,7 +467,7 @@ richlistitem[selected] .actionsMenu:focus-visible {
 }
 
 #homeContentsGroup [data-subcategory] .section-checkbox {
-  font-weight: 600;
+  font-weight: var(--font-weight-bold);
 }
 
 #homeContentsGroup [data-subcategory] > vbox menulist {
@@ -527,10 +527,6 @@ a[is="moz-support-link"]:not(.sidebar-footer-link) {
 
 #allowSmartSize {
   margin-block: 0 4px;
-}
-
-#nonTechnicalPrivacyBox {
-  margin-top: 32px;
 }
 
 #historyPane {
@@ -633,7 +629,7 @@ html|dialog,
 }
 
 .dialogTitle {
-  font-weight: 600;
+  font-weight: var(--font-weight-bold);
   text-align: center;
   user-select: none;
 }
@@ -1126,6 +1122,12 @@ menulist[indicator=true] > menupopup menuitem[indicator=true]:not([image]) > .me
   margin-inline-end: 4px;
 }
 
+#activeLanguages,
+#selectedLocales {
+  min-height: 15em;
+  contain: size;
+}
+
 #selectedLocales > richlistitem {
   padding-inline-start: 13px;
 }
@@ -1140,6 +1142,13 @@ menulist[indicator=true] > menupopup menuitem[indicator=true]:not([image]) > .me
 
 .action-button {
   margin-inline-end: 0;
+}
+
+.languages-grid {
+  flex: 1;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  grid-template-columns: 1fr auto;
 }
 
 /* Menulist styles */

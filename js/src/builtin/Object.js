@@ -347,9 +347,9 @@ function ObjectFromEntries(iter) {
   // CreateDataPropertyOnObject, so it looks more like the polyfill
   // <https://github.com/tc39/proposal-object-from-entries/blob/master/polyfill.js>
   // than the spec algorithm.
-  const obj = {};
+  var obj = {};
 
-  for (const pair of allowContentIter(iter)) {
+  for (var pair of allowContentIter(iter)) {
     if (!IsObject(pair)) {
       ThrowTypeError(JSMSG_INVALID_MAP_ITERABLE, "Object.fromEntries");
     }
@@ -368,7 +368,6 @@ function ObjectHasOwn(O, P) {
   return hasOwn(P, obj);
 }
 
-#ifdef NIGHTLY_BUILD
 // Array Grouping proposal
 //
 // Object.groupBy ( items, callbackfn )
@@ -435,4 +434,3 @@ function ObjectGroupBy(items, callbackfn) {
   // Step 4.
   return obj;
 }
-#endif

@@ -113,8 +113,6 @@ class LoadListener {
 export var SearchUtils = {
   BROWSER_SEARCH_PREF,
 
-  SETTINGS_KEY: "search-config",
-
   /**
    * This is the Remote Settings key that we use to get the ignore lists for
    * engines.
@@ -248,19 +246,24 @@ export var SearchUtils = {
    *
    * @param {string|nsIURI} url
    *   The URL string from which to create an nsIChannel.
+   * @param {nsIContentPolicy} contentPolicyType
+   *   The type of document being loaded.
    * @returns {nsIChannel}
    *   an nsIChannel object, or null if the url is invalid.
    */
-  makeChannel(url) {
+  makeChannel(url, contentPolicyType) {
+    if (!contentPolicyType) {
+      throw new Error("makeChannel called with invalid content policy type");
+    }
     try {
       let uri = typeof url == "string" ? Services.io.newURI(url) : url;
       return Services.io.newChannelFromURI(
         uri,
         null /* loadingNode */,
-        Services.scriptSecurityManager.getSystemPrincipal(),
+        Services.scriptSecurityManager.createNullPrincipal({}),
         null /* triggeringPrincipal */,
         Ci.nsILoadInfo.SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-        Ci.nsIContentPolicy.TYPE_OTHER
+        contentPolicyType
       );
     } catch (ex) {}
 
@@ -379,6 +382,17 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "loggingEnabled",
   BROWSER_SEARCH_PREF + "log",
   false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  SearchUtils,
+  "newSearchConfigEnabled",
+  "browser.search.newSearchConfig.enabled",
+  false
+);
+
+ChromeUtils.defineLazyGetter(SearchUtils, "SETTINGS_KEY", () =>
+  SearchUtils.newSearchConfigEnabled ? "search-config-v2" : "search-config"
 );
 
 // Can't use defineLazyPreferenceGetter because we want the value

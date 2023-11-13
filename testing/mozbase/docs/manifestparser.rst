@@ -87,7 +87,9 @@ advantages:
 .. code-block:: text
 
      ['test_works_on_windows_only.js']
-     skip-if = ''' os != 'win' '''
+     skip-if = [
+        "os != 'win'",
+     ]
 
 * ability to markup tests with metadata. We have a large, complicated,
   and always changing infrastructure.  key, value metadata may be used
@@ -316,7 +318,9 @@ files will look like this:
 .. code-block:: text
 
     ['test_foo.py']
-    timeout-if = "300, os == 'win'"
+    timeout-if = [
+      "300, os == 'win'",
+    ]
 
 The value is <timeout>, <condition> where condition is the same format as the one in
 `skip-if`. In the above case, if os == 'win', a timeout of 300 seconds will be
@@ -518,7 +522,7 @@ through several design considerations.
   programmatically editable. While the ``*.ini`` format worked for a long
   time the underspecified syntax made it difficult to reliably parse.
   The new ``*.toml`` format is widely accepted, as a formal syntax as well
-  as libararies to read and edit it (e.g. ``tomlkit``).
+  as libraries to read and edit it (e.g. ``tomlkit``).
 
 * there should be a single file that may easily be
   transported. Traditionally, test harnesses have lived in

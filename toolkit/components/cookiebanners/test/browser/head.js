@@ -40,6 +40,7 @@ async function testSetup() {
   });
 
   // Reset GLEAN (FOG) telemetry to avoid data bleeding over from other tests.
+  await Services.fog.testFlushAllChildren();
   Services.fog.testResetFOG();
 
   registerCleanupFunction(() => {
@@ -63,7 +64,7 @@ async function clickTestSetup() {
       // Enable debug logging.
       ["cookiebanners.bannerClicking.logLevel", "Debug"],
       ["cookiebanners.bannerClicking.testing", true],
-      ["cookiebanners.bannerClicking.timeout", 500],
+      ["cookiebanners.bannerClicking.timeoutAfterLoad", 500],
       ["cookiebanners.bannerClicking.enabled", true],
       ["cookiebanners.cookieInjector.enabled", false],
     ],
@@ -160,10 +161,14 @@ async function openPageAndVerify({
   expected,
   bannerId = "banner",
   keepTabOpen = false,
+  expectActorEnabled = true,
 }) {
   info(`Opening ${testURL}`);
 
-  let promise = promiseBannerClickingFinish(domain);
+  // If the actor isn't enabled there won't be a "finished" observer message.
+  let promise = expectActorEnabled
+    ? promiseBannerClickingFinish(domain)
+    : new Promise(resolve => setTimeout(resolve, 0));
 
   let tab = await BrowserTestUtils.openNewForegroundTab(win.gBrowser, testURL);
 
@@ -222,7 +227,7 @@ async function openIframeAndVerify({
 /**
  * A helper function to insert testing rules.
  */
-function insertTestClickRules() {
+function insertTestClickRules(insertGlobalRules = true) {
   info("Clearing existing rules");
   Services.cookieBanners.resetRules(false);
 
@@ -262,37 +267,39 @@ function insertTestClickRules() {
   );
   Services.cookieBanners.insertRule(ruleB);
 
-  info("Add global ruleC which targets a non-existing banner (presence).");
-  let ruleC = Cc["@mozilla.org/cookie-banner-rule;1"].createInstance(
-    Ci.nsICookieBannerRule
-  );
-  ruleC.id = genUUID();
-  ruleC.domains = [];
-  ruleC.addClickRule(
-    "div#nonExistingBanner",
-    false,
-    Ci.nsIClickRule.RUN_ALL,
-    null,
-    null,
-    "button#optIn"
-  );
-  Services.cookieBanners.insertRule(ruleC);
+  if (insertGlobalRules) {
+    info("Add global ruleC which targets a non-existing banner (presence).");
+    let ruleC = Cc["@mozilla.org/cookie-banner-rule;1"].createInstance(
+      Ci.nsICookieBannerRule
+    );
+    ruleC.id = genUUID();
+    ruleC.domains = [];
+    ruleC.addClickRule(
+      "div#nonExistingBanner",
+      false,
+      Ci.nsIClickRule.RUN_ALL,
+      null,
+      null,
+      "button#optIn"
+    );
+    Services.cookieBanners.insertRule(ruleC);
 
-  info("Add global ruleD which targets a non-existing banner (presence).");
-  let ruleD = Cc["@mozilla.org/cookie-banner-rule;1"].createInstance(
-    Ci.nsICookieBannerRule
-  );
-  ruleD.id = genUUID();
-  ruleD.domains = [];
-  ruleD.addClickRule(
-    "div#nonExistingBanner2",
-    false,
-    Ci.nsIClickRule.RUN_ALL,
-    null,
-    "button#optOut",
-    "button#optIn"
-  );
-  Services.cookieBanners.insertRule(ruleD);
+    info("Add global ruleD which targets a non-existing banner (presence).");
+    let ruleD = Cc["@mozilla.org/cookie-banner-rule;1"].createInstance(
+      Ci.nsICookieBannerRule
+    );
+    ruleD.id = genUUID();
+    ruleD.domains = [];
+    ruleD.addClickRule(
+      "div#nonExistingBanner2",
+      false,
+      Ci.nsIClickRule.RUN_ALL,
+      null,
+      "button#optOut",
+      "button#optIn"
+    );
+    Services.cookieBanners.insertRule(ruleD);
+  }
 }
 
 /**
@@ -376,6 +383,12 @@ async function testClickResultTelemetry(expected, resetFOG = true) {
     return;
   }
 
+  // TODO: Bug 1813128: Update telemetry to account for global rules.
+  if (Services.prefs.getBoolPref("cookiebanners.service.enableGlobalRules")) {
+    ok(true, "Skip click telemetry when global rules are enabled.");
+    return;
+  }
+
   // Ensure we have all data from the content process.
   await Services.fog.testFlushAllChildren();
 
@@ -395,15 +408,15 @@ async function testClickResultTelemetry(expected, resetFOG = true) {
 
   let testMetricState = doAssert => {
     for (let label of labels) {
+      let expectedValue = expected[label] ?? null;
       if (doAssert) {
         is(
           Glean.cookieBannersClick.result[label].testGetValue(),
-          expected[label],
+          expectedValue,
           `Counter for label '${label}' has correct state.`
         );
       } else if (
-        Glean.cookieBannersClick.result[label].testGetValue() !==
-        expected[label]
+        Glean.cookieBannersClick.result[label].testGetValue() !== expectedValue
       ) {
         return false;
       }
@@ -426,6 +439,7 @@ async function testClickResultTelemetry(expected, resetFOG = true) {
     // Reset telemetry, even if the test condition above throws. This is to
     // avoid failing subsequent tests in case of a test failure.
     if (resetFOG) {
+      await Services.fog.testFlushAllChildren();
       Services.fog.testResetFOG();
     }
   }
@@ -450,6 +464,10 @@ async function runEventTest({ mode, detectOnly, initFn, triggerFn, testURL }) {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["cookiebanners.service.mode", mode],
+      [
+        "cookiebanners.service.mode.privateBrowsing",
+        Ci.nsICookieBannerService.MODE_DISABLED,
+      ],
       ["cookiebanners.service.detectOnly", detectOnly],
     ],
   });

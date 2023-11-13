@@ -6,6 +6,8 @@
 
 "use strict";
 
+const { DEFAULT_SUGGESTION_SCORE } = UrlbarProviderQuickSuggest;
+
 // For each of these objects, the test creates a quick suggest result (the kind
 // stored in the remote settings data, not a urlbar result), the corresponding
 // expected quick suggest suggestion, and the corresponding expected urlbar
@@ -15,25 +17,27 @@ let SUGGESTIONS_DATA = [
   {
     keywords: ["aaa"],
     isSponsored: true,
+    score: DEFAULT_SUGGESTION_SCORE,
   },
   {
     keywords: ["aaa", "bbb"],
     isSponsored: false,
-    score: 2 * QuickSuggestRemoteSettings.DEFAULT_SUGGESTION_SCORE,
+    score: 2 * DEFAULT_SUGGESTION_SCORE,
   },
   {
     keywords: ["bbb"],
     isSponsored: true,
-    score: 4 * QuickSuggestRemoteSettings.DEFAULT_SUGGESTION_SCORE,
+    score: 4 * DEFAULT_SUGGESTION_SCORE,
   },
   {
     keywords: ["bbb"],
     isSponsored: false,
-    score: 3 * QuickSuggestRemoteSettings.DEFAULT_SUGGESTION_SCORE,
+    score: 3 * DEFAULT_SUGGESTION_SCORE,
   },
   {
     keywords: ["ccc"],
     isSponsored: true,
+    score: DEFAULT_SUGGESTION_SCORE,
   },
 ];
 
@@ -158,12 +162,9 @@ add_task(async function () {
     // expected quick suggest suggestion
     let qsSuggestion = {
       ...qsResult,
+      score,
       block_id: qsResult.id,
       is_sponsored: isSponsored,
-      score:
-        typeof score == "number"
-          ? score
-          : QuickSuggestRemoteSettings.DEFAULT_SUGGESTION_SCORE,
       source: "remote-settings",
       icon: null,
       position: undefined,
@@ -196,15 +197,11 @@ add_task(async function () {
           : undefined,
         helpUrl: QuickSuggest.HELP_URL,
         helpL10n: {
-          id: UrlbarPrefs.get("resultMenu")
-            ? "urlbar-result-menu-learn-more-about-firefox-suggest"
-            : "firefox-suggest-urlbar-learn-more",
+          id: "urlbar-result-menu-learn-more-about-firefox-suggest",
         },
-        isBlockable: UrlbarPrefs.get("quickSuggestBlockingEnabled"),
+        isBlockable: true,
         blockL10n: {
-          id: UrlbarPrefs.get("resultMenu")
-            ? "urlbar-result-menu-dismiss-firefox-suggest"
-            : "firefox-suggest-urlbar-block",
+          id: "urlbar-result-menu-dismiss-firefox-suggest",
         },
         source: "remote-settings",
         provider: "AdmWikipedia",
@@ -229,7 +226,7 @@ add_task(async function () {
 
     // Call `query()`.
     Assert.deepEqual(
-      await QuickSuggestRemoteSettings.query(keyword),
+      await QuickSuggest.jsBackend.query(keyword),
       expectedIndexes.map(i => ({
         ...qsSuggestions[i],
         full_keyword: keyword,

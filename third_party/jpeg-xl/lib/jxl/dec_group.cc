@@ -22,10 +22,11 @@
 #include "lib/jxl/ac_context.h"
 #include "lib/jxl/ac_strategy.h"
 #include "lib/jxl/base/bits.h"
+#include "lib/jxl/base/common.h"
 #include "lib/jxl/base/printf_macros.h"
 #include "lib/jxl/base/status.h"
 #include "lib/jxl/coeff_order.h"
-#include "lib/jxl/common.h"
+#include "lib/jxl/common.h"  // kMaxNumPasses
 #include "lib/jxl/convolve.h"
 #include "lib/jxl/dct_scales.h"
 #include "lib/jxl/dec_cache.h"
@@ -33,7 +34,6 @@
 #include "lib/jxl/dec_xyb.h"
 #include "lib/jxl/entropy_coder.h"
 #include "lib/jxl/epf.h"
-#include "lib/jxl/opsin_params.h"
 #include "lib/jxl/quant_weights.h"
 #include "lib/jxl/quantizer-inl.h"
 #include "lib/jxl/quantizer.h"
@@ -139,7 +139,8 @@ void DequantBlock(const AcStrategy& acs, float inv_global_scale, int quant,
                   const size_t* sbx,
                   const float* JXL_RESTRICT* JXL_RESTRICT dc_row,
                   size_t dc_stride, const float* JXL_RESTRICT biases,
-                  ACPtr qblock[3], float* JXL_RESTRICT block) {
+                  ACPtr qblock[3], float* JXL_RESTRICT block,
+                  float* JXL_RESTRICT scratch) {
   const auto scaled_dequant_s = inv_global_scale / quant;
 
   const auto scaled_dequant_x = Set(d, scaled_dequant_s * x_dm_multiplier);
@@ -155,7 +156,7 @@ void DequantBlock(const AcStrategy& acs, float inv_global_scale, int quant,
   }
   for (size_t c = 0; c < 3; c++) {
     LowestFrequenciesFromDC(acs.Strategy(), dc_row[c] + sbx[c], dc_stride,
-                            block + c * size);
+                            block + c * size, scratch);
   }
 }
 
@@ -402,7 +403,7 @@ Status DecodeGroupImpl(GetBlock* JXL_RESTRICT get_block,
               acs.covered_blocks_y() * acs.covered_blocks_x(), sbx, dc_rows,
               dc_stride,
               dec_state->output_encoding_info.opsin_params.quant_biases, qblock,
-              block);
+              block, group_dec_cache->scratch_space);
 
           for (size_t c : {1, 0, 2}) {
             if ((sbx[c] << hshift[c] != bx) || (sby[c] << vshift[c] != by)) {
@@ -749,18 +750,18 @@ Status DecodeGroup(BitReader* JXL_RESTRICT* JXL_RESTRICT readers,
     histo_selector_bits = CeilLog2Nonzero(dec_state->shared->num_histograms);
   }
 
-  GetBlockFromBitstream get_block;
+  auto get_block = jxl::make_unique<GetBlockFromBitstream>();
   JXL_RETURN_IF_ERROR(
-      get_block.Init(readers, num_passes, group_idx, histo_selector_bits,
-                     dec_state->shared->BlockGroupRect(group_idx),
-                     group_dec_cache, dec_state, first_pass));
+      get_block->Init(readers, num_passes, group_idx, histo_selector_bits,
+                      dec_state->shared->BlockGroupRect(group_idx),
+                      group_dec_cache, dec_state, first_pass));
 
   JXL_RETURN_IF_ERROR(HWY_DYNAMIC_DISPATCH(DecodeGroupImpl)(
-      &get_block, group_dec_cache, dec_state, thread, group_idx,
+      get_block.get(), group_dec_cache, dec_state, thread, group_idx,
       render_pipeline_input, decoded, draw));
 
   for (size_t pass = 0; pass < num_passes; pass++) {
-    if (!get_block.decoders[pass].CheckANSFinalState()) {
+    if (!get_block->decoders[pass].CheckANSFinalState()) {
       return JXL_FAILURE("ANS checksum failure.");
     }
   }

@@ -498,7 +498,6 @@ const TEST_GLOBAL = {
       updateGlobalOrObject(object)[name] = f();
     },
     defineLazyGlobalGetters: updateGlobalOrObject,
-    defineLazyModuleGetter: updateGlobalOrObject,
     defineLazyModuleGetters: updateGlobalOrObject,
     defineLazyServiceGetter: updateGlobalOrObject,
     defineLazyServiceGetters: updateGlobalOrObject,
@@ -666,6 +665,15 @@ const TEST_GLOBAL = {
       },
       rows: {
         set() {},
+      },
+      showPrivacyClick: {
+        record() {},
+      },
+      dismiss: {
+        record() {},
+      },
+      prefChanged: {
+        record() {},
       },
     },
     topSites: {

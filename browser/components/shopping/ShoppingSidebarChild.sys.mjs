@@ -28,6 +28,23 @@ XPCOMUtils.defineLazyPreferenceGetter(
   "browser.shopping.experience2023.ads.enabled",
   true
 );
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "adsEnabledByUser",
+  "browser.shopping.experience2023.ads.userEnabled",
+  true,
+  function adsEnabledByUserChanged() {
+    for (let actor of gAllActors) {
+      actor.adsEnabledByUserChanged();
+    }
+  }
+);
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "adsExposure",
+  "browser.shopping.experience2023.ads.exposure",
+  false
+);
 
 export class ShoppingSidebarChild extends RemotePageChild {
   constructor() {
@@ -52,23 +69,54 @@ export class ShoppingSidebarChild extends RemotePageChild {
   receiveMessage(message) {
     switch (message.name) {
       case "ShoppingSidebar:UpdateProductURL":
-        let { url } = message.data;
+        let { url, isReload } = message.data;
         let uri = url ? Services.io.newURI(url) : null;
         // If we're going from null to null, bail out:
         if (!this.#productURI && !uri) {
           return;
         }
-        // Otherwise, check if we now have a product:
-        if (uri && this.#productURI?.equalsExceptRef(uri)) {
+
+        // If we haven't reloaded, check if the URIs represent the same product
+        // as sites might change the URI after they have loaded (Bug 1852099).
+        if (!isReload && this.isSameProduct(uri, this.#productURI)) {
           return;
         }
+
         this.#productURI = uri;
         this.updateContent({ haveUpdatedURI: true });
         break;
     }
   }
 
+  isSameProduct(newURI, currentURI) {
+    if (!newURI || !currentURI) {
+      return false;
+    }
+
+    // Check if the URIs are equal:
+    if (currentURI.equalsExceptRef(newURI)) {
+      return true;
+    }
+
+    if (!this.#product) {
+      return false;
+    }
+
+    // If the current ShoppingProduct has product info set,
+    // check if the product ids are the same:
+    let currentProduct = this.#product.product;
+    if (currentProduct) {
+      let newProduct = ShoppingProduct.fromURL(URL.fromURI(newURI));
+      if (newProduct.id === currentProduct.id) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   handleEvent(event) {
+    let aid;
     switch (event.type) {
       case "ContentReady":
         this.updateContent();
@@ -76,10 +124,36 @@ export class ShoppingSidebarChild extends RemotePageChild {
       case "PolledRequestMade":
         this.updateContent({ isPolledRequest: true });
         break;
-      case "ShoppingTelemetryEvent":
-        this.submitShoppingEvent(event.detail);
+      case "ReportProductAvailable":
+        this.reportProductAvailable();
+        break;
+      case "AdClicked":
+        aid = event.detail.aid;
+        this.#product.sendAttributionEvent("click", aid);
+        Glean.shopping.surfaceAdsClicked.record();
+        break;
+      case "AdImpression":
+        aid = event.detail.aid;
+        this.#product.sendAttributionEvent("impression", aid);
+        Glean.shopping.surfaceAdsImpression.record();
         break;
     }
+  }
+
+  // Exposed for testing. Assumes uri is a nsURI.
+  set productURI(uri) {
+    if (!(uri instanceof Ci.nsIURI)) {
+      throw new Error("productURI setter expects an nsIURI");
+    }
+    this.#productURI = uri;
+  }
+
+  // Exposed for testing. Assumes product is a ShoppingProduct.
+  set product(product) {
+    if (!(product instanceof ShoppingProduct)) {
+      throw new Error("product setter expects an instance of ShoppingProduct");
+    }
+    this.#product = product;
   }
 
   get canFetchAndShowData() {
@@ -90,11 +164,23 @@ export class ShoppingSidebarChild extends RemotePageChild {
     return lazy.adsEnabled;
   }
 
+  get userHasAdsEnabled() {
+    return lazy.adsEnabledByUser;
+  }
+
   optedInStateChanged() {
     // Force re-fetching things if needed by clearing the last product URI:
     this.#productURI = null;
     // Then let content know.
     this.updateContent();
+  }
+
+  adsEnabledByUserChanged() {
+    this.sendToContent("adsEnabledByUserChanged", {
+      adsEnabledByUser: this.userHasAdsEnabled,
+    });
+
+    this.requestRecommendations(this.#productURI);
   }
 
   getProductURI() {
@@ -114,6 +200,7 @@ export class ShoppingSidebarChild extends RemotePageChild {
    *        Whether we've got an up-to-date URI already. If true, we avoid
    *        fetching the URI from the parent, and assume `this.#productURI`
    *        is current. Defaults to false.
+   * @param {bool} options.isPolledRequest = false
    *
    */
   async updateContent({
@@ -143,6 +230,8 @@ export class ShoppingSidebarChild extends RemotePageChild {
     // Do not clear data however if an analysis was requested via a call-to-action.
     if (!isPolledRequest) {
       this.sendToContent("Update", {
+        adsEnabled: this.canFetchAndShowAd,
+        adsEnabledByUser: this.userHasAdsEnabled,
         showOnboarding: !this.canFetchAndShowData,
         data: null,
         recommendationData: null,
@@ -167,13 +256,40 @@ export class ShoppingSidebarChild extends RemotePageChild {
       let uri = this.#productURI;
       this.#product = new ShoppingProduct(uri);
       let data;
-      let isPolledRequestDone;
+      let isAnalysisInProgress;
+
       try {
-        if (!isPolledRequest) {
-          data = await this.#product.requestAnalysis();
+        let analysisStatusResponse;
+        if (isPolledRequest) {
+          // Request a new analysis.
+          analysisStatusResponse = await this.#product.requestCreateAnalysis();
         } else {
-          data = await this.#product.pollForAnalysisCompleted();
-          isPolledRequestDone = true;
+          // Check if there is an analysis in progress.
+          analysisStatusResponse =
+            await this.#product.requestAnalysisCreationStatus();
+        }
+        let analysisStatus = analysisStatusResponse?.status;
+
+        isAnalysisInProgress =
+          analysisStatus &&
+          (analysisStatus == "pending" || analysisStatus == "in_progress");
+        if (isAnalysisInProgress) {
+          // Only clear the existing data if the update wasn't
+          // triggered by a Polled Request event as re-analysis should
+          // keep any stale data visible while processing.
+          if (!isPolledRequest) {
+            this.sendToContent("Update", {
+              isAnalysisInProgress,
+            });
+          }
+          await this.#product.pollForAnalysisCompleted({
+            pollInitialWait: analysisStatus == "in_progress" ? 0 : undefined,
+          });
+          isAnalysisInProgress = false;
+        }
+        data = await this.#product.requestAnalysis();
+        if (!data) {
+          throw new Error("request failed");
         }
       } catch (err) {
         console.error("Failed to fetch product analysis data", err);
@@ -183,35 +299,108 @@ export class ShoppingSidebarChild extends RemotePageChild {
       if (!canContinue(uri)) {
         return;
       }
+
       this.sendToContent("Update", {
+        adsEnabled: this.canFetchAndShowAd,
+        adsEnabledByUser: this.userHasAdsEnabled,
         showOnboarding: false,
         data,
         productUrl: this.#productURI.spec,
-        isPolledRequestDone,
+        isAnalysisInProgress,
       });
 
-      if (!this.canFetchAndShowAd || data.error) {
+      if (!data || data.error) {
         return;
       }
-      this.#product.requestRecommendations().then(recommendationData => {
-        // Check if the product URI or opt in changed while we waited.
-        if (
-          uri != this.#productURI ||
-          !this.canFetchAndShowData ||
-          !this.canFetchAndShowAd
-        ) {
-          return;
-        }
 
-        this.sendToContent("Update", {
-          showOnboarding: false,
-          data,
-          productUrl: this.#productURI.spec,
-          recommendationData,
-          isPolledRequestDone,
-        });
+      if (!isPolledRequest && !data.grade) {
+        Glean.shopping.surfaceNoReviewReliabilityAvailable.record();
+      }
+
+      this.requestRecommendations(uri);
+    } else {
+      // Don't bother continuing if the user has opted out.
+      if (lazy.optedIn == 2) {
+        return;
+      }
+      let url = await this.sendQuery("GetProductURL");
+
+      // Similar to canContinue() above, check to see if things
+      // have changed while we were waiting. Bail out if the user
+      // opted in, or if the actor doesn't exist.
+      if (this._destroyed || this.canFetchAndShowData) {
+        return;
+      }
+
+      this.#productURI = Services.io.newURI(url);
+      // Send the productURI to content for Onboarding's dynamic text
+      this.sendToContent("Update", {
+        showOnboarding: true,
+        data: null,
+        productUrl: this.#productURI.spec,
       });
     }
+  }
+
+  /**
+   * Utility function to determine if we should request ads.
+   */
+  canFetchAds(uri) {
+    return (
+      uri.equalsExceptRef(this.#productURI) &&
+      this.canFetchAndShowData &&
+      (lazy.adsExposure || (this.canFetchAndShowAd && this.userHasAdsEnabled))
+    );
+  }
+
+  /**
+   * Utility function to determine if we should display ads. This is different
+   * from fetching ads, because of ads exposure telemetry (bug 1858470).
+   */
+  canShowAds(uri) {
+    return (
+      uri.equalsExceptRef(this.#productURI) &&
+      this.canFetchAndShowData &&
+      this.canFetchAndShowAd &&
+      this.userHasAdsEnabled
+    );
+  }
+
+  /**
+   * Request recommended products for a given uri and send the recommendations
+   * to the content if recommendations are enabled.
+   *
+   * @param {nsIURI} uri The uri of the current product page
+   */
+  async requestRecommendations(uri) {
+    if (!this.canFetchAds(uri)) {
+      return;
+    }
+
+    let recommendationData = await this.#product.requestRecommendations();
+
+    // Note: this needs to be separate from the inverse conditional check below
+    // because here we want to know if an ad exists for the product, regardless
+    // of whether ads are enabled, while for the surfaceNoAdsAvailable Glean
+    // probe, we want to know if ads would have been shown, but one wasn't
+    // available.
+    if (recommendationData.length) {
+      Glean.shopping.adsExposure.record();
+    }
+
+    // Check if the product URI or opt in changed while we waited.
+    if (!this.canShowAds(uri)) {
+      return;
+    }
+
+    if (!recommendationData.length) {
+      // We tried to fetch an ad, but didn't get one.
+      Glean.shopping.surfaceNoAdsAvailable.record();
+    }
+
+    this.sendToContent("UpdateRecommendations", {
+      recommendationData,
+    });
   }
 
   sendToContent(eventName, detail) {
@@ -226,37 +415,7 @@ export class ShoppingSidebarChild extends RemotePageChild {
     win.document.dispatchEvent(evt);
   }
 
-  /**
-   * Helper to handle telemetry events.
-   *
-   * @param {string | Array} message
-   *        Which Glean event to record too. If an array is used, the first
-   *        element should be the message and the second the additional detail
-   *        to record.
-   */
-  submitShoppingEvent(message) {
-    // We are currently working through an actor to record Glean events and
-    // this function is where we will direct a custom actor event into the
-    // correct Glean event. However, this is an unpleasant solution and one
-    // that should not be replicated. Please reference bug 1848708 for more
-    // detail about why.
-    let details;
-    if (Array.isArray(message)) {
-      details = message[1];
-      message = message[0];
-    }
-    switch (message) {
-      case "shopping-settings-label":
-        Glean.shopping.surfaceSettingsExpandClicked.record({ action: details });
-        break;
-      case "shopping-analysis-explainer-label":
-        Glean.shopping.surfaceShowQualityExplainerClicked.record({
-          action: details,
-        });
-        break;
-      case "reanalyzeClicked":
-        Glean.shopping.surfaceReanalyzeClicked.record();
-        break;
-    }
+  async reportProductAvailable() {
+    await this.#product.sendReport();
   }
 }

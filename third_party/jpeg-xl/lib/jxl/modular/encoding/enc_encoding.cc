@@ -14,9 +14,9 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "lib/jxl/base/common.h"
 #include "lib/jxl/base/printf_macros.h"
 #include "lib/jxl/base/status.h"
-#include "lib/jxl/common.h"
 #include "lib/jxl/dec_ans.h"
 #include "lib/jxl/dec_bit_reader.h"
 #include "lib/jxl/enc_ans.h"
@@ -33,6 +33,7 @@
 #include "lib/jxl/modular/encoding/ma_common.h"
 #include "lib/jxl/modular/options.h"
 #include "lib/jxl/modular/transform/transform.h"
+#include "lib/jxl/pack_signed.h"
 #include "lib/jxl/toc.h"
 
 namespace jxl {
@@ -228,13 +229,12 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
   // Check if this tree is a WP-only tree with a small enough property value
   // range.
   // Initialized to avoid clang-tidy complaining.
-  uint16_t context_lookup[2 * kPropRangeFast] = {};
-  int8_t offsets[2 * kPropRangeFast] = {};
+  auto tree_lut = jxl::make_unique<TreeLut<uint16_t, false>>();
   if (is_wp_only) {
-    is_wp_only = TreeToLookupTable(tree, context_lookup, offsets);
+    is_wp_only = TreeToLookupTable(tree, *tree_lut);
   }
   if (is_gradient_only) {
-    is_gradient_only = TreeToLookupTable(tree, context_lookup, offsets);
+    is_gradient_only = TreeToLookupTable(tree, *tree_lut);
   }
 
   if (is_wp_only && !skip_encoder_fast_path) {
@@ -261,8 +261,8 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
         uint32_t pos =
             kPropRangeFast + std::min(std::max(-kPropRangeFast, properties[0]),
                                       kPropRangeFast - 1);
-        uint32_t ctx_id = context_lookup[pos];
-        int32_t residual = r[x] - guess - offsets[pos];
+        uint32_t ctx_id = tree_lut->context_lookup[pos];
+        int32_t residual = r[x] - guess - tree_lut->offsets[pos];
         *tokenp++ = Token(ctx_id, PackSigned(residual));
         wp_state.UpdateErrors(r[x], x, y, channel.w);
       }
@@ -304,8 +304,8 @@ Status EncodeModularChannelMAANS(const Image &image, pixel_type chan,
             std::min<pixel_type_w>(
                 std::max<pixel_type_w>(-kPropRangeFast, top + left - topleft),
                 kPropRangeFast - 1);
-        uint32_t ctx_id = context_lookup[pos];
-        int32_t residual = r[x] - guess - offsets[pos];
+        uint32_t ctx_id = tree_lut->context_lookup[pos];
+        int32_t residual = r[x] - guess - tree_lut->offsets[pos];
         *tokenp++ = Token(ctx_id, PackSigned(residual));
       }
     }

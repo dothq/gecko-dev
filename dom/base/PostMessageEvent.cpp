@@ -253,9 +253,8 @@ void PostMessageEvent::Dispatch(nsGlobalWindowInner* aTargetWindow,
   WidgetEvent* internalEvent = aEvent->WidgetEventPtr();
 
   nsEventStatus status = nsEventStatus_eIgnore;
-  // TODO: Bug 1506441
-  EventDispatcher::Dispatch(MOZ_KnownLive(ToSupports(aTargetWindow)),
-                            presContext, internalEvent, aEvent, &status);
+  EventDispatcher::Dispatch(aTargetWindow, presContext, internalEvent, aEvent,
+                            &status);
 }
 
 void PostMessageEvent::DispatchToTargetThread(ErrorResult& aError) {
@@ -303,7 +302,7 @@ void PostMessageEvent::DispatchToTargetThread(ErrorResult& aError) {
     }
   }
 
-  aError = mTargetWindow->Dispatch(TaskCategory::Other, event.forget());
+  aError = mTargetWindow->Dispatch(event.forget());
 }
 
 }  // namespace mozilla::dom

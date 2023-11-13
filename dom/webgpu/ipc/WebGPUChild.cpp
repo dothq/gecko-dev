@@ -302,8 +302,9 @@ RawId WebGPUChild::DeviceCreateBuffer(RawId aSelfId,
   return bufferId;
 }
 
-RawId WebGPUChild::DeviceCreateTexture(RawId aSelfId,
-                                       const dom::GPUTextureDescriptor& aDesc) {
+RawId WebGPUChild::DeviceCreateTexture(
+    RawId aSelfId, const dom::GPUTextureDescriptor& aDesc,
+    Maybe<layers::RemoteTextureOwnerId> aOwnerId) {
   ffi::WGPUTextureDescriptor desc = {};
 
   webgpu::StringHelper label(aDesc.mLabel);
@@ -334,9 +335,14 @@ RawId WebGPUChild::DeviceCreateTexture(RawId aSelfId,
   }
   desc.view_formats = {viewFormats.Elements(), viewFormats.Length()};
 
+  Maybe<ffi::WGPUSwapChainId> ownerId;
+  if (aOwnerId.isSome()) {
+    ownerId = Some(ffi::WGPUSwapChainId{aOwnerId->mId});
+  }
+
   ByteBuf bb;
-  RawId id = ffi::wgpu_client_create_texture(mClient.get(), aSelfId, &desc,
-                                             ToFFI(&bb));
+  RawId id = ffi::wgpu_client_create_texture(
+      mClient.get(), aSelfId, &desc, ownerId.ptrOr(nullptr), ToFFI(&bb));
   if (!SendDeviceAction(aSelfId, std::move(bb))) {
     MOZ_CRASH("IPC failure");
   }
@@ -673,7 +679,7 @@ MOZ_CAN_RUN_SCRIPT void reportCompilationMessagesToConsole(
 
   ErrorResult rv;
   RefPtr<dom::Console> console =
-      nsGlobalWindowInner::Cast(global->AsInnerWindow())->GetConsole(cx, rv);
+      nsGlobalWindowInner::Cast(global->GetAsInnerWindow())->GetConsole(cx, rv);
   if (rv.Failed()) {
     return;
   }
@@ -1122,16 +1128,41 @@ ipc::IPCResult WebGPUChild::RecvDropAction(const ipc::ByteBuf& aByteBuf) {
   return IPC_OK();
 }
 
+ipc::IPCResult WebGPUChild::RecvDeviceLost(RawId aDeviceId,
+                                           Maybe<uint8_t> aReason,
+                                           const nsACString& aMessage) {
+  RefPtr<Device> device;
+  const auto itr = mDeviceMap.find(aDeviceId);
+  if (itr != mDeviceMap.end()) {
+    device = itr->second.get();
+    MOZ_ASSERT(device);
+  }
+
+  if (device) {
+    auto message = NS_ConvertUTF8toUTF16(aMessage);
+    if (aReason.isSome()) {
+      dom::GPUDeviceLostReason reason =
+          static_cast<dom::GPUDeviceLostReason>(*aReason);
+      device->ResolveLost(Some(reason), message);
+    } else {
+      device->ResolveLost(Nothing(), message);
+    }
+  }
+  return IPC_OK();
+}
+
 void WebGPUChild::DeviceCreateSwapChain(
     RawId aSelfId, const RGBDescriptor& aRgbDesc, size_t maxBufferCount,
-    const layers::RemoteTextureOwnerId& aOwnerId) {
+    const layers::RemoteTextureOwnerId& aOwnerId,
+    bool aUseExternalTextureInSwapChain) {
   RawId queueId = aSelfId;  // TODO: multiple queues
   nsTArray<RawId> bufferIds(maxBufferCount);
   for (size_t i = 0; i < maxBufferCount; ++i) {
     bufferIds.AppendElement(
         ffi::wgpu_client_make_buffer_id(mClient.get(), aSelfId));
   }
-  SendDeviceCreateSwapChain(aSelfId, queueId, aRgbDesc, bufferIds, aOwnerId);
+  SendDeviceCreateSwapChain(aSelfId, queueId, aRgbDesc, bufferIds, aOwnerId,
+                            aUseExternalTextureInSwapChain);
 }
 
 void WebGPUChild::QueueOnSubmittedWorkDone(
@@ -1160,7 +1191,7 @@ void WebGPUChild::RegisterDevice(Device* const aDevice) {
 void WebGPUChild::UnregisterDevice(RawId aId) {
   mDeviceMap.erase(aId);
   if (IsOpen()) {
-    SendDeviceDestroy(aId);
+    SendDeviceDrop(aId);
   }
 }
 
@@ -1184,17 +1215,7 @@ void WebGPUChild::ActorDestroy(ActorDestroyReason) {
       continue;
     }
 
-    RefPtr<dom::Promise> promise = device->MaybeGetLost();
-    if (!promise) {
-      continue;
-    }
-
-    auto info = MakeRefPtr<DeviceLostInfo>(device->GetParentObject(),
-                                           u"WebGPUChild destroyed"_ns);
-
-    // We have strong references to both the Device and the DeviceLostInfo and
-    // the Promise objects on the stack which keeps them alive for long enough.
-    promise->MaybeResolve(info);
+    device->ResolveLost(Nothing(), u"WebGPUChild destroyed"_ns);
   }
 }
 

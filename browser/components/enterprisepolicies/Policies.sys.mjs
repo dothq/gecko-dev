@@ -604,6 +604,15 @@ export var Policies = {
     },
   },
 
+  DisableAccounts: {
+    onBeforeAddons(manager, param) {
+      if (param) {
+        setAndLockPref("identity.fxaccounts.enabled", false);
+        setAndLockPref("browser.aboutwelcome.enabled", false);
+      }
+    },
+  },
+
   DisableAppUpdate: {
     onBeforeAddons(manager, param) {
       if (param) {
@@ -689,6 +698,11 @@ export var Policies = {
 
   DisableFirefoxAccounts: {
     onBeforeAddons(manager, param) {
+      // If DisableAccounts is set, let it take precedence.
+      if ("DisableAccounts" in manager.getActivePolicies()) {
+        return;
+      }
+
       if (param) {
         setAndLockPref("identity.fxaccounts.enabled", false);
         setAndLockPref("browser.aboutwelcome.enabled", false);
@@ -1712,6 +1726,7 @@ export var Policies = {
         "network.",
         "pdfjs.",
         "places.",
+        "pref.",
         "print.",
         "signon.",
         "spellchecker.",
@@ -1860,6 +1875,12 @@ export var Policies = {
       } else {
         manager.disallowFeature("createMasterPassword");
       }
+    },
+  },
+
+  PrintingEnabled: {
+    onBeforeUIStartup(manager, param) {
+      setAndLockPref("print.enabled", param);
     },
   },
 

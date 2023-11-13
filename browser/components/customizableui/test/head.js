@@ -10,12 +10,6 @@ ChromeUtils.defineESModuleGetters(this, {
     "resource://testing-common/CustomizableUITestUtils.sys.mjs",
 });
 
-var EventUtils = {};
-Services.scriptloader.loadSubScript(
-  "chrome://mochikit/content/tests/SimpleTest/EventUtils.js",
-  EventUtils
-);
-
 /**
  * Instance of CustomizableUITestUtils for the current browser window.
  */
@@ -399,7 +393,7 @@ function waitFor(aTimeout = 100) {
 function promiseTabLoadEvent(aTab, aURL) {
   let browser = aTab.linkedBrowser;
 
-  BrowserTestUtils.loadURIString(browser, aURL);
+  BrowserTestUtils.startLoadingURIString(browser, aURL);
   return BrowserTestUtils.browserLoaded(browser);
 }
 

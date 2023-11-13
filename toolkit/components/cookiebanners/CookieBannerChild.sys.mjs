@@ -10,6 +10,8 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   clearTimeout: "resource://gre/modules/Timer.sys.mjs",
   setTimeout: "resource://gre/modules/Timer.sys.mjs",
+  setInterval: "resource://gre/modules/Timer.sys.mjs",
+  clearInterval: "resource://gre/modules/Timer.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
 });
 
@@ -39,9 +41,19 @@ XPCOMUtils.defineLazyPreferenceGetter(
 );
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
-  "observeTimeout",
-  "cookiebanners.bannerClicking.timeout",
-  3000
+  "cleanupTimeoutAfterLoad",
+  "cookiebanners.bannerClicking.timeoutAfterLoad"
+);
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "cleanupTimeoutAfterDOMContentLoaded",
+  "cookiebanners.bannerClicking.timeoutAfterDOMContentLoaded"
+);
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "pollingInterval",
+  "cookiebanners.bannerClicking.pollingInterval",
+  500
 );
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
@@ -58,6 +70,10 @@ ChromeUtils.defineLazyGetter(lazy, "logConsole", () => {
 });
 
 export class CookieBannerChild extends JSWindowActorChild {
+  // Caches the enabled state to ensure we only compute it once for the lifetime
+  // of the actor. Particularly the private browsing check can be expensive.
+  #isEnabledCached = null;
+  #isTopLevel;
   #clickRules;
   #originalBannerDisplay = null;
   #observerCleanUp;
@@ -72,6 +88,8 @@ export class CookieBannerChild extends JSWindowActorChild {
     successStage: null,
     failReason: null,
     bannerVisibilityFail: false,
+    querySelectorCount: 0,
+    querySelectorTimeMS: 0,
   };
   // For measuring the cookie banner handling duration.
   #gleanBannerHandlingTimer = null;
@@ -104,13 +122,22 @@ export class CookieBannerChild extends JSWindowActorChild {
    * @type {boolean} true if feature is enabled, false otherwise.
    */
   get #isEnabled() {
-    if (!lazy.bannerClickingEnabled) {
-      return false;
+    if (this.#isEnabledCached != null) {
+      return this.#isEnabledCached;
     }
-    if (this.#isPrivateBrowsing) {
-      return lazy.serviceModePBM != Ci.nsICookieBannerService.MODE_DISABLED;
-    }
-    return lazy.serviceMode != Ci.nsICookieBannerService.MODE_DISABLED;
+
+    let checkIsEnabled = () => {
+      if (!lazy.bannerClickingEnabled) {
+        return false;
+      }
+      if (this.#isPrivateBrowsing) {
+        return lazy.serviceModePBM != Ci.nsICookieBannerService.MODE_DISABLED;
+      }
+      return lazy.serviceMode != Ci.nsICookieBannerService.MODE_DISABLED;
+    };
+
+    this.#isEnabledCached = checkIsEnabled();
+    return this.#isEnabledCached;
   }
 
   /**
@@ -158,6 +185,7 @@ export class CookieBannerChild extends JSWindowActorChild {
    */
   async #onDOMContentLoaded() {
     lazy.logConsole.debug("onDOMContentLoaded", { didLoad: this.#didLoad });
+    this.#isTopLevel = this.browsingContext == this.browsingContext?.top;
     this.#didLoad = false;
     this.#telemetryStatus.currentStage = "dom_content_loaded";
 
@@ -176,7 +204,7 @@ export class CookieBannerChild extends JSWindowActorChild {
 
     lazy.logConsole.debug("Send message to get rule", {
       baseDomain: principal.baseDomain,
-      isTopLevel: this.browsingContext == this.browsingContext?.top,
+      isTopLevel: this.#isTopLevel,
     });
     let rules;
 
@@ -295,26 +323,54 @@ export class CookieBannerChild extends JSWindowActorChild {
       this.#telemetryStatus.currentStage = "mutation_post_load";
     }
 
-    this.#startObserverCleanupTimer();
+    // On load reset the timer for cleanup.
+    this.#startOrResetCleanupTimer();
   }
 
   /**
-   * If there is an active mutation observer, start a timeout to unregister it.
+   * We limit how long we observe cookie banner mutations for performance
+   * reasons. If not present initially on DOMContentLoaded, cookie banners are
+   * expected to show up during or shortly after page load.
+   * This method starts a cleanup timeout which duration depends on the current
+   * load stage (DOMContentLoaded, or load). When called, if a timeout is
+   * already running, it is cancelled and a new timeout is scheduled.
    */
-  #startObserverCleanupTimer() {
-    // We limit how long we observe cookie banner mutations for performance
-    // reasons. If not present initially on DOMContentLoaded, cookie banners are
-    // expected to show up during or shortly after page load.
-    if (!this.#observerCleanUp || this.#observerCleanUpTimer) {
-      return;
+  #startOrResetCleanupTimer() {
+    // Cancel any already running timeout so we can schedule a new one.
+    if (this.#observerCleanUpTimer) {
+      lazy.logConsole.debug(
+        "#startOrResetCleanupTimer: Cancelling existing cleanup timeout",
+        {
+          didLoad: this.#didLoad,
+        }
+      );
+      lazy.clearTimeout(this.#observerCleanUpTimer);
     }
-    lazy.logConsole.debug("Starting MutationObserver cleanup timeout");
+
+    let durationMS = this.#didLoad
+      ? lazy.cleanupTimeoutAfterLoad
+      : lazy.cleanupTimeoutAfterDOMContentLoaded;
+    lazy.logConsole.debug(
+      "#startOrResetCleanupTimer: Starting cleanup timeout",
+      {
+        durationMS,
+        didLoad: this.#didLoad,
+        hasObserverCleanup: !!this.#observerCleanUp,
+      }
+    );
+
     this.#observerCleanUpTimer = lazy.setTimeout(() => {
       lazy.logConsole.debug(
-        `MutationObserver timeout after ${lazy.observeTimeout}ms.`
+        "#startOrResetCleanupTimer: Cleanup timeout triggered",
+        {
+          durationMS,
+          didLoad: this.#didLoad,
+          hasObserverCleanup: !!this.#observerCleanUp,
+        }
       );
-      this.#observerCleanUp();
-    }, lazy.observeTimeout);
+      this.#observerCleanUpTimer = null;
+      this.#observerCleanUp?.();
+    }, durationMS);
   }
 
   didDestroy() {
@@ -372,6 +428,34 @@ export class CookieBannerChild extends JSWindowActorChild {
       currentStage,
       failReason,
     });
+
+    let { querySelectorCount, querySelectorTimeMS } = this.#telemetryStatus;
+
+    // Glean needs an integer.
+    let querySelectorTimeUS = Math.round(querySelectorTimeMS * 1000);
+
+    if (this.#isTopLevel) {
+      Glean.cookieBannersClick.querySelectorRunCountPerWindowTopLevel.accumulateSamples(
+        [querySelectorCount]
+      );
+      Glean.cookieBannersClick.querySelectorRunDurationPerWindowTopLevel.accumulateSamples(
+        [querySelectorTimeUS]
+      );
+    } else {
+      Glean.cookieBannersClick.querySelectorRunCountPerWindowFrame.accumulateSamples(
+        [querySelectorCount]
+      );
+      Glean.cookieBannersClick.querySelectorRunDurationPerWindowFrame.accumulateSamples(
+        [querySelectorTimeUS]
+      );
+    }
+
+    lazy.logConsole.debug("Submitted querySelector telemetry", {
+      isTopLevel: this.#isTopLevel,
+      querySelectorCount,
+      querySelectorTimeUS,
+      querySelectorTimeMS,
+    });
   }
 
   /**
@@ -385,6 +469,9 @@ export class CookieBannerChild extends JSWindowActorChild {
    */
   async handleCookieBanner() {
     lazy.logConsole.debug("handleCookieBanner", this.document?.location.href);
+
+    // Start timer to clean up detection code (polling and mutation observers).
+    this.#startOrResetCleanupTimer();
 
     // First, we detect if the banner is shown on the page
     let rules = await this.#detectBanner();
@@ -462,37 +549,63 @@ export class CookieBannerChild extends JSWindowActorChild {
 
     return new Promise(resolve => {
       let win = this.contentWindow;
+      // Marks whether a mutation on the site has been observed since we last
+      // ran checkFn.
+      let sawMutation = false;
 
-      let observer = new win.MutationObserver(mutationList => {
-        lazy.logConsole.debug(
-          "#promiseObserve: Mutation observed",
-          mutationList
-        );
+      // IDs for interval for checkFn polling.
+      let pollIntervalId = null;
 
-        let result = checkFn?.();
-        if (result) {
-          cleanup(result, observer);
-        }
+      // Keep track of DOM changes via MutationObserver. We only run query
+      // selectors again if the DOM updated since our last check.
+      let observer = new win.MutationObserver(() => {
+        sawMutation = true;
       });
-
       observer.observe(win.document.body, {
         attributes: true,
         subtree: true,
         childList: true,
       });
 
-      let cleanup = (result, observer) => {
-        lazy.logConsole.debug(
-          "#promiseObserve cleanup",
+      // Start polling checkFn.
+      let intervalFn = () => {
+        // Nothing changed since last run, skip running checkFn.
+        if (!sawMutation) {
+          return;
+        }
+        // Reset mutation flag.
+        sawMutation = false;
+
+        // A truthy result means we have a hit so we can stop observing.
+        let result = checkFn?.();
+        if (result) {
+          cleanup(result);
+        }
+      };
+      pollIntervalId = lazy.setInterval(intervalFn, lazy.pollingInterval);
+
+      let cleanup = result => {
+        lazy.logConsole.debug("#promiseObserve cleanup", {
           result,
           observer,
-          this.#observerCleanUpTimer
-        );
+          cleanupTimeoutId: this.#observerCleanUpTimer,
+          pollIntervalId,
+        });
+
+        // Unregister the observer.
         if (observer) {
           observer.disconnect();
           observer = null;
         }
 
+        // Stop the polling checks.
+        if (pollIntervalId) {
+          lazy.clearInterval(pollIntervalId);
+          pollIntervalId = null;
+        }
+
+        // Clear the cleanup timeout. This can happen when the actor gets
+        // destroyed before the cleanup timeout itself fires.
         if (this.#observerCleanUpTimer) {
           lazy.clearTimeout(this.#observerCleanUpTimer);
         }
@@ -501,18 +614,11 @@ export class CookieBannerChild extends JSWindowActorChild {
         resolve(result);
       };
 
-      // The clean up function to clean unfinished observer and timer when the
-      // actor destroys.
+      // The clean up function to clean unfinished observer and timer on timeout
+      // or when the actor destroys.
       this.#observerCleanUp = () => {
-        cleanup(null, observer);
+        cleanup(null);
       };
-
-      // If we already observed a load event we can start the cleanup timer
-      // straight away.
-      // Otherwise wait for the load event via the #onLoad method.
-      if (this.#didLoad) {
-        this.#startObserverCleanupTimer();
-      }
     });
   }
 
@@ -530,7 +636,7 @@ export class CookieBannerChild extends JSWindowActorChild {
       let matchingRules = this.#clickRules.filter(rule => {
         let { presence, skipPresenceVisibilityCheck } = rule;
 
-        let banner = this.document.querySelector(presence);
+        let banner = this.#querySelector(presence);
         lazy.logConsole.debug("Testing banner el presence", {
           result: banner,
           rule,
@@ -572,7 +678,7 @@ export class CookieBannerChild extends JSWindowActorChild {
         rules
       );
       this.#telemetryStatus.currentStage = "mutation_pre_load";
-      rules = await this.#promiseObserve(presenceDetector, lazy.observeTimeout);
+      rules = await this.#promiseObserve(presenceDetector);
     }
 
     if (!rules?.length) {
@@ -591,7 +697,7 @@ export class CookieBannerChild extends JSWindowActorChild {
 
     let targetEl;
     for (let rule of rules) {
-      targetEl = this.document.querySelector(rule.target);
+      targetEl = this.#querySelector(rule.target);
       if (targetEl) {
         break;
       }
@@ -602,7 +708,7 @@ export class CookieBannerChild extends JSWindowActorChild {
     if (!targetEl) {
       targetEl = await this.#promiseObserve(() => {
         for (let rule of rules) {
-          let el = this.document.querySelector(rule.target);
+          let el = this.#querySelector(rule.target);
 
           lazy.logConsole.debug("Testing button el presence", {
             result: el,
@@ -621,7 +727,7 @@ export class CookieBannerChild extends JSWindowActorChild {
           }
         }
         return null;
-      }, lazy.observeTimeout);
+      });
 
       if (!targetEl) {
         lazy.logConsole.debug("Cannot find the target button.");
@@ -653,7 +759,7 @@ export class CookieBannerChild extends JSWindowActorChild {
     let banner;
     let rule;
     for (let r of rules) {
-      banner = this.document.querySelector(r.hide);
+      banner = this.#querySelector(r.hide);
       if (banner) {
         rule = r;
         break;
@@ -688,7 +794,7 @@ export class CookieBannerChild extends JSWindowActorChild {
       // We've never hidden the banner.
       return;
     }
-    let banner = this.document.querySelector(hide);
+    let banner = this.#querySelector(hide);
 
     // Banner no longer present or destroyed or content window has been
     // destroyed.
@@ -704,6 +810,22 @@ export class CookieBannerChild extends JSWindowActorChild {
     banner.ownerGlobal.requestAnimationFrame(() => {
       banner.style.display = originalDisplay;
     });
+  }
+
+  /**
+   * Wrapper around document.querySelector calls which collects perf telemetry.
+   * @param {string} selectors - Selector list passed into document.querySelector.
+   * @returns document.querySelector result.
+   */
+  #querySelector(selectors) {
+    let start = Cu.now();
+
+    let result = this.document.querySelector(selectors);
+
+    this.#telemetryStatus.querySelectorTimeMS += Cu.now() - start;
+    this.#telemetryStatus.querySelectorCount += 1;
+
+    return result;
   }
 
   #maybeSendTestMessage() {

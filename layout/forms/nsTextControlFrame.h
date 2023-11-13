@@ -49,16 +49,14 @@ class nsTextControlFrame : public nsContainerFrame,
   virtual ~nsTextControlFrame();
 
   /**
-   * DestroyFrom() causes preparing to destroy editor and that may cause
-   * running selection listeners of specllchecker selection and document
-   * state listeners.  Not sure whether the former does something or not,
-   * but nobody should run content script.  The latter is currently only
-   * FinderHighlighter to clean up its fields at destruction.  Thus, the
-   * latter won't run content script too.  Therefore, this won't run
-   * unsafe script.
+   * Destroy() causes preparing to destroy editor and that may cause running
+   * selection listeners of spellchecker selection and document state listeners.
+   * Not sure whether the former does something or not, but nobody should run
+   * content script.  The latter is currently only FinderHighlighter to clean up
+   * its fields at destruction.  Thus, the latter won't run content script too.
+   * Therefore, this won't run unsafe script.
    */
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY void DestroyFrom(nsIFrame* aDestructRoot,
-                                               PostDestroyData&) override;
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void Destroy(DestroyContext&) override;
 
   nsIScrollableFrame* GetScrollTargetFrame() const override;
 
@@ -140,7 +138,12 @@ class nsTextControlFrame : public nsContainerFrame,
                     SelectionDirection = SelectionDirection::None) override;
   NS_IMETHOD GetOwnedSelectionController(
       nsISelectionController** aSelCon) override;
-  nsFrameSelection* GetOwnedFrameSelection() override;
+  nsFrameSelection* GetOwnedFrameSelection() override {
+    return ControlElement()->GetConstFrameSelection();
+  }
+  nsISelectionController* GetSelectionController() {
+    return ControlElement()->GetSelectionController();
+  }
 
   void PlaceholderChanged(const nsAttrValue* aOld, const nsAttrValue* aNew);
 
@@ -165,6 +168,7 @@ class nsTextControlFrame : public nsContainerFrame,
   /** handler for attribute changes to mContent */
   MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult AttributeChanged(
       int32_t aNameSpaceID, nsAtom* aAttribute, int32_t aModType) override;
+  void ElementStateChanged(mozilla::dom::ElementState aStates) override;
 
   nsresult PeekOffset(mozilla::PeekOffsetStruct* aPos) override;
 
@@ -176,6 +180,8 @@ class nsTextControlFrame : public nsContainerFrame,
   void ScrollSelectionIntoViewAsync(ScrollAncestors = ScrollAncestors::No);
 
  protected:
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void HandleReadonlyOrDisabledChange();
+
   /**
    * Launch the reflow on the child frames - see nsTextControlFrame::Reflow()
    */
@@ -201,12 +207,13 @@ class nsTextControlFrame : public nsContainerFrame,
   nsresult MaybeBeginSecureKeyboardInput();
   void MaybeEndSecureKeyboardInput();
 
-#define DEFINE_TEXTCTRL_CONST_FORWARDER(type, name)          \
-  type name() const {                                        \
-    mozilla::TextControlElement* textControlElement =        \
-        mozilla::TextControlElement::FromNode(GetContent()); \
-    return textControlElement->name();                       \
+  mozilla::TextControlElement* ControlElement() const {
+    MOZ_ASSERT(mozilla::TextControlElement::FromNode(GetContent()));
+    return static_cast<mozilla::TextControlElement*>(GetContent());
   }
+
+#define DEFINE_TEXTCTRL_CONST_FORWARDER(type, name) \
+  type name() const { return ControlElement()->name(); }
 
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsSingleLineTextControl)
   DEFINE_TEXTCTRL_CONST_FORWARDER(bool, IsTextArea)

@@ -6,6 +6,7 @@
 
 use crate::parser::{Parse, ParserContext};
 use crate::One;
+use crate::values::animated::ToAnimatedZero;
 use byteorder::{BigEndian, ReadBytesExt};
 use cssparser::Parser;
 use std::fmt::{self, Write};
@@ -213,33 +214,6 @@ pub enum FontStyle<Angle> {
     Oblique(Angle),
 }
 
-/// A generic value that holds either a generic Number or the keyword
-/// `from-font`; used for values of font-size-adjust.
-#[repr(u8)]
-#[derive(
-    Animate,
-    Clone,
-    ComputeSquaredDistance,
-    Copy,
-    Debug,
-    MallocSizeOf,
-    Parse,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToAnimatedValue,
-    ToAnimatedZero,
-    ToComputedValue,
-    ToResolvedValue,
-    ToCss,
-    ToShmem,
-)]
-pub enum GenericNumberOrFromFont<N> {
-    /// An explicitly-specified number.
-    Number(N),
-    /// The from-font keyword: resolve the number from font metrics.
-    FromFont,
-}
-
 /// A generic value for the `font-size-adjust` property.
 ///
 /// https://drafts.csswg.org/css-fonts-5/#font-size-adjust-prop
@@ -264,7 +238,7 @@ pub enum GenericNumberOrFromFont<N> {
 pub enum GenericFontSizeAdjust<Factor> {
     #[animation(error)]
     None,
-    // 'ex-height' is the implied basis, so the keyword can be omitted
+    #[value_info(starts_with_keyword)]
     ExHeight(Factor),
     #[value_info(starts_with_keyword)]
     CapHeight(Factor),
@@ -292,5 +266,51 @@ impl<Factor: ToCss> ToCss for GenericFontSizeAdjust<Factor> {
 
         dest.write_str(prefix)?;
         value.to_css(dest)
+    }
+}
+
+/// A generic value for the `line-height` property.
+#[derive(
+    Animate,
+    Clone,
+    ComputeSquaredDistance,
+    Copy,
+    Debug,
+    MallocSizeOf,
+    PartialEq,
+    SpecifiedValueInfo,
+    ToAnimatedValue,
+    ToCss,
+    ToShmem,
+    Parse,
+)]
+#[repr(C, u8)]
+pub enum GenericLineHeight<N, L> {
+    /// `normal`
+    Normal,
+    /// `-moz-block-height`
+    #[cfg(feature = "gecko")]
+    #[parse(condition = "ParserContext::in_ua_sheet")]
+    MozBlockHeight,
+    /// `<number>`
+    Number(N),
+    /// `<length-percentage>`
+    Length(L),
+}
+
+pub use self::GenericLineHeight as LineHeight;
+
+impl<N, L> ToAnimatedZero for LineHeight<N, L> {
+    #[inline]
+    fn to_animated_zero(&self) -> Result<Self, ()> {
+        Err(())
+    }
+}
+
+impl<N, L> LineHeight<N, L> {
+    /// Returns `normal`.
+    #[inline]
+    pub fn normal() -> Self {
+        LineHeight::Normal
     }
 }

@@ -46,7 +46,6 @@
 #include "js/MapAndSet.h"
 #include "js/MemoryCallbacks.h"
 #include "js/MemoryFunctions.h"
-#include "js/OffThreadScriptCompilation.h"
 #include "js/Principals.h"
 #include "js/PropertyAndElement.h"  // JS_Enumerate
 #include "js/PropertyDescriptor.h"
@@ -825,6 +824,8 @@ extern JS_PUBLIC_API void JS_SetOffthreadIonCompilationEnabled(JSContext* cx,
   Register(INLINING_BYTECODE_MAX_LENGTH, "inlining.bytecode-max-length") \
   Register(BASELINE_INTERPRETER_ENABLE, "blinterp.enable") \
   Register(BASELINE_ENABLE, "baseline.enable") \
+  Register(PORTABLE_BASELINE_ENABLE, "pbl.enable") \
+  Register(PORTABLE_BASELINE_WARMUP_THRESHOLD, "pbl.warmup.threshold") \
   Register(OFFTHREAD_COMPILATION_ENABLE, "offthread-compilation.enable")  \
   Register(FULL_DEBUG_CHECKS, "jit.full-debug-checks") \
   Register(JUMP_THRESHOLD, "jump-threshold") \

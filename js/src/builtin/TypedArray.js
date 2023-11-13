@@ -9,18 +9,19 @@ function ViewedArrayBufferIfReified(tarray) {
 
   var buf = UnsafeGetReservedSlot(tarray, JS_TYPEDARRAYLAYOUT_BUFFER_SLOT);
   assert(
-    buf === null ||
+    buf === false ||
+      buf === true ||
       (IsObject(buf) &&
         (GuardToArrayBuffer(buf) !== null ||
           GuardToSharedArrayBuffer(buf) !== null)),
     "unexpected value in buffer slot"
   );
-  return buf;
+  return IsObject(buf) ? buf : null;
 }
 
 function IsDetachedBuffer(buffer) {
-  // A typed array with a null buffer has never had its buffer exposed to
-  // become detached.
+  // A typed array with a null buffer has never had its buffer exposed,
+  // and so cannot have become detached.
   if (buffer === null) {
     return false;
   }
@@ -1931,7 +1932,7 @@ function TypedArrayCreateSameType(exemplar, length) {
   );
 
   // Step 2. Let constructor be the intrinsic object listed in column one of Table 63 for exemplar.[[TypedArrayName]].
-  let constructor = ConstructorForTypedArray(exemplar);
+  var constructor = ConstructorForTypedArray(exemplar);
 
   // Step 4 omitted. Assert: result has [[TypedArrayName]] and [[ContentType]] internal slots. - guaranteed by the TypedArray implementation
   // Step 5 omitted. Assert: result.[[ContentType]] is exemplar.[[ContentType]]. - guaranteed by the typed array implementation

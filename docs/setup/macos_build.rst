@@ -45,12 +45,10 @@ need Mercurial to download and update the code. Additionally, we'll
 put user-wide python package installations on the ``$PATH``, so that
 both ``hg`` and ``moz-phab`` will be easily accessible:
 
-**NOTE** Pay special attention to the `==6.1.4`, as Mercurial >=6.2 is incompatible with several plugins
-
 .. code-block:: shell
 
     echo 'export PATH="'"$(python3 -m site --user-base)"'/bin:$PATH"' >> ~/.zshenv
-    python3 -m pip install --user mercurial==6.1.4
+    python3 -m pip install --user mercurial
 
 Now, restart your shell so that the ``PATH`` change took effect.
 You can test that Mercurial is installed by running:
@@ -80,9 +78,8 @@ the interactive setup process.
 
 .. note::
 
-    In general, the Firefox workflow works best with Mercurial. However,
-    if you'd prefer to use ``git``, you can grab the source code in
-    "git" form by running the bootstrap script with the ``vcs`` parameter:
+    To use ``git``, you can grab the source code in "git" form by running the
+    bootstrap script with the ``vcs`` parameter:
 
     .. code-block:: shell
 

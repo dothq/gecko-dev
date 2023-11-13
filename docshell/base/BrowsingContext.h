@@ -267,7 +267,9 @@ struct EmbedderColorSchemes {
    * a content process. */                                                    \
   FIELD(EmbeddedInContentDocument, bool)                                      \
   /* If true, this browsing context is within a hidden embedded document. */  \
-  FIELD(IsUnderHiddenEmbedderElement, bool)
+  FIELD(IsUnderHiddenEmbedderElement, bool)                                   \
+  /* If true, this browsing context is offline */                             \
+  FIELD(ForceOffline, bool)
 
 // BrowsingContext, in this context, is the cross process replicated
 // environment in which information about documents is stored. In
@@ -610,6 +612,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
                                 : ExplicitActiveStatus::Inactive,
                       aRv);
   }
+
+  bool ForceOffline() const { return GetForceOffline(); }
 
   bool ForceDesktopViewport() const { return GetForceDesktopViewport(); }
 
@@ -1229,6 +1233,9 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
               const bool& aIsUnderHiddenEmbedderElement,
               ContentParent* aSource);
 
+  bool CanSet(FieldIndex<IDX_ForceOffline>, bool aNewValue,
+              ContentParent* aSource);
+
   bool CanSet(FieldIndex<IDX_EmbeddedInContentDocument>, bool,
               ContentParent* aSource) {
     return CheckOnlyEmbedderCanSet(aSource);
@@ -1419,7 +1426,8 @@ class BrowsingContext : public nsILoadContext, public nsWrapperCache {
  *
  * If aTransplantTo is non-null, then the WindowProxy object will eventually be
  * transplanted onto it. Therefore it should be used as the value in the remote
- * proxy map.
+ * proxy map. We assume that in this case the failure is unrecoverable, so we
+ * crash immediately rather than return false.
  */
 extern bool GetRemoteOuterWindowProxy(JSContext* aCx, BrowsingContext* aContext,
                                       JS::Handle<JSObject*> aTransplantTo,

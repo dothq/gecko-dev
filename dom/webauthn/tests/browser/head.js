@@ -23,11 +23,11 @@ for (let script of scripts) {
 }
 
 function add_virtual_authenticator(autoremove = true) {
-  let webauthnTransport = Cc["@mozilla.org/webauthn/transport;1"].getService(
-    Ci.nsIWebAuthnTransport
+  let webauthnService = Cc["@mozilla.org/webauthn/service;1"].getService(
+    Ci.nsIWebAuthnService
   );
-  let id = webauthnTransport.addVirtualAuthenticator(
-    "ctap2",
+  let id = webauthnService.addVirtualAuthenticator(
+    "ctap2_1",
     "internal",
     true,
     true,
@@ -36,10 +36,53 @@ function add_virtual_authenticator(autoremove = true) {
   );
   if (autoremove) {
     registerCleanupFunction(() => {
-      webauthnTransport.removeVirtualAuthenticator(id);
+      webauthnService.removeVirtualAuthenticator(id);
     });
   }
   return id;
+}
+
+async function addCredential(authenticatorId, rpId) {
+  let keyPair = await crypto.subtle.generateKey(
+    {
+      name: "ECDSA",
+      namedCurve: "P-256",
+    },
+    true,
+    ["sign"]
+  );
+
+  let credId = new Uint8Array(32);
+  crypto.getRandomValues(credId);
+  credId = bytesToBase64UrlSafe(credId);
+
+  let privateKey = await crypto.subtle
+    .exportKey("pkcs8", keyPair.privateKey)
+    .then(privateKey => bytesToBase64UrlSafe(privateKey));
+
+  let webauthnService = Cc["@mozilla.org/webauthn/service;1"].getService(
+    Ci.nsIWebAuthnService
+  );
+
+  webauthnService.addCredential(
+    authenticatorId,
+    credId,
+    true, // resident key
+    rpId,
+    privateKey,
+    "VGVzdCBVc2Vy", // "Test User"
+    0 // sign count
+  );
+
+  return credId;
+}
+
+async function removeCredential(authenticatorId, credId) {
+  let webauthnService = Cc["@mozilla.org/webauthn/service;1"].getService(
+    Ci.nsIWebAuthnService
+  );
+
+  webauthnService.removeCredential(authenticatorId, credId);
 }
 
 function memcmp(x, y) {
@@ -78,12 +121,13 @@ function expectError(aType) {
 function promiseWebAuthnMakeCredential(
   tab,
   attestation = "none",
+  residentKey = "discouraged",
   extensions = {}
 ) {
   return ContentTask.spawn(
     tab.linkedBrowser,
-    [attestation, extensions],
-    ([attestation, extensions]) => {
+    [attestation, residentKey, extensions],
+    ([attestation, residentKey, extensions]) => {
       const cose_alg_ECDSA_w_SHA256 = -7;
 
       let challenge = content.crypto.getRandomValues(new Uint8Array(16));
@@ -96,14 +140,17 @@ function promiseWebAuthnMakeCredential(
       ];
 
       let publicKey = {
-        rp: { id: content.document.domain, name: "none", icon: "none" },
+        rp: { id: content.document.domain, name: "none" },
         user: {
           id: new Uint8Array(),
           name: "none",
-          icon: "none",
           displayName: "none",
         },
         pubKeyCredParams,
+        authenticatorSelection: {
+          authenticatorAttachment: "cross-platform",
+          residentKey,
+        },
         extensions,
         attestation,
         challenge,
@@ -157,6 +204,21 @@ function promiseWebAuthnGetAssertion(tab, key_handle = null, extensions = {}) {
         });
     }
   );
+}
+
+function promiseWebAuthnGetAssertionDiscoverable(tab, extensions = {}) {
+  return ContentTask.spawn(tab.linkedBrowser, [extensions], ([extensions]) => {
+    let challenge = content.crypto.getRandomValues(new Uint8Array(16));
+
+    let publicKey = {
+      challenge,
+      extensions,
+      rpId: content.document.domain,
+      allowCredentials: [],
+    };
+
+    return content.navigator.credentials.get({ publicKey });
+  });
 }
 
 function checkRpIdHash(rpIdHash, hostname) {

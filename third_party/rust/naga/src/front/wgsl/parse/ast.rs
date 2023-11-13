@@ -1,5 +1,5 @@
 use crate::front::wgsl::parse::number::Number;
-use crate::{Arena, FastHashSet, Handle, Span};
+use crate::{Arena, FastIndexSet, Handle, Span};
 use std::hash::Hash;
 
 #[derive(Debug, Default)]
@@ -73,7 +73,7 @@ pub struct GlobalDecl<'a> {
 
     /// Names of all module-scope or predeclared objects this
     /// declaration uses.
-    pub dependencies: FastHashSet<Dependency<'a>>,
+    pub dependencies: FastIndexSet<Dependency<'a>>,
 }
 
 #[derive(Debug)]
@@ -103,7 +103,7 @@ pub struct FunctionResult<'a> {
 pub struct EntryPoint {
     pub stage: crate::ShaderStage,
     pub early_depth_test: Option<crate::EarlyDepthTest>,
-    pub workgroup_size: [u32; 3],
+    pub workgroup_size: Option<[u32; 3]>,
 }
 
 #[cfg(doc)]

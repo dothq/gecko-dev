@@ -12,10 +12,11 @@ What is a Triaged Bug
 
 The new definition of Triaged will be Firefox-related bugs of type
 ``defect`` where the component is not
-``UNTRIAGED``, and a severity value not equal to ``--`` or ``N/A``.
+``UNTRIAGED``, and a :ref:`Severity <Defect Severity>` value not equal
+to ``--`` or ``N/A``.
 
-Bugs of type Task or Enhancement may have a severity of ``N/A``,
-but defects must have a severity that is neither ``--`` or
+Bugs of type Task or Enhancement may have a Severity of ``N/A``,
+but defects must have a Severity that is neither ``--`` nor
 ``N/A``.
 
 Why Triage
@@ -67,7 +68,7 @@ Firefox::General and Toolkit::General
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Bugs in Firefox::General are fitted with Bug Bug’s model to see if
-there’s another component with a high liklihood of fit, and if a
+there’s another component with a high likelihood of fit, and if a
 threshold confidence is achieved, the bug is moved to that component.
 
 Members of the community also review bugs in this component and try to

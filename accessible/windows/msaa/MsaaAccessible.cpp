@@ -10,6 +10,7 @@
 #include "ia2AccessibleImage.h"
 #include "ia2AccessibleTable.h"
 #include "ia2AccessibleTableCell.h"
+#include "LocalAccessible-inl.h"
 #include "mozilla/a11y/AccessibleWrap.h"
 #include "mozilla/a11y/Compatibility.h"
 #include "mozilla/a11y/DocAccessibleParent.h"
@@ -214,8 +215,10 @@ void MsaaAccessible::FireWinEvent(Accessible* aTarget, uint32_t aEventType) {
                     nsIAccessibleEvent::EVENT_LAST_ENTRY,
                 "MSAA event map skewed");
 
-  NS_ASSERTION(aEventType > 0 && aEventType < ArrayLength(gWinEventMap),
-               "invalid event type");
+  if (aEventType == 0 || aEventType >= ArrayLength(gWinEventMap)) {
+    MOZ_ASSERT_UNREACHABLE("invalid event type");
+    return;
+  }
 
   uint32_t winEvent = gWinEventMap[aEventType];
   if (!winEvent) return;
@@ -1240,6 +1243,19 @@ MsaaAccessible::accHitTest(
 
   // if we got a child
   if (accessible) {
+    if (accessible != mAcc && accessible->IsTextLeaf()) {
+      Accessible* parent = accessible->Parent();
+      if (parent != mAcc && parent->Role() == roles::LINK) {
+        // Bug 1843832: The UI Automation -> IAccessible2 proxy barfs if we
+        // return the text leaf child of a link when hit testing an ancestor of
+        // the link. Therefore, we return the link instead. MSAA clients which
+        // call AccessibleObjectFromPoint will still get to the text leaf, since
+        // AccessibleObjectFromPoint keeps calling accHitTest until it can't
+        // descend any further. We should remove this tragic hack once we have
+        // a native UIA implementation.
+        accessible = parent;
+      }
+    }
     if (accessible == mAcc) {
       pvarChild->vt = VT_I4;
       pvarChild->lVal = CHILDID_SELF;

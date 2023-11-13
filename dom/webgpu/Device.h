@@ -45,6 +45,7 @@ class Promise;
 template <typename T>
 class Sequence;
 class GPUBufferOrGPUTexture;
+enum class GPUDeviceLostReason : uint8_t;
 enum class GPUErrorFilter : uint8_t;
 enum class GPUFeatureName : uint8_t;
 class GPULogCallback;
@@ -94,15 +95,19 @@ class Device final : public DOMEventTargetHelper, public SupportsWeakPtr {
   RefPtr<WebGPUChild> GetBridge();
   already_AddRefed<Texture> InitSwapChain(
       const dom::GPUCanvasConfiguration& aDesc,
-      const layers::RemoteTextureOwnerId aOwnerId, gfx::SurfaceFormat aFormat,
+      const layers::RemoteTextureOwnerId aOwnerId,
+      bool aUseExternalTextureInSwapChain, gfx::SurfaceFormat aFormat,
       gfx::IntSize aCanvasSize);
   bool CheckNewWarning(const nsACString& aMessage);
 
   void CleanupUnregisteredInParent();
 
   void GenerateValidationError(const nsCString& aMessage);
+  void TrackBuffer(Buffer* aBuffer);
+  void UntrackBuffer(Buffer* aBuffer);
 
   bool IsLost() const;
+  bool IsBridgeAlive() const;
 
  private:
   ~Device();
@@ -114,12 +119,14 @@ class Device final : public DOMEventTargetHelper, public SupportsWeakPtr {
   RefPtr<dom::Promise> mLostPromise;
   RefPtr<Queue> mQueue;
   nsTHashSet<nsCString> mKnownWarnings;
+  nsTHashSet<Buffer*> mTrackedBuffers;
 
  public:
   void GetLabel(nsAString& aValue) const;
   void SetLabel(const nsAString& aLabel);
   dom::Promise* GetLost(ErrorResult& aRv);
-  dom::Promise* MaybeGetLost() const { return mLostPromise; }
+  void ResolveLost(Maybe<dom::GPUDeviceLostReason> aReason,
+                   const nsAString& aMessage);
 
   const RefPtr<SupportedFeatures>& Features() const { return mFeatures; }
   const RefPtr<SupportedLimits>& Limits() const { return mLimits; }
@@ -130,6 +137,9 @@ class Device final : public DOMEventTargetHelper, public SupportsWeakPtr {
 
   already_AddRefed<Texture> CreateTexture(
       const dom::GPUTextureDescriptor& aDesc);
+  already_AddRefed<Texture> CreateTexture(
+      const dom::GPUTextureDescriptor& aDesc,
+      Maybe<layers::RemoteTextureOwnerId> aOwnerId);
   already_AddRefed<Sampler> CreateSampler(
       const dom::GPUSamplerDescriptor& aDesc);
 

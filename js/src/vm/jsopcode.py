@@ -130,16 +130,16 @@ class OpcodeInfo:
         #   /*
         #    * comment
         #    */
-        #   MACRO(JSOP_SUB, ...)
-        #   MACRO(JSOP_MUL, ...)
-        #   MACRO(JSOP_DIV, ...)
+        #   MACRO(Sub, ...)
+        #   MACRO(Mul, ...)
+        #   MACRO(Div, ...)
         self.group = []
 
         self.sort_key = ""
 
 
 def find_by_name(list, name):
-    for (n, body) in list:
+    for n, body in list:
         if n == name:
             return body
 

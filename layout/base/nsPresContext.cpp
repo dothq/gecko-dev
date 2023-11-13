@@ -249,6 +249,7 @@ nsPresContext::nsPresContext(dom::Document* aDocument, nsPresContextType aType)
       mAnimationTriggeredRestyles(0),
       mInterruptChecksToSkip(0),
       mNextFrameRateMultiplier(0),
+      mMeasuredTicksSinceLoading(0),
       mViewportScrollStyles(StyleOverflow::Auto, StyleOverflow::Auto),
       // mImageAnimationMode is initialised below, in constructor body
       mImageAnimationModePref(imgIContainer::kNormalAnimMode),
@@ -285,6 +286,7 @@ nsPresContext::nsPresContext(dom::Document* aDocument, nsPresContextType aType)
       mHadFirstContentfulPaint(false),
       mHadNonTickContentfulPaint(false),
       mHadContentfulPaintComposite(false),
+      mUserInputEventsAllowed(false),
 #ifdef DEBUG
       mInitialized(false),
 #endif
@@ -323,7 +325,6 @@ nsPresContext::nsPresContext(dom::Document* aDocument, nsPresContextType aType)
 static const char* gExactCallbackPrefs[] = {
     "browser.active_color",
     "browser.anchor_color",
-    "browser.underline_anchors",
     "browser.visited_color",
     "dom.meta-viewport.enabled",
     "dom.send_after_paint_to_content",
@@ -612,18 +613,6 @@ void nsPresContext::PreferenceChanged(const char* aPrefName) {
   if (prefName.EqualsLiteral(
           "layout.css.text-transform.uppercase-eszett.enabled")) {
     changeHint |= NS_STYLE_HINT_REFLOW;
-  }
-
-  // We will end up calling InvalidatePreferenceSheets one from each pres
-  // context, but all it's doing is clearing its cached sheet pointers, so it
-  // won't be wastefully recreating the sheet multiple times.
-  //
-  // The first pres context that flushes will be the one to cause the
-  // reconstruction of the pref style sheet via the UpdatePreferenceStyles call
-  // in FlushPendingNotifications.
-  if (GlobalStyleSheetCache::AffectedByPref(prefName)) {
-    restyleHint |= RestyleHint::RestyleSubtree();
-    GlobalStyleSheetCache::InvalidatePreferenceSheets();
   }
 
   if (PreferenceSheet::AffectedByPref(prefName)) {
@@ -1236,6 +1225,83 @@ nsRootPresContext* nsPresContext::GetRootPresContext() const {
   return pc->IsRoot() ? static_cast<nsRootPresContext*>(pc) : nullptr;
 }
 
+bool nsPresContext::UserInputEventsAllowed() {
+  MOZ_ASSERT(IsRoot());
+  if (mUserInputEventsAllowed) {
+    return true;
+  }
+
+  // Special document
+  if (Document()->IsInitialDocument()) {
+    return true;
+  }
+
+  if (mRefreshDriver->IsThrottled()) {
+    MOZ_ASSERT(!mPresShell->IsVisible());
+    // This implies that the BC is not visibile and users can't
+    // interact with it, so we are okay with handling user inputs here.
+    return true;
+  }
+
+  if (mMeasuredTicksSinceLoading <
+      StaticPrefs::dom_input_events_security_minNumTicks()) {
+    return false;
+  }
+
+  if (!StaticPrefs::dom_input_events_security_minTimeElapsedInMS()) {
+    return true;
+  }
+
+  dom::Document* doc = Document();
+
+  MOZ_ASSERT_IF(StaticPrefs::dom_input_events_security_minNumTicks(),
+                doc->GetReadyStateEnum() >= Document::READYSTATE_LOADING);
+
+  TimeStamp loadingOrRestoredFromBFCacheTime =
+      doc->GetLoadingOrRestoredFromBFCacheTimeStamp();
+  MOZ_ASSERT(!loadingOrRestoredFromBFCacheTime.IsNull());
+
+  TimeDuration elapsed = TimeStamp::Now() - loadingOrRestoredFromBFCacheTime;
+  if (elapsed.ToMilliseconds() >=
+      StaticPrefs::dom_input_events_security_minTimeElapsedInMS()) {
+    mUserInputEventsAllowed = true;
+    return true;
+  }
+
+  return false;
+}
+
+void nsPresContext::MaybeIncreaseMeasuredTicksSinceLoading() {
+  MOZ_ASSERT(IsRoot());
+  if (mMeasuredTicksSinceLoading >=
+      StaticPrefs::dom_input_events_security_minNumTicks()) {
+    return;
+  }
+
+  // We consider READYSTATE_LOADING is the point when the page
+  // becomes interactive
+  if (Document()->GetReadyStateEnum() >= Document::READYSTATE_LOADING ||
+      Document()->IsInitialDocument()) {
+    ++mMeasuredTicksSinceLoading;
+  }
+
+  if (mMeasuredTicksSinceLoading <
+      StaticPrefs::dom_input_events_security_minNumTicks()) {
+    // Here we are forcing refresh driver to run because we can't always
+    // guarantee refresh driver will run enough times to meet the minNumTicks
+    // requirement. i.e. about:blank.
+    if (!RefreshDriver()->HasPendingTick()) {
+      RefreshDriver()->InitializeTimer();
+    }
+  }
+}
+
+bool nsPresContext::NeedsMoreTicksForUserInput() const {
+  MOZ_ASSERT(IsRoot());
+  return mMeasuredTicksSinceLoading <
+         StaticPrefs::dom_input_events_security_minNumTicks();
+}
+
 // Helper function for setting Anim Mode on image
 static void SetImgAnimModeOnImgReq(imgIRequest* aImgReq, uint16_t aMode) {
   if (aImgReq) {
@@ -1554,7 +1620,7 @@ ColorScheme nsPresContext::DefaultBackgroundColorScheme() const {
   dom::Document* doc = Document();
   // Use a dark background for top-level about:blank that is inaccessible to
   // content JS.
-  if (doc->IsContentInaccessibleAboutBlank()) {
+  if (doc->IsLikelyContentInaccessibleTopLevelAboutBlank()) {
     return doc->PreferredColorScheme(Document::IgnoreRFP::Yes);
   }
   // Prefer the root color-scheme (since generally the default canvas
@@ -1776,8 +1842,8 @@ void nsPresContext::ThemeChangedInternal() {
   if (Document()->IsInChromeDocShell()) {
     if (RefPtr<nsPIDOMWindowInner> win = Document()->GetInnerWindow()) {
       nsContentUtils::DispatchEventOnlyToChrome(
-          Document(), win, u"nativethemechange"_ns, CanBubble::eYes,
-          Cancelable::eYes, nullptr);
+          Document(), nsGlobalWindowInner::Cast(win), u"nativethemechange"_ns,
+          CanBubble::eYes, Cancelable::eYes, nullptr);
     }
   }
 }
@@ -1787,7 +1853,7 @@ void nsPresContext::UIResolutionChanged() {
     nsCOMPtr<nsIRunnable> ev =
         NewRunnableMethod("nsPresContext::UIResolutionChangedInternal", this,
                           &nsPresContext::UIResolutionChangedInternal);
-    nsresult rv = Document()->Dispatch(TaskCategory::Other, ev.forget());
+    nsresult rv = Document()->Dispatch(ev.forget());
     if (NS_SUCCEEDED(rv)) {
       mPendingUIResolutionChanged = true;
     }
@@ -2483,7 +2549,7 @@ already_AddRefed<nsITimer> nsPresContext::CreateTimer(
   nsCOMPtr<nsITimer> timer;
   NS_NewTimerWithFuncCallback(getter_AddRefs(timer), aCallback, this, aDelay,
                               nsITimer::TYPE_ONE_SHOT, aName,
-                              Document()->EventTargetFor(TaskCategory::Other));
+                              GetMainThreadSerialEventTarget());
   return timer.forget();
 }
 
@@ -3001,8 +3067,7 @@ nsRootPresContext::nsRootPresContext(dom::Document* aDocument,
 void nsRootPresContext::AddWillPaintObserver(nsIRunnable* aRunnable) {
   if (!mWillPaintFallbackEvent.IsPending()) {
     mWillPaintFallbackEvent = new RunWillPaintObservers(this);
-    Document()->Dispatch(TaskCategory::Other,
-                         do_AddRef(mWillPaintFallbackEvent));
+    Document()->Dispatch(do_AddRef(mWillPaintFallbackEvent));
   }
   mWillPaintObservers.AppendElement(aRunnable);
 }

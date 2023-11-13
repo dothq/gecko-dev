@@ -67,10 +67,11 @@ const XHTML_NS = "http://www.w3.org/1999/xhtml";
  * with a special rule type (100).
  */
 class StyleRuleActor extends Actor {
-  constructor(pageStyle, item) {
+  constructor(pageStyle, item, userAdded = false) {
     super(pageStyle.conn, styleRuleSpec);
     this.pageStyle = pageStyle;
     this.rawStyle = item.style;
+    this._userAdded = userAdded;
     this._parentSheet = null;
     // Parsed CSS declarations from this.form().declarations used to check CSS property
     // names and values before tracking changes. Using cached values instead of accessing
@@ -134,12 +135,6 @@ class StyleRuleActor extends Actor {
       // If a rule has been modified via CSSOM, then we should fall back to
       // non-authored editing.
       // https://bugzilla.mozilla.org/show_bug.cgi?id=1224121
-      return false;
-    }
-    if (this._parentSheet.href === "about:PreferenceStyleSheet") {
-      // Special case about:PreferenceStyleSheet, as it is generated on the
-      // fly and the URI is not registered with the about: protocol handler
-      // https://bugzilla.mozilla.org/show_bug.cgi?id=935803#c37
       return false;
     }
     return true;
@@ -330,6 +325,11 @@ class StyleRuleActor extends Actor {
         canSetRuleText: this.canSetRuleText,
       },
     };
+
+    // This rule was manually added by the user and may be automatically focused by the frontend.
+    if (this._userAdded) {
+      form.userAdded = true;
+    }
 
     const { computeDesugaredSelector, ancestorData } =
       this._getAncestorDataForForm();

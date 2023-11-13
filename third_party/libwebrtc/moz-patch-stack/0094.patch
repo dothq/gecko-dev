@@ -1,52 +1,49 @@
-From: Andreas Pehrson <apehrson@mozilla.com>
-Date: Wed, 10 May 2023 08:01:00 +0000
-Subject: Bug 1828065 - cherry-pick upstream libwebrtc commit adf55790b6.
- r=webrtc-reviewers,mjf
+From: Jan Grulich <jgrulich@redhat.com>
+Date: Thu, 27 Jul 2023 09:49:00 +0000
+Subject: Bug 1841851 - WebRTC backport: PipeWire capturer: increase buffer
+ size to avoid buffer overflow r=jib,webrtc-reviewers,mjf
 
-Upstream commit: https://webrtc.googlesource.com/src/+/adf55790b6ecf50c4bb2b2cf7d58441303b9d946
-    In DeviceInfoDS free the frame duration list after use
+This is a simple backport of an WebRTC upstream change.
 
-    Per the docs, the caller is responsible for freeing the memory.
+Upstream commit: 8fcc6df79daf1810cd4ecdb8d2ef1d361abfdc9c
 
-    Bug: chromium:1441804
-    Change-Id: I9aaae493a1a86d8ab4f03930715a643a3c9fb61b
-    Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/304061
-    Reviewed-by: Per Kjellander <perkj@webrtc.org>
-    Commit-Queue: Ilya Nikolaevskiy <ilnik@webrtc.org>
-    Reviewed-by: Ilya Nikolaevskiy <ilnik@webrtc.org>
-    Cr-Commit-Position: refs/heads/main@{#39983}
-
-Differential Revision: https://phabricator.services.mozilla.com/D177237
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/854cc79e99130e6537eebe8433a6a7adf5e1578d
+Differential Revision: https://phabricator.services.mozilla.com/D183355
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/263be02fdeb0c3556e1da296eb18eb3d154eb99e
 ---
- modules/video_capture/windows/device_info_ds.cc | 11 +++++++++--
- 1 file changed, 9 insertions(+), 2 deletions(-)
+ .../linux/wayland/shared_screencast_stream.cc               | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
 
-diff --git a/modules/video_capture/windows/device_info_ds.cc b/modules/video_capture/windows/device_info_ds.cc
-index b5867923d1..f6927281f3 100644
---- a/modules/video_capture/windows/device_info_ds.cc
-+++ b/modules/video_capture/windows/device_info_ds.cc
-@@ -519,11 +519,18 @@ int32_t DeviceInfoDS::CreateCapabilityMap(const char* deviceUniqueIdUTF8)
-         hrVC = videoControlConfig->GetFrameRateList(
-             outputCapturePin, tmp, size, &listSize, &frameDurationList);
+diff --git a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
+index 5b4e23c32d..0c26e7a7d5 100644
+--- a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
++++ b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
+@@ -281,7 +281,7 @@ void SharedScreenCastStreamPrivate::OnStreamParamChanged(
  
-+        if (hrVC == S_OK) {
-+          maxFPS = GetMaxOfFrameArray(frameDurationList, listSize);
-+        }
-+
-+        CoTaskMemFree(frameDurationList);
-+        frameDurationList = NULL;
-+        listSize = 0;
-+
-         // On some odd cameras, you may get a 0 for duration. Some others may
-         // not update the out vars. GetMaxOfFrameArray returns the lowest
-         // duration (highest FPS), or 0 if there was no list with elements.
--        if (hrVC == S_OK &&
--            0 != (maxFPS = GetMaxOfFrameArray(frameDurationList, listSize))) {
-+        if (0 != maxFPS) {
-           capability.maxFPS = static_cast<int>(10000000 / maxFPS);
-           capability.supportFrameRateControl = true;
-         } else  // use existing method
+   that->stream_size_ = DesktopSize(width, height);
+ 
+-  uint8_t buffer[1024] = {};
++  uint8_t buffer[2048] = {};
+   auto builder = spa_pod_builder{buffer, sizeof(buffer)};
+ 
+   // Setup buffers and meta header for new format.
+@@ -364,7 +364,7 @@ void SharedScreenCastStreamPrivate::OnRenegotiateFormat(void* data, uint64_t) {
+   {
+     PipeWireThreadLoopLock thread_loop_lock(that->pw_main_loop_);
+ 
+-    uint8_t buffer[2048] = {};
++    uint8_t buffer[4096] = {};
+ 
+     spa_pod_builder builder = spa_pod_builder{buffer, sizeof(buffer)};
+ 
+@@ -482,7 +482,7 @@ bool SharedScreenCastStreamPrivate::StartScreenCastStream(
+ 
+     pw_stream_add_listener(pw_stream_, &spa_stream_listener_,
+                            &pw_stream_events_, this);
+-    uint8_t buffer[2048] = {};
++    uint8_t buffer[4096] = {};
+ 
+     spa_pod_builder builder = spa_pod_builder{buffer, sizeof(buffer)};
+ 
 -- 
-2.34.1
+2.37.3
 

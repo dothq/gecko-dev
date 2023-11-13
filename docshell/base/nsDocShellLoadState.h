@@ -144,9 +144,9 @@ class nsDocShellLoadState final {
 
   void SetForceAllowDataURI(bool aForceAllowDataURI);
 
-  bool IsExemptFromHTTPSOnlyMode() const;
+  bool IsExemptFromHTTPSFirstMode() const;
 
-  void SetIsExemptFromHTTPSOnlyMode(bool aIsExemptFromHTTPSOnlyMode);
+  void SetIsExemptFromHTTPSFirstMode(bool aIsExemptFromHTTPSFirstMode);
 
   bool OriginalFrameSrc() const;
 
@@ -327,6 +327,12 @@ class nsDocShellLoadState final {
     mRemoteTypeOverride = mozilla::Some(aRemoteTypeOverride);
   }
 
+  void SetWasSchemelessInput(bool aWasSchemelessInput) {
+    mWasSchemelessInput = aWasSchemelessInput;
+  }
+
+  bool GetWasSchemelessInput() { return mWasSchemelessInput; }
+
   // Determine the remote type of the process which should be considered
   // responsible for this load for the purposes of security checks.
   //
@@ -476,7 +482,7 @@ class nsDocShellLoadState final {
 
   // If this attribute is true, then the top-level navigaion
   // will be exempt from HTTPS-Only-Mode upgrades.
-  bool mIsExemptFromHTTPSOnlyMode;
+  bool mIsExemptFromHTTPSFirstMode;
 
   // If this attribute is true, this load corresponds to a frame
   // element loading its original src (or srcdoc) attribute.
@@ -594,6 +600,9 @@ class nsDocShellLoadState final {
 
   // Remote type of the process which originally requested the load.
   nsCString mTriggeringRemoteType;
+
+  // if the to-be-loaded address had it protocol added through a fixup
+  bool mWasSchemelessInput = false;
 };
 
 #endif /* nsDocShellLoadState_h__ */

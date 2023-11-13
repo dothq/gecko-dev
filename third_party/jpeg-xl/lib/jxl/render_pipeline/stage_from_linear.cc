@@ -10,9 +10,10 @@
 #include <hwy/foreach_target.h>
 #include <hwy/highway.h>
 
-#include "lib/jxl/dec_tone_mapping-inl.h"
+#include "lib/jxl/cms/tone_mapping-inl.h"
+#include "lib/jxl/cms/transfer_functions-inl.h"
+#include "lib/jxl/common.h"  // JXL_HIGH_PRECISION
 #include "lib/jxl/sanitizers.h"
-#include "lib/jxl/transfer_functions-inl.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -58,10 +59,12 @@ struct OpRgb {
 };
 
 struct OpPq {
+  explicit OpPq(const float intensity_target) : tf_pq_(intensity_target) {}
   template <typename D, typename T>
   T Transform(D d, const T& linear) const {
-    return TF_PQ().EncodedFromDisplay(d, linear);
+    return tf_pq_.EncodedFromDisplay(d, linear);
   }
+  TF_PQ tf_pq_;
 };
 
 struct OpHlg {
@@ -153,7 +156,8 @@ std::unique_ptr<RenderPipelineStage> GetFromLinearStage(
   } else if (output_encoding_info.color_encoding.tf.IsSRGB()) {
     return MakeFromLinearStage(MakePerChannelOp(OpRgb()));
   } else if (output_encoding_info.color_encoding.tf.IsPQ()) {
-    return MakeFromLinearStage(MakePerChannelOp(OpPq()));
+    return MakeFromLinearStage(
+        MakePerChannelOp(OpPq(output_encoding_info.orig_intensity_target)));
   } else if (output_encoding_info.color_encoding.tf.IsHLG()) {
     return MakeFromLinearStage(
         OpHlg(output_encoding_info.luminances,

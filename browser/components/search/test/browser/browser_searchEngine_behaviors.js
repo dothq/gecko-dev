@@ -10,8 +10,7 @@
 const SEARCH_ENGINE_DETAILS = [
   {
     alias: "a",
-    baseURL:
-      "https://www.amazon.com/exec/obidos/external-search/?field-keywords=foo&ie=UTF-8&mode=blended&tag=moz-us-20&sourceid=Mozilla-search",
+    baseURL: "https://www.amazon.com/s?k=foo",
     codes: {
       context: "",
       keyword: "",
@@ -91,7 +90,7 @@ function promiseContentSearchReady(browser) {
   });
 }
 
-add_task(async function test_setup() {
+add_setup(async function () {
   await gCUITestUtils.addSearchBar();
   registerCleanupFunction(() => {
     gCUITestUtils.removeSearchBar();
@@ -182,7 +181,7 @@ async function testSearchEngine(engineDetails) {
       searchURL: base.replace("{code}", engineDetails.codes.newTab),
       async preTest(tab) {
         let browser = tab.linkedBrowser;
-        BrowserTestUtils.loadURIString(browser, "about:newtab");
+        BrowserTestUtils.startLoadingURIString(browser, "about:newtab");
 
         await BrowserTestUtils.browserLoaded(browser, false, "about:newtab");
         await promiseContentSearchReady(browser);

@@ -111,8 +111,7 @@ if CONFIG["OS_TARGET"] == "OpenBSD":
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
 if CONFIG["OS_TARGET"] == "WINNT":
@@ -121,6 +120,7 @@ if CONFIG["OS_TARGET"] == "WINNT":
     DEFINES["NOMINMAX"] = True
     DEFINES["NTDDI_VERSION"] = "0x0A000000"
     DEFINES["PSAPI_VERSION"] = "2"
+    DEFINES["RTC_ENABLE_WIN_WGC"] = True
     DEFINES["UNICODE"] = True
     DEFINES["USE_AURA"] = "1"
     DEFINES["WEBRTC_WIN"] = True
@@ -144,6 +144,7 @@ if CONFIG["OS_TARGET"] == "WINNT":
     OS_LIBS += [
         "crypt32",
         "d3d11",
+        "dwmapi",
         "dxgi",
         "iphlpapi",
         "ole32",
@@ -225,8 +226,7 @@ if CONFIG["MOZ_X11"] == "1" and CONFIG["OS_TARGET"] == "Linux":
         "Xext",
         "Xfixes",
         "Xrandr",
-        "Xrender",
-        "Xtst"
+        "Xrender"
     ]
 
 if CONFIG["CPU_ARCH"] == "arm" and CONFIG["OS_TARGET"] == "Android":

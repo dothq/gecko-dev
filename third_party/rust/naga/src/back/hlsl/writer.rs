@@ -17,6 +17,9 @@ const SPECIAL_BASE_VERTEX: &str = "base_vertex";
 const SPECIAL_BASE_INSTANCE: &str = "base_instance";
 const SPECIAL_OTHER: &str = "other";
 
+pub(crate) const MODF_FUNCTION: &str = "naga_modf";
+pub(crate) const FREXP_FUNCTION: &str = "naga_frexp";
+
 struct EpStructMember {
     name: String,
     ty: Handle<crate::Type>,
@@ -244,6 +247,8 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
             }
         }
 
+        self.write_special_functions(module)?;
+
         self.write_wrapped_compose_functions(module, &module.const_expressions)?;
 
         // Write all named constants
@@ -416,7 +421,17 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 let builtin_str = builtin.to_hlsl_str()?;
                 write!(self.out, " : {builtin_str}")?;
             }
-            crate::Binding::Location { location, .. } => {
+            crate::Binding::Location {
+                second_blend_source: true,
+                ..
+            } => {
+                write!(self.out, " : SV_Target1")?;
+            }
+            crate::Binding::Location {
+                location,
+                second_blend_source: false,
+                ..
+            } => {
                 if stage == Some((crate::ShaderStage::Fragment, Io::Output)) {
                     write!(self.out, " : SV_Target{location}")?;
                 } else {
@@ -2337,12 +2352,7 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 }
             }
             Expression::FunctionArgument(pos) => {
-                let key = match func_ctx.ty {
-                    back::FunctionType::Function(handle) => NameKey::FunctionArgument(handle, pos),
-                    back::FunctionType::EntryPoint(index) => {
-                        NameKey::EntryPointArgument(index, pos)
-                    }
-                };
+                let key = func_ctx.argument_key(pos);
                 let name = &self.names[&key];
                 write!(self.out, "{name}")?;
             }
@@ -2665,8 +2675,8 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                     Mf::Round => Function::Regular("round"),
                     Mf::Fract => Function::Regular("frac"),
                     Mf::Trunc => Function::Regular("trunc"),
-                    Mf::Modf => Function::Regular("modf"),
-                    Mf::Frexp => Function::Regular("frexp"),
+                    Mf::Modf => Function::Regular(MODF_FUNCTION),
+                    Mf::Frexp => Function::Regular(FREXP_FUNCTION),
                     Mf::Ldexp => Function::Regular("ldexp"),
                     // exponent
                     Mf::Exp => Function::Regular("exp"),

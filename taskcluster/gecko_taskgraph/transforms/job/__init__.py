@@ -250,8 +250,6 @@ def use_system_python(config, jobs):
         else:
             fetches = job.setdefault("fetches", {})
             toolchain = fetches.setdefault("toolchain", [])
-
-            moz_python_home = mozpath.join("fetches", "python")
             if "win" in job["worker"]["os"]:
                 platform = "win64"
             elif "linux" in job["worker"]["os"]:
@@ -265,6 +263,9 @@ def use_system_python(config, jobs):
 
             worker = job.setdefault("worker", {})
             env = worker.setdefault("env", {})
+
+            moz_fetches_dir = env.get("MOZ_FETCHES_DIR", "fetches")
+            moz_python_home = mozpath.join(moz_fetches_dir, "python")
             env["MOZ_PYTHON_HOME"] = moz_python_home
 
             yield job
@@ -286,7 +287,7 @@ def use_fetches(config, jobs):
         for task in config.kind_dependencies_tasks.values()
         if task.kind in ("fetch", "toolchain")
     )
-    for (kind, task) in tasks:
+    for kind, task in tasks:
         get_attribute(
             artifact_names, task["label"], task["attributes"], f"{kind}-artifact"
         )

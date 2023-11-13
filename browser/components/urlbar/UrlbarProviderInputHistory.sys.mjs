@@ -164,6 +164,7 @@ class ProviderInputHistory extends UrlbarProvider {
             url: [url, UrlbarUtils.HIGHLIGHT.TYPED],
             title: [resultTitle, UrlbarUtils.HIGHLIGHT.TYPED],
             icon: UrlbarUtils.getIconForUrl(url),
+            userContextId: queryContext.userContextId || 0,
           })
         );
         addCallback(this, result);
@@ -203,6 +204,29 @@ class ProviderInputHistory extends UrlbarProvider {
       );
 
       addCallback(this, result);
+    }
+  }
+
+  onEngagement(state, queryContext, details, controller) {
+    let { result } = details;
+    if (result?.providerName != this.name) {
+      return;
+    }
+
+    if (
+      details.selType == "dismiss" &&
+      result.type == UrlbarUtils.RESULT_TYPE.URL
+    ) {
+      // Even if removing history normally also removes input history, that
+      // doesn't happen if the page is bookmarked, so we do remove input history
+      // regardless for this specific search term.
+      UrlbarUtils.removeInputHistory(
+        result.payload.url,
+        queryContext.searchString
+      ).catch(console.error);
+      // Remove browsing history for the page.
+      lazy.PlacesUtils.history.remove(result.payload.url).catch(console.error);
+      controller.removeResult(result);
     }
   }
 

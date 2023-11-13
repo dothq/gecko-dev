@@ -2011,6 +2011,7 @@ bool BaselineCacheIRCompiler::init(CacheKind kind) {
     case CacheKind::ToPropertyKey:
     case CacheKind::GetIterator:
     case CacheKind::OptimizeSpreadCall:
+    case CacheKind::OptimizeGetIterator:
     case CacheKind::ToBool:
     case CacheKind::UnaryArith:
       MOZ_ASSERT(numInputs == 1);
@@ -2331,8 +2332,10 @@ bool js::jit::TryFoldingStubs(JSContext* cx, ICFallbackStub* fallback,
           writer.guardMultipleShapes(objId, shapeObj);
           success = true;
         } else {
-          Shape* shape = stubInfo->getStubField<Shape*>(firstStub, shapeOffset);
-          writer.guardShape(objId, shape);
+          WeakHeapPtr<Shape*>& ptr =
+              stubInfo->getStubField<StubField::Type::WeakShape>(firstStub,
+                                                                 shapeOffset);
+          writer.guardShape(objId, ptr.unbarrieredGet());
         }
         break;
       }
@@ -2416,8 +2419,8 @@ static bool AddToFoldedStub(JSContext* cx, const CacheIRWriter& writer,
         newShape = PrivateValue(shape);
 
         // Get the shape array from the old stub.
-        JSObject* shapeList =
-            stubInfo->getStubField<JSObject*>(stub, stubShapesOffset);
+        JSObject* shapeList = stubInfo->getStubField<StubField::Type::JSObject>(
+            stub, stubShapesOffset);
         foldedShapes = &shapeList->as<ShapeListObject>();
         MOZ_ASSERT(foldedShapes->compartment() == shape->compartment());
 
@@ -2513,8 +2516,10 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
   CacheIRStubInfo* stubInfo;
   CacheIRStubKey::Lookup lookup(kind, ICStubEngine::Baseline,
                                 writer.codeStart(), writer.codeLength());
+
   JitCode* code = jitZone->getBaselineCacheIRStubCode(lookup, &stubInfo);
-  if (!code) {
+
+  if (!code && !IsPortableBaselineInterpreterEnabled()) {
     // We have to generate stub code.
     TempAllocator temp(&cx->tempLifoAlloc());
     JitContext jctx(cx);
@@ -2546,9 +2551,30 @@ ICAttachResult js::jit::AttachBaselineCacheIRStub(
     if (!jitZone->putBaselineCacheIRStubCode(lookup, key, code)) {
       return ICAttachResult::OOM;
     }
-  }
+  } else if (!stubInfo) {
+    MOZ_ASSERT(IsPortableBaselineInterpreterEnabled());
 
-  MOZ_ASSERT(code);
+    // Portable baseline interpreter case. We want to generate the
+    // CacheIR bytecode but not compile it to native code.
+    //
+    // We lie that all stubs make GC calls; this is simpler than
+    // iterating over ops to determine if it is actually the base, and
+    // we don't invoke the BaselineCacheIRCompiler so we otherwise
+    // don't know for sure.
+    stubInfo = CacheIRStubInfo::New(kind, ICStubEngine::Baseline,
+                                    /* makes GC calls = */ true, stubDataOffset,
+                                    writer);
+    if (!stubInfo) {
+      return ICAttachResult::OOM;
+    }
+
+    CacheIRStubKey key(stubInfo);
+    if (!jitZone->putBaselineCacheIRStubCode(lookup, key,
+                                             /* stubCode = */ nullptr)) {
+      return ICAttachResult::OOM;
+    }
+  }
+  MOZ_ASSERT_IF(IsBaselineInterpreterEnabled(), code);
   MOZ_ASSERT(stubInfo);
   MOZ_ASSERT(stubInfo->stubDataSize() == writer.stubDataSize());
 

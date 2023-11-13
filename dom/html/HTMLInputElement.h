@@ -28,6 +28,7 @@
 #include "mozilla/dom/ConstraintValidation.h"
 #include "mozilla/dom/FileInputType.h"
 #include "mozilla/dom/HiddenInputType.h"
+#include "mozilla/dom/RadioGroupContainer.h"
 #include "nsGenericHTMLElement.h"
 #include "nsImageLoadingContent.h"
 #include "nsCOMPtr.h"
@@ -35,7 +36,6 @@
 #include "nsIContentPrefService2.h"
 #include "nsContentUtils.h"
 
-class nsIRadioGroupContainer;
 class nsIRadioVisitor;
 
 namespace mozilla {
@@ -182,6 +182,11 @@ class HTMLInputElement final : public TextControlElement,
   nsMapRuleToAttributesFunc GetAttributeMappingFunction() const override;
 
   void GetEventTargetParent(EventChainPreVisitor& aVisitor) override;
+  void LegacyPreActivationBehavior(EventChainVisitor& aVisitor) override;
+  MOZ_CAN_RUN_SCRIPT
+  void ActivationBehavior(EventChainPostVisitor& aVisitor) override;
+  void LegacyCanceledActivationBehavior(
+      EventChainPostVisitor& aVisitor) override;
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   nsresult PreHandleEvent(EventChainVisitor& aVisitor) override;
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
@@ -210,8 +215,6 @@ class HTMLInputElement final : public TextControlElement,
   void DoneCreatingElement() override;
 
   void DestroyContent() override;
-
-  ElementState IntrinsicState() const override;
 
   void SetLastValueChangeWasInteractive(bool);
 
@@ -274,8 +277,9 @@ class HTMLInputElement final : public TextControlElement,
 
   void SetCheckedChangedInternal(bool aCheckedChanged);
   bool GetCheckedChanged() const { return mCheckedChanged; }
-  void AddedToRadioGroup();
-  void WillRemoveFromRadioGroup();
+  void AddToRadioGroup();
+  void RemoveFromRadioGroup();
+  void DisconnectRadioGroupContainer();
 
   /**
    * Helper function returning the currently selected button in the radio group.
@@ -324,10 +328,14 @@ class HTMLInputElement final : public TextControlElement,
   void UpdateRangeUnderflowValidityState();
   void UpdateStepMismatchValidityState();
   void UpdateBadInputValidityState();
+  void UpdatePlaceholderShownState();
+  void UpdateCheckedState(bool aNotify);
+  void UpdateIndeterminateState(bool aNotify);
   // Update all our validity states and then update our element state
   // as needed.  aNotify controls whether the element state update
   // needs to notify.
   void UpdateAllValidityStates(bool aNotify);
+  void UpdateValidityElementStates(bool aNotify) final;
   MOZ_CAN_RUN_SCRIPT
   void MaybeUpdateAllValidityStates(bool aNotify) {
     // If you need to add new type which supports validationMessage, you should
@@ -462,6 +470,11 @@ class HTMLInputElement final : public TextControlElement,
 
   bool Checked() const { return mChecked; }
   void SetChecked(bool aChecked);
+
+  bool IsRadioOrCheckbox() const {
+    return mType == FormControlType::InputCheckbox ||
+           mType == FormControlType::InputRadio;
+  }
 
   bool Disabled() const { return GetBoolAttr(nsGkAtoms::disabled); }
 
@@ -1063,8 +1076,6 @@ class HTMLInputElement final : public TextControlElement,
   MOZ_CAN_RUN_SCRIPT
   void HandleTypeChange(FormControlType aNewType, bool aNotify);
 
-  enum class SanitizationKind { ForValueGetter, ForDisplay, Other };
-
   /**
    * If the input range has a list, this function will snap the given value to
    * the nearest tick mark, but only if the given value is close enough to that
@@ -1072,13 +1083,13 @@ class HTMLInputElement final : public TextControlElement,
    */
   void MaybeSnapToTickMark(Decimal& aValue);
 
+  enum class SanitizationKind { ForValueGetter, ForValueSetter, ForDisplay };
   /**
    * Sanitize the value of the element depending of its current type.
    * See:
    * http://www.whatwg.org/specs/web-apps/current-work/#value-sanitization-algorithm
    */
-  void SanitizeValue(nsAString& aValue,
-                     SanitizationKind = SanitizationKind::Other);
+  void SanitizeValue(nsAString& aValue, SanitizationKind) const;
 
   /**
    * Returns whether the placeholder attribute applies for the current type.
@@ -1132,12 +1143,15 @@ class HTMLInputElement final : public TextControlElement,
   }
 
   /**
-   * Returns the radio group container if the element has one, null otherwise.
-   * The radio group container will be the form owner if there is one.
-   * The current document otherwise.
-   * @return the radio group container if the element has one, null otherwise.
+   * Returns the radio group container within the DOM tree that the element
+   * is currently a member of, if one exists.
    */
-  nsIRadioGroupContainer* GetRadioGroupContainer() const;
+  RadioGroupContainer* GetCurrentRadioGroupContainer() const;
+  /**
+   * Returns the radio group container within the DOM tree that the element
+   * should be added into, if one exists.
+   */
+  RadioGroupContainer* FindTreeRadioGroupContainer() const;
 
   /**
    * Parse a color string of the form #XXXXXX where X should be hexa characters
@@ -1304,10 +1318,9 @@ class HTMLInputElement final : public TextControlElement,
    */
   void SetValue(Decimal aValue, CallerType aCallerType);
 
-  /**
-   * Update the HAS_RANGE bit field value.
-   */
-  void UpdateHasRange();
+  void UpdateHasRange(bool aNotify);
+  // Updates the :in-range / :out-of-range states.
+  void UpdateInRange(bool aNotify);
 
   /**
    * Get the step scale value for the current type.
@@ -1609,6 +1622,8 @@ class HTMLInputElement final : public TextControlElement,
            aType == FormControlType::InputNumber;
   }
 
+  bool CheckActivationBehaviorPreconditions(EventChainVisitor& aVisitor) const;
+
   /**
    * Fire an event when the password input field is removed from the DOM tree.
    * This is now only used by the password manager.
@@ -1619,6 +1634,12 @@ class HTMLInputElement final : public TextControlElement,
    * Checks if aDateTimeInputType should be supported.
    */
   static bool IsDateTimeTypeSupported(FormControlType);
+
+  /**
+   * The radio group container containing the group the element is a part of.
+   * This allows the element to only access a container it has been added to.
+   */
+  RadioGroupContainer* mRadioGroupContainer;
 
   struct nsFilePickerFilter {
     nsFilePickerFilter() : mFilterMask(0) {}

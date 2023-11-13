@@ -33,10 +33,11 @@ use std::{
 };
 
 use arrayvec::ArrayVec;
+use bitflags::bitflags;
 use metal::foreign_types::ForeignTypeRef as _;
 use parking_lot::Mutex;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Api;
 
 type ResourceIndex = u32;
@@ -100,7 +101,9 @@ impl crate::Instance<Api> for Instance {
             raw_window_handle::RawWindowHandle::AppKit(handle) => Ok(unsafe {
                 Surface::from_view(handle.ns_view, Some(&self.managed_metal_layer_delegate))
             }),
-            _ => Err(crate::InstanceError),
+            _ => Err(crate::InstanceError::new(format!(
+                "window handle {window_handle:?} is not a Metal-compatible handle"
+            ))),
         }
     }
 
@@ -140,6 +143,24 @@ impl crate::Instance<Api> for Instance {
         adapters
     }
 }
+
+bitflags!(
+    /// Similar to `MTLCounterSamplingPoint`, but a bit higher abstracted for our purposes.
+    #[derive(Debug, Copy, Clone)]
+    pub struct TimestampQuerySupport: u32 {
+        /// On creating Metal encoders.
+        const STAGE_BOUNDARIES = 1 << 1;
+        /// Within existing draw encoders.
+        const ON_RENDER_ENCODER = Self::STAGE_BOUNDARIES.bits() | (1 << 2);
+        /// Within existing dispatch encoders.
+        const ON_COMPUTE_ENCODER = Self::STAGE_BOUNDARIES.bits() | (1 << 3);
+        /// Within existing blit encoders.
+        const ON_BLIT_ENCODER = Self::STAGE_BOUNDARIES.bits() | (1 << 4);
+
+        /// Within any wgpu render/compute pass.
+        const INSIDE_WGPU_PASSES = Self::ON_RENDER_ENCODER.bits() | Self::ON_COMPUTE_ENCODER.bits();
+    }
+);
 
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
@@ -187,8 +208,7 @@ struct PrivateCapabilities {
     format_rgba8_srgb_no_write: bool,
     format_rgb10a2_unorm_all: bool,
     format_rgb10a2_unorm_no_write: bool,
-    format_rgb10a2_uint_color: bool,
-    format_rgb10a2_uint_color_write: bool,
+    format_rgb10a2_uint_write: bool,
     format_rg11b10_all: bool,
     format_rg11b10_no_write: bool,
     format_rgb9e5_all: bool,
@@ -237,8 +257,7 @@ struct PrivateCapabilities {
     supports_preserve_invariance: bool,
     supports_shader_primitive_index: bool,
     has_unified_memory: Option<bool>,
-    support_timestamp_query: bool,
-    support_timestamp_query_in_passes: bool,
+    timestamp_query_support: TimestampQuerySupport,
 }
 
 #[derive(Clone, Debug)]
@@ -702,7 +721,7 @@ pub struct ComputePipeline {
 unsafe impl Send for ComputePipeline {}
 unsafe impl Sync for ComputePipeline {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QuerySet {
     raw_buffer: metal::Buffer,
     //Metal has a custom buffer for counters.
@@ -785,6 +804,9 @@ struct CommandState {
 
     work_group_memory_sizes: Vec<u32>,
     push_constants: Vec<u32>,
+
+    /// Timer query that should be executed when the next pass starts.
+    pending_timer_queries: Vec<(QuerySet, u32)>,
 }
 
 pub struct CommandEncoder {

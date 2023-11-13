@@ -10,18 +10,18 @@ with Files("**"):
 DIRS += ["input"]
 
 MOCHITEST_MANIFESTS += [
-    "test/dialog/mochitest.ini",
-    "test/forms/mochitest.ini",
-    "test/forms/without_selectionchange/mochitest.ini",
-    "test/mochitest.ini",
+    "test/dialog/mochitest.toml",
+    "test/forms/mochitest.toml",
+    "test/forms/without_selectionchange/mochitest.toml",
+    "test/mochitest.toml",
 ]
 
 MOCHITEST_CHROME_MANIFESTS += [
-    "test/chrome.ini",
-    "test/forms/chrome.ini",
+    "test/chrome.toml",
+    "test/forms/chrome.toml",
 ]
 
-BROWSER_CHROME_MANIFESTS += ["test/browser.ini"]
+BROWSER_CHROME_MANIFESTS += ["test/browser.toml"]
 
 EXPORTS += [
     "nsGenericHTMLElement.h",
@@ -30,7 +30,6 @@ EXPORTS += [
     "nsIConstraintValidation.h",
     "nsIFormControl.h",
     "nsIHTMLCollection.h",
-    "nsIRadioGroupContainer.h",
     "nsIRadioVisitor.h",
 ]
 
@@ -43,6 +42,7 @@ EXPORTS.mozilla += [
 EXPORTS.mozilla.dom += [
     "ConstraintValidation.h",
     "ElementInternals.h",
+    "FetchPriority.h",
     "HTMLAllCollection.h",
     "HTMLAnchorElement.h",
     "HTMLAreaElement.h",
@@ -127,6 +127,7 @@ EXPORTS.mozilla.dom += [
 UNIFIED_SOURCES += [
     "ConstraintValidation.cpp",
     "ElementInternals.cpp",
+    "FetchPriority.cpp",
     "HTMLAllCollection.cpp",
     "HTMLAnchorElement.cpp",
     "HTMLAreaElement.cpp",

@@ -38,7 +38,8 @@ use style_traits::{SpecifiedValueInfo, StyleParseErrorKind, ToCss};
 use to_shmem::impl_trivial_to_shmem;
 use crate::stylesheets::{CssRuleType, CssRuleTypes, Origin, UrlExtraData};
 use crate::use_counters::UseCounters;
-use crate::values::generics::text::LineHeight;
+use crate::values::generics::font::LineHeight;
+use crate::values::specified::length::LineHeightBase;
 use crate::values::{computed, resolved, serialize_atom_name};
 use crate::values::specified::font::SystemFont;
 use crate::rule_tree::StrongRuleNode;
@@ -362,6 +363,16 @@ impl MallocSizeOf for PropertyDeclaration {
 
 
 impl PropertyDeclaration {
+    /// Dumps the property declaration before crashing.
+    #[cold]
+    #[cfg(debug_assertions)]
+    pub(crate) fn debug_crash(&self, reason: &str) {
+        panic!("{}: {:?}", reason, self);
+    }
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    pub(crate) fn debug_crash(&self, _reason: &str) {}
+
     /// Returns whether this is a variant of the Longhand(Value) type, rather
     /// than one of the special variants in extra_variants.
     fn is_longhand_value(&self) -> bool {
@@ -863,44 +874,43 @@ impl<'a> Iterator for LonghandIdSetIterator<'a> {
 
 <%
 
-CASCADE_GROUPS = {
+PRIORITARY_PROPERTIES = set([
     # The writing-mode group has the most priority of all property groups, as
     # sizes like font-size can depend on it.
-    "writing_mode": [
-        "writing-mode",
-        "direction",
-        "text-orientation",
-    ],
+    "writing-mode",
+    "direction",
+    "text-orientation",
     # The fonts and colors group has the second priority, as all other lengths
     # and colors depend on them.
     #
     # There are some interdependencies between these, but we fix them up in
     # Cascade::fixup_font_stuff.
-    "fonts_and_color": [
-        # Needed to properly compute the zoomed font-size.
-        "-x-text-scale",
-        # Needed to do font-size computation in a language-dependent way.
-        "-x-lang",
-        # Needed for ruby to respect language-dependent min-font-size
-        # preferences properly, see bug 1165538.
-        "-moz-min-font-size-ratio",
-        # font-size depends on math-depth's computed value.
-        "math-depth",
-        # Needed to compute the first available font and its used size,
-        # in order to compute font-relative units correctly.
-        "font-size",
-        "font-size-adjust",
-        "font-weight",
-        "font-stretch",
-        "font-style",
-        "font-family",
-        # color-scheme affects how system colors resolve.
-        "color-scheme",
-        "forced-color-adjust",
-    ],
-}
-def in_late_group(p):
-    return p.name not in CASCADE_GROUPS["writing_mode"] and p.name not in CASCADE_GROUPS["fonts_and_color"]
+    # Needed to properly compute the zoomed font-size.
+    "-x-text-scale",
+    # Needed to do font-size computation in a language-dependent way.
+    "-x-lang",
+    # Needed for ruby to respect language-dependent min-font-size
+    # preferences properly, see bug 1165538.
+    "-moz-min-font-size-ratio",
+    # font-size depends on math-depth's computed value.
+    "math-depth",
+    # Needed to compute the first available font and its used size,
+    # in order to compute font-relative units correctly.
+    "font-size",
+    "font-size-adjust",
+    "font-weight",
+    "font-stretch",
+    "font-style",
+    "font-family",
+    # color-scheme affects how system colors resolve.
+    "color-scheme",
+    # forced-color-adjust affects whether colors are adjusted.
+    "forced-color-adjust",
+    # Zoom affects all absolute lengths.
+    "zoom",
+    # Line height lengths depend on this.
+    "line-height",
+])
 
 def is_visited_dependent(p):
     return p.name in [
@@ -924,8 +934,46 @@ def is_visited_dependent(p):
         "outline-color",
         "color",
     ]
-
 %>
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum PrioritaryPropertyId {
+    % for p in data.longhands:
+    % if p.name in PRIORITARY_PROPERTIES:
+    ${p.camel_case},
+    % endif
+    % endfor
+}
+
+/// The number of prioritary properties that we have.
+pub const PRIORITARY_PROPERTY_COUNT: usize = ${len(PRIORITARY_PROPERTIES)};
+impl PrioritaryPropertyId {
+    #[inline]
+    pub fn to_longhand(self) -> LonghandId {
+        static PRIORITARY_TO_LONGHAND: [LonghandId; PRIORITARY_PROPERTY_COUNT] = [
+        % for p in data.longhands:
+        % if p.name in PRIORITARY_PROPERTIES:
+            LonghandId::${p.camel_case},
+        % endif
+        % endfor
+        ];
+        PRIORITARY_TO_LONGHAND[self as usize]
+    }
+    #[inline]
+    pub fn from_longhand(l: LonghandId) -> Option<Self> {
+        static LONGHAND_TO_PRIORITARY: [Option<PrioritaryPropertyId>; ${len(data.longhands)}] = [
+        % for p in data.longhands:
+        % if p.name in PRIORITARY_PROPERTIES:
+            Some(PrioritaryPropertyId::${p.camel_case}),
+        % else:
+            None,
+        % endif
+        % endfor
+        ];
+        LONGHAND_TO_PRIORITARY[l as usize]
+    }
+}
 
 impl LonghandIdSet {
     #[inline]
@@ -976,32 +1024,23 @@ impl LonghandIdSet {
     }
 
     #[inline]
-    pub(super) fn writing_mode_group() -> &'static Self {
+    pub(super) fn prioritary_properties() -> &'static Self {
         ${static_longhand_id_set(
-            "WRITING_MODE_GROUP",
-            lambda p: p.name in CASCADE_GROUPS["writing_mode"]
+            "PRIORITARY_PROPERTIES",
+            lambda p: p.name in PRIORITARY_PROPERTIES
         )}
-        &WRITING_MODE_GROUP
-    }
-
-    #[inline]
-    pub(super) fn fonts_and_color_group() -> &'static Self {
-        ${static_longhand_id_set(
-            "FONTS_AND_COLOR_GROUP",
-            lambda p: p.name in CASCADE_GROUPS["fonts_and_color"]
-        )}
-        &FONTS_AND_COLOR_GROUP
+        &PRIORITARY_PROPERTIES
     }
 
     #[inline]
     pub(super) fn late_group_only_inherited() -> &'static Self {
-        ${static_longhand_id_set("LATE_GROUP_ONLY_INHERITED", lambda p: p.style_struct.inherited and in_late_group(p))}
+        ${static_longhand_id_set("LATE_GROUP_ONLY_INHERITED", lambda p: p.style_struct.inherited and p.name not in PRIORITARY_PROPERTIES)}
         &LATE_GROUP_ONLY_INHERITED
     }
 
     #[inline]
     pub(super) fn late_group() -> &'static Self {
-        ${static_longhand_id_set("LATE_GROUP", lambda p: in_late_group(p))}
+        ${static_longhand_id_set("LATE_GROUP", lambda p: p.name not in PRIORITARY_PROPERTIES)}
         &LATE_GROUP
     }
 
@@ -1401,7 +1440,7 @@ impl LonghandId {
         const FLAGS: [u16; ${len(data.longhands)}] = [
             % for property in data.longhands:
                 % for flag in property.flags + restriction_flags(property):
-                    PropertyFlags::${flag}.bits |
+                    PropertyFlags::${flag}.bits() |
                 % endfor
                 0,
             % endfor
@@ -1576,7 +1615,7 @@ impl ShorthandId {
         const FLAGS: [u16; ${len(data.shorthands)}] = [
             % for property in data.shorthands:
                 % for flag in property.flags:
-                    PropertyFlags::${flag}.bits |
+                    PropertyFlags::${flag}.bits() |
                 % endfor
                 0,
             % endfor
@@ -1685,9 +1724,9 @@ impl UnparsedValue {
         &self,
         longhand_id: LonghandId,
         writing_mode: WritingMode,
-        custom_properties: Option<<&Arc<crate::custom_properties::CustomPropertiesMap>>,
+        custom_properties: &crate::custom_properties::ComputedCustomProperties,
         quirks_mode: QuirksMode,
-        device: &Device,
+        stylist: &Stylist,
         shorthand_cache: &'cache mut ShorthandsWithPropertyReferencesCache,
     ) -> Cow<'cache, PropertyDeclaration> {
         let invalid_at_computed_value_time = || {
@@ -1714,7 +1753,7 @@ impl UnparsedValue {
             &self.css,
             self.first_token_type,
             custom_properties,
-            device,
+            stylist,
         ) {
             Ok(css) => css,
             Err(..) => return invalid_at_computed_value_time(),
@@ -2975,10 +3014,13 @@ pub struct ComputedValuesInner {
     % for style_struct in data.active_style_structs():
         ${style_struct.ident}: Arc<style_structs::${style_struct.name}>,
     % endfor
-    custom_properties: Option<Arc<crate::custom_properties::CustomPropertiesMap>>,
+    custom_properties: crate::custom_properties::ComputedCustomProperties,
 
     /// The writing mode of this computed values struct.
     pub writing_mode: WritingMode,
+
+    /// The effective zoom value.
+    pub effective_zoom: Zoom,
 
     /// A set of flags we use to store misc information regarding this style.
     pub flags: ComputedValueFlags,
@@ -3045,29 +3087,13 @@ impl ComputedValues {
     }
 
     /// Gets a reference to the custom properties map (if one exists).
-    pub fn custom_properties(&self) -> Option<<&Arc<crate::custom_properties::CustomPropertiesMap>> {
-        self.custom_properties.as_ref()
+    pub fn custom_properties(&self) -> &crate::custom_properties::ComputedCustomProperties {
+        &self.custom_properties
     }
 
     /// Returns whether we have the same custom properties as another style.
-    ///
-    /// This should effectively be just:
-    ///
-    ///   self.custom_properties() == other.custom_properties()
-    ///
-    /// But that's not really the case because IndexMap equality doesn't
-    /// consider ordering, which we have to account for. Also, for the same
-    /// reason, IndexMap equality comparisons are slower than needed.
-    ///
-    /// See https://github.com/bluss/indexmap/issues/153
     pub fn custom_properties_equal(&self, other: &Self) -> bool {
-        match (self.custom_properties(), other.custom_properties()) {
-            (Some(l), Some(r)) => {
-                l.len() == r.len() && l.iter().zip(r.iter()).all(|((k1, v1), (k2, v2))| k1 == k2 && v1 == v2)
-            },
-            (None, None) => true,
-            _ => false,
-        }
+      self.custom_properties() == other.custom_properties()
     }
 
 % for prop in data.longhands:
@@ -3204,8 +3230,9 @@ impl ComputedValues {
     /// Create a new refcounted `ComputedValues`
     pub fn new(
         pseudo: Option<<&PseudoElement>,
-        custom_properties: Option<Arc<crate::custom_properties::CustomPropertiesMap>>,
+        custom_properties: crate::custom_properties::ComputedCustomProperties,
         writing_mode: WritingMode,
+        effective_zoom: computed::Zoom,
         flags: ComputedValueFlags,
         rules: Option<StrongRuleNode>,
         visited_style: Option<Arc<ComputedValues>>,
@@ -3219,6 +3246,7 @@ impl ComputedValues {
                 writing_mode,
                 rules,
                 visited_style,
+                effective_zoom,
                 flags,
             % for style_struct in data.active_style_structs():
                 ${style_struct.ident},
@@ -3243,10 +3271,16 @@ impl ComputedValues {
                 s
             }
             PropertyDeclarationId::Custom(name) => {
-                self.custom_properties
+                // FIXME(bug 1273706): This should use a stylist to determine
+                // whether the name corresponds to an inherited custom property
+                // and then choose the inherited/non_inherited map accordingly.
+                let p = &self.custom_properties;
+                let value = p
+                    .inherited
                     .as_ref()
                     .and_then(|map| map.get(name))
-                    .map_or(String::new(), |value| value.to_css_string())
+                    .or_else(|| p.non_inherited.as_ref().and_then(|map| map.get(name)));
+                value.map_or(String::new(), |value| value.to_css_string())
             }
         }
     }
@@ -3613,7 +3647,8 @@ pub struct StyleBuilder<'a> {
     /// node.
     pub rules: Option<StrongRuleNode>,
 
-    custom_properties: Option<Arc<crate::custom_properties::CustomPropertiesMap>>,
+    /// The computed custom properties.
+    pub custom_properties: crate::custom_properties::ComputedCustomProperties,
 
     /// The pseudo-element this style will represent.
     pub pseudo: Option<<&'a PseudoElement>,
@@ -3631,6 +3666,9 @@ pub struct StyleBuilder<'a> {
     /// TODO(emilio): Make private.
     pub writing_mode: WritingMode,
 
+    /// The effective zoom.
+    pub effective_zoom: computed::Zoom,
+
     /// Flags for the computed value.
     pub flags: Cell<ComputedValueFlags>,
 
@@ -3645,20 +3683,18 @@ pub struct StyleBuilder<'a> {
 
 impl<'a> StyleBuilder<'a> {
     /// Trivially construct a `StyleBuilder`.
-    pub(super) fn new(
+    pub fn new(
         device: &'a Device,
         stylist: Option<<&'a Stylist>,
         parent_style: Option<<&'a ComputedValues>,
         pseudo: Option<<&'a PseudoElement>,
         rules: Option<StrongRuleNode>,
-        custom_properties: Option<Arc<crate::custom_properties::CustomPropertiesMap>>,
         is_root_element: bool,
     ) -> Self {
         let reset_style = device.default_computed_values();
         let inherited_style = parent_style.unwrap_or(reset_style);
 
         let flags = inherited_style.flags.inherited();
-
         StyleBuilder {
             device,
             stylist,
@@ -3668,8 +3704,9 @@ impl<'a> StyleBuilder<'a> {
             rules,
             modified_reset: false,
             is_root_element,
-            custom_properties,
+            custom_properties: crate::custom_properties::ComputedCustomProperties::default(),
             writing_mode: inherited_style.writing_mode,
+            effective_zoom: inherited_style.effective_zoom,
             flags: Cell::new(flags),
             visited_style: None,
             % for style_struct in data.active_style_structs():
@@ -3705,8 +3742,9 @@ impl<'a> StyleBuilder<'a> {
             modified_reset: false,
             is_root_element: false,
             rules: None,
-            custom_properties: style_to_derive_from.custom_properties().cloned(),
+            custom_properties: style_to_derive_from.custom_properties().clone(),
             writing_mode: style_to_derive_from.writing_mode,
+            effective_zoom: style_to_derive_from.effective_zoom,
             flags: Cell::new(style_to_derive_from.flags),
             visited_style: None,
             % for style_struct in data.active_style_structs():
@@ -3825,15 +3863,16 @@ impl<'a> StyleBuilder<'a> {
                 ).build()
             })
         });
+        let custom_properties = if let Some(p) = parent { p.custom_properties().clone() } else { crate::custom_properties::ComputedCustomProperties::default() };
         let mut ret = Self::new(
             device,
             stylist,
             parent,
             pseudo,
             /* rules = */ None,
-            parent.and_then(|p| p.custom_properties().cloned()),
             /* is_root_element = */ false,
         );
+        ret.custom_properties = custom_properties;
         ret.visited_style = visited_style;
         ret
     }
@@ -3957,6 +3996,7 @@ impl<'a> StyleBuilder<'a> {
             self.pseudo,
             self.custom_properties,
             self.writing_mode,
+            self.effective_zoom,
             self.flags.get(),
             self.rules,
             self.visited_style,
@@ -3967,8 +4007,8 @@ impl<'a> StyleBuilder<'a> {
     }
 
     /// Get the custom properties map if necessary.
-    pub fn custom_properties(&self) -> Option<<&Arc<crate::custom_properties::CustomPropertiesMap>> {
-        self.custom_properties.as_ref()
+    pub fn custom_properties(&self) -> &crate::custom_properties::ComputedCustomProperties {
+        &self.custom_properties
     }
 
     /// Access to various information about our inherited styles.  We don't
@@ -3981,10 +4021,50 @@ impl<'a> StyleBuilder<'a> {
         &self.inherited_style.writing_mode
     }
 
+    /// The effective zoom value that we should multiply absolute lengths by.
+    pub fn effective_zoom(&self) -> computed::Zoom {
+        self.effective_zoom
+    }
+
+    /// The zoom specified on this element.
+    pub fn specified_zoom(&self) -> computed::Zoom {
+        self.get_box().clone_zoom()
+    }
+
+    /// Inherited zoom.
+    pub fn inherited_effective_zoom(&self) -> computed::Zoom {
+        self.inherited_style.effective_zoom
+    }
+
     /// The computed value flags of our parent.
     #[inline]
     pub fn get_parent_flags(&self) -> ComputedValueFlags {
         self.inherited_style.flags
+    }
+
+    /// Calculate the line height, given the currently resolved line-height and font.
+    pub fn calc_line_height(
+        &self,
+        device: &Device,
+        line_height_base: LineHeightBase,
+        writing_mode: WritingMode,
+    ) -> computed::NonNegativeLength {
+        use crate::computed_value_flags::ComputedValueFlags;
+        let (font, flag) = match line_height_base {
+            LineHeightBase::CurrentStyle => (
+                self.get_font(),
+                ComputedValueFlags::DEPENDS_ON_SELF_FONT_METRICS,
+            ),
+            LineHeightBase::InheritedStyle => (
+                self.get_parent_font(),
+                ComputedValueFlags::DEPENDS_ON_INHERITED_FONT_METRICS,
+            ),
+        };
+        let line_height = font.clone_line_height();
+        if matches!(line_height, computed::LineHeight::Normal) {
+            self.add_flags(flag);
+        }
+        device.calc_line_height(&font, writing_mode, None)
     }
 
     /// And access to inherited style structs.
@@ -4035,7 +4115,7 @@ mod lazy_static_module {
                         % endif
                     }),
                 % endfor
-                custom_properties: None,
+                custom_properties,
                 writing_mode: WritingMode::empty(),
                 rules: None,
                 visited_style: None,
@@ -4162,7 +4242,7 @@ macro_rules! longhand_properties_idents {
 }
 
 // Large pages generate tens of thousands of ComputedValues.
-size_of_test!(ComputedValues, 232);
+size_of_test!(ComputedValues, 240);
 // FFI relies on this.
 size_of_test!(Option<Arc<ComputedValues>>, 8);
 

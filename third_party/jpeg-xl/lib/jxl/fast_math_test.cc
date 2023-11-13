@@ -3,21 +3,20 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-#include <stdio.h>
-
 #undef HWY_TARGET_INCLUDE
 #define HWY_TARGET_INCLUDE "lib/jxl/fast_math_test.cc"
 #include <hwy/foreach_target.h>
 
 #include "lib/jxl/base/random.h"
+#include "lib/jxl/cms/jxl_cms.h"
+#include "lib/jxl/cms/transfer_functions-inl.h"
 #include "lib/jxl/dec_xyb-inl.h"
-#include "lib/jxl/enc_color_management.h"
 #include "lib/jxl/enc_xyb.h"
-#include "lib/jxl/transfer_functions-inl.h"
+#include "lib/jxl/testing.h"
 
 // Test utils
 #include <hwy/highway.h>
-#include <hwy/tests/test_util-inl.h>
+#include <hwy/tests/hwy_gtest.h>
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
 namespace HWY_NAMESPACE {
@@ -144,10 +143,11 @@ HWY_NOINLINE void TestFastPQEFD() {
   Rng rng(1);
   float max_abs_err = 0;
   HWY_FULL(float) d;
+  TF_PQ tf_pq(/*display_intensity_target=*/11111.0);
   for (size_t i = 0; i < kNumTrials; i++) {
     const float f = rng.UniformF(0.0f, 1.0f);
-    const float actual = GetLane(TF_PQ().EncodedFromDisplay(d, Set(d, f)));
-    const float expected = TF_PQ().EncodedFromDisplay(f);
+    const float actual = GetLane(tf_pq.EncodedFromDisplay(d, Set(d, f)));
+    const float expected = tf_pq.EncodedFromDisplay(f);
     const float abs_err = std::abs(expected - actual);
     EXPECT_LT(abs_err, 7e-7) << "f = " << f;
     max_abs_err = std::max(max_abs_err, abs_err);
@@ -192,10 +192,11 @@ HWY_NOINLINE void TestFastPQDFE() {
   Rng rng(1);
   float max_abs_err = 0;
   HWY_FULL(float) d;
+  TF_PQ tf_pq(/*display_intensity_target=*/11111.0);
   for (size_t i = 0; i < kNumTrials; i++) {
     const float f = rng.UniformF(0.0f, 1.0f);
-    const float actual = GetLane(TF_PQ().DisplayFromEncoded(d, Set(d, f)));
-    const float expected = TF_PQ().DisplayFromEncoded(f);
+    const float actual = GetLane(tf_pq.DisplayFromEncoded(d, Set(d, f)));
+    const float expected = tf_pq.DisplayFromEncoded(f);
     const float abs_err = std::abs(expected - actual);
     EXPECT_LT(abs_err, 3E-6) << "f = " << f;
     max_abs_err = std::max(max_abs_err, abs_err);
@@ -231,7 +232,7 @@ HWY_NOINLINE void TestFastXYB() {
         ib.SetFromImage(std::move(chunk), ColorEncoding::SRGB());
         Image3F xyb(kChunk * kChunk, kChunk);
         std::vector<uint8_t> roundtrip(kChunk * kChunk * kChunk * 3);
-        ToXYB(ib, nullptr, &xyb, GetJxlCms());
+        ToXYB(ib, nullptr, &xyb, *JxlGetDefaultCms());
         for (int y = 0; y < kChunk; y++) {
           const float* xyba[4] = {xyb.PlaneRow(0, y), xyb.PlaneRow(1, y),
                                   xyb.PlaneRow(2, y), nullptr};

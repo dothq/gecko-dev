@@ -10,7 +10,7 @@ use crate::values::computed::percentage::Percentage;
 use crate::values::generics::color::{
     GenericCaretColor, GenericColor, GenericColorMix, GenericColorOrAuto,
 };
-use cssparser::Color as CSSParserColor;
+use crate::color::parsing::Color as CSSParserColor;
 use std::fmt;
 use style_traits::{CssWriter, ToCss};
 
@@ -43,7 +43,7 @@ impl ToCss for Color {
 
 impl Color {
     /// A fully transparent color.
-    pub const TRANSPARENT: Self = Self::Absolute(AbsoluteColor::TRANSPARENT);
+    pub const TRANSPARENT_BLACK: Self = Self::Absolute(AbsoluteColor::TRANSPARENT_BLACK);
 
     /// An opaque black color.
     pub const BLACK: Self = Self::Absolute(AbsoluteColor::BLACK);
@@ -87,7 +87,7 @@ impl Color {
 
 impl ToAnimatedZero for AbsoluteColor {
     fn to_animated_zero(&self) -> Result<Self, ()> {
-        Ok(Self::TRANSPARENT)
+        Ok(Self::TRANSPARENT_BLACK)
     }
 }
 

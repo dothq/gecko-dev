@@ -11,7 +11,6 @@
 #include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,7 +21,6 @@
 #include "lib/jxl/base/bits.h"
 #include "lib/jxl/base/compiler_specific.h"
 #include "lib/jxl/base/status.h"
-#include "lib/jxl/common.h"
 #include "lib/jxl/dec_bit_reader.h"
 #include "lib/jxl/field_encodings.h"
 
@@ -371,6 +369,8 @@ class VisitorBase : public Visitor {
   ExtensionStates extension_states_;
 };
 }  // namespace fields_internal
+
+Status CheckHasEnoughBits(Visitor* visitor, size_t bits);
 
 }  // namespace jxl
 

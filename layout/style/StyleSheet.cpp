@@ -397,8 +397,6 @@ StyleSheetInfo::StyleSheetInfo(StyleSheetInfo& aCopy, StyleSheet* aPrimarySheet)
       // We don't rebuild the child because we're making a copy without
       // children.
       mSourceMapURL(aCopy.mSourceMapURL),
-      mSourceMapURLFromComment(aCopy.mSourceMapURLFromComment),
-      mSourceURL(aCopy.mSourceURL),
       mContents(Servo_StyleSheet_Clone(aCopy.mContents.get(), aPrimarySheet)
                     .Consume()),
       mURLData(aCopy.mURLData)
@@ -577,29 +575,20 @@ dom::CSSRuleList* StyleSheet::GetCssRules(nsIPrincipal& aSubjectPrincipal,
   return GetCssRulesInternal();
 }
 
-void StyleSheet::GetSourceMapURL(nsAString& aSourceMapURL) {
-  if (mInner->mSourceMapURL.IsEmpty()) {
-    aSourceMapURL = mInner->mSourceMapURLFromComment;
-  } else {
+void StyleSheet::GetSourceMapURL(nsACString& aSourceMapURL) {
+  if (!mInner->mSourceMapURL.IsEmpty()) {
     aSourceMapURL = mInner->mSourceMapURL;
+    return;
   }
+  Servo_StyleSheet_GetSourceMapURL(mInner->mContents, &aSourceMapURL);
 }
 
-void StyleSheet::SetSourceMapURL(const nsAString& aSourceMapURL) {
-  mInner->mSourceMapURL = aSourceMapURL;
+void StyleSheet::SetSourceMapURL(nsCString&& aSourceMapURL) {
+  mInner->mSourceMapURL = std::move(aSourceMapURL);
 }
 
-void StyleSheet::SetSourceMapURLFromComment(
-    const nsAString& aSourceMapURLFromComment) {
-  mInner->mSourceMapURLFromComment = aSourceMapURLFromComment;
-}
-
-void StyleSheet::GetSourceURL(nsAString& aSourceURL) {
-  aSourceURL = mInner->mSourceURL;
-}
-
-void StyleSheet::SetSourceURL(const nsAString& aSourceURL) {
-  mInner->mSourceURL = aSourceURL;
+void StyleSheet::GetSourceURL(nsACString& aSourceURL) {
+  Servo_StyleSheet_GetSourceURL(mInner->mContents, &aSourceURL);
 }
 
 css::Rule* StyleSheet::GetDOMOwnerRule() const { return GetOwnerRule(); }
@@ -739,8 +728,7 @@ already_AddRefed<dom::Promise> StyleSheet::Replace(const nsACString& aText,
   // 5.1 Parse aText into rules.
   // 5.2 Load import rules, throw NetworkError if failed.
   // 5.3 Set sheet's rules to new rules.
-  nsCOMPtr<nsISerialEventTarget> target =
-      mConstructorDocument->EventTargetFor(TaskCategory::Other);
+  nsISerialEventTarget* target = GetMainThreadSerialEventTarget();
   loadData->mIsBeingParsed = true;
   MOZ_ASSERT(!mReplacePromise);
   mReplacePromise = promise;
@@ -788,7 +776,6 @@ void StyleSheet::ReplaceSync(const nsACString& aText, ErrorResult& aRv) {
   // 5. Set sheet's rules to the new rules.
   Inner().mContents = std::move(rawContent);
   FixUpRuleListAfterContentsChangeIfNeeded();
-  FinishParse();
   RuleChanged(nullptr, StyleRuleChangeKind::Generic);
 }
 
@@ -1168,34 +1155,14 @@ already_AddRefed<StyleSheet> StyleSheet::CreateEmptyChildSheet(
   return child.forget();
 }
 
-// We disable parallel stylesheet parsing if any of the following three
-// conditions hold:
-//
-// (1) The pref is off.
-// (2) The browser is recording CSS errors (which parallel parsing can't
-//     handle).
-// (3) The stylesheet is a chrome stylesheet, since those can use
-//     -moz-bool-pref, which needs to access the pref service, which is not
-//     threadsafe.
+// We disable parallel stylesheet parsing if the browser is recording CSS errors
+// (which parallel parsing can't handle).
 static bool AllowParallelParse(css::Loader& aLoader, URLExtraData* aUrlData) {
-  // If the browser is recording CSS errors, we need to use the sequential path
-  // because the parallel path doesn't support that.
   Document* doc = aLoader.GetDocument();
   if (doc && css::ErrorReporter::ShouldReportErrors(*doc)) {
     return false;
   }
-
-  // If this is a chrome stylesheet, it might use -moz-bool-pref, which needs to
-  // access the pref service, which is not thread-safe. We could probably expose
-  // the relevant booleans as thread-safe var caches if we needed to, but
-  // parsing chrome stylesheets in parallel is unlikely to be a win anyway.
-  //
-  // Note that UA stylesheets can also use -moz-bool-pref, but those are always
-  // parsed sync.
-  if (aUrlData->ChromeRulesEnabled()) {
-    return false;
-  }
-
+  // Otherwise we can parse in parallel.
   return true;
 }
 
@@ -1252,7 +1219,6 @@ void StyleSheet::FinishAsyncParse(
   MOZ_ASSERT(!mParsePromise.IsEmpty());
   Inner().mContents = aSheetContents;
   Inner().mUseCounters = std::move(aUseCounters);
-  FinishParse();
   mParsePromise.Resolve(true, __func__);
 }
 
@@ -1288,18 +1254,6 @@ void StyleSheet::ParseSheetSync(
                           allowImportRules, StyleSanitizationKind::None,
                           /* sanitized_output = */ nullptr)
                           .Consume();
-
-  FinishParse();
-}
-
-void StyleSheet::FinishParse() {
-  nsString sourceMapURL;
-  Servo_StyleSheet_GetSourceMapURL(Inner().mContents, &sourceMapURL);
-  SetSourceMapURLFromComment(sourceMapURL);
-
-  nsString sourceURL;
-  Servo_StyleSheet_GetSourceURL(Inner().mContents, &sourceURL);
-  SetSourceURL(sourceURL);
 }
 
 void StyleSheet::ReparseSheet(const nsACString& aInput, ErrorResult& aRv) {
@@ -1491,9 +1445,6 @@ void StyleSheet::SetSharedContents(const StyleLockedCssRules* aSharedRules) {
 
   Inner().mContents =
       Servo_StyleSheet_FromSharedData(URLData(), aSharedRules).Consume();
-
-  // Don't call FinishParse(), since that tries to set source map URLs,
-  // which we don't have.
 }
 
 const StyleLockedCssRules* StyleSheet::ToShared(

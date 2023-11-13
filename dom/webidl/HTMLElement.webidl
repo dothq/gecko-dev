@@ -12,7 +12,8 @@
  * and create derivative works of this document.
  */
 
-[Exposed=Window]
+[Exposed=Window,
+ InstrumentedProps=(attributeStyleMap,hidePopover,popover,showPopover,togglePopover)]
 interface HTMLElement : Element {
   [HTMLConstructor] constructor();
 
@@ -34,7 +35,7 @@ interface HTMLElement : Element {
   // user interaction
   [CEReactions, SetterThrows, Pure]
            attribute boolean hidden;
-  [CEReactions, SetterThrows, Pure, Pref="html5.inert.enabled"]
+  [CEReactions, SetterThrows, Pure]
            attribute boolean inert;
   [NeedsCallerType]
   undefined click();
@@ -53,11 +54,11 @@ interface HTMLElement : Element {
            attribute DOMString? popover;
   [CEReactions, SetterThrows, Pure]
            attribute boolean spellcheck;
-  [CEReactions, Pure, SetterThrows, Pref="dom.forms.inputmode"]
+  [CEReactions, Pure, SetterThrows]
            attribute DOMString inputMode;
   [CEReactions, Pure, SetterThrows]
            attribute DOMString enterKeyHint;
-  [CEReactions, Pure, SetterThrows, Pref="dom.forms.autocapitalize"]
+  [CEReactions, Pure, SetterThrows]
            attribute DOMString autocapitalize;
 
   attribute DOMString nonce;

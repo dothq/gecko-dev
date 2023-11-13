@@ -98,6 +98,10 @@ Preferences.addAll([
   { id: "privacy.fingerprintingProtection", type: "bool" },
   { id: "privacy.fingerprintingProtection.pbmode", type: "bool" },
 
+  // Resist Fingerprinting
+  { id: "privacy.resistFingerprinting", type: "bool" },
+  { id: "privacy.resistFingerprinting.pbmode", type: "bool" },
+
   // Social tracking
   { id: "privacy.trackingprotection.socialtracking.enabled", type: "bool" },
   { id: "privacy.socialtracking.block_cookies.enabled", type: "bool" },
@@ -115,8 +119,8 @@ Preferences.addAll([
   },
 
   // Location Bar
-  { id: "browser.urlbar.suggest.bestmatch", type: "bool" },
   { id: "browser.urlbar.suggest.bookmark", type: "bool" },
+  { id: "browser.urlbar.suggest.clipboard", type: "bool" },
   { id: "browser.urlbar.suggest.history", type: "bool" },
   { id: "browser.urlbar.suggest.openpage", type: "bool" },
   { id: "browser.urlbar.suggest.topsites", type: "bool" },
@@ -190,6 +194,8 @@ Preferences.addAll([
 
   { id: "security.OCSP.enabled", type: "int" },
 
+  { id: "security.enterprise_roots.enabled", type: "bool" },
+
   // Add-ons, malware, phishing
   { id: "xpinstall.whitelist.required", type: "bool" },
 
@@ -224,8 +230,7 @@ Preferences.addAll([
 
   // Cookie Banner Handling
   { id: "cookiebanners.ui.desktop.enabled", type: "bool" },
-  { id: "cookiebanners.service.mode", type: "int" },
-  { id: "cookiebanners.service.detectOnly", type: "bool" },
+  { id: "cookiebanners.service.mode.privateBrowsing", type: "int" },
 
   // DoH
   { id: "network.trr.mode", type: "int" },
@@ -310,6 +315,10 @@ function dataCollectionCheckboxHandler({
 function setUpContentBlockingWarnings() {
   document.getElementById("fpiIncompatibilityWarning").hidden =
     !gIsFirstPartyIsolated;
+
+  document.getElementById("rfpIncompatibilityWarning").hidden =
+    !Preferences.get("privacy.resistFingerprinting").value &&
+    !Preferences.get("privacy.resistFingerprinting.pbmode").value;
 }
 
 function initTCPStandardSection() {
@@ -447,6 +456,19 @@ var gPrivacyPane = {
     };
     showPref.on("change", showQuickActionsGroup);
     showQuickActionsGroup();
+  },
+
+  _initThirdPartyCertsToggle() {
+    // Third-party certificate import is only implemented for Windows and Mac,
+    // and we should not expose this as a user-configurable setting if there's
+    // an enterprise policy controlling it (either to enable _or_ disable it).
+    let canConfigureThirdPartyCerts =
+      (AppConstants.platform == "win" || AppConstants.platform == "macosx") &&
+      typeof Services.policies.getActivePolicies()?.Certificates
+        ?.ImportEnterpriseRoots == "undefined";
+
+    document.getElementById("certEnableThirdPartyToggleBox").hidden =
+      !canConfigureThirdPartyCerts;
   },
 
   syncFromHttpsOnlyPref() {
@@ -885,6 +907,7 @@ var gPrivacyPane = {
     this.fingerprintingProtectionReadPrefs();
     this.networkCookieBehaviorReadPrefs();
     this._initTrackingProtectionExtensionControl();
+    this._initThirdPartyCertsToggle();
 
     Services.telemetry.setEventRecordingEnabled("privacy.ui.fpp", true);
 
@@ -911,6 +934,15 @@ var gPrivacyPane = {
     Preferences.get("privacy.firstparty.isolate").on(
       "change",
       gPrivacyPane.networkCookieBehaviorReadPrefs.bind(gPrivacyPane)
+    );
+
+    Preferences.get("privacy.fingerprintingProtection").on(
+      "change",
+      gPrivacyPane.fingerprintingProtectionReadPrefs.bind(gPrivacyPane)
+    );
+    Preferences.get("privacy.fingerprintingProtection.pbmode").on(
+      "change",
+      gPrivacyPane.fingerprintingProtectionReadPrefs.bind(gPrivacyPane)
     );
 
     setEventListener(
@@ -1304,6 +1336,15 @@ var gPrivacyPane = {
         "sitedata-option-block-cross-site-tracking-cookies"
       );
     }
+
+    Preferences.get("privacy.resistFingerprinting").on(
+      "change",
+      setUpContentBlockingWarnings
+    );
+    Preferences.get("privacy.resistFingerprinting.pbmode").on(
+      "change",
+      setUpContentBlockingWarnings
+    );
 
     setUpContentBlockingWarnings();
 
@@ -2467,15 +2508,12 @@ var gPrivacyPane = {
   },
 
   /**
-   * Reads the cookiebanners.service.mode and detectOnly preference value and
-   * updates the cookie banner handling checkbox accordingly.
+   * Reads the cookiebanners.service.mode.privateBrowsing pref,
+   * interpreting the multiple modes as a true/false value
    */
   readCookieBannerMode() {
-    if (Preferences.get("cookiebanners.service.detectOnly").value) {
-      return false;
-    }
     return (
-      Preferences.get("cookiebanners.service.mode").value !=
+      Preferences.get("cookiebanners.service.mode.privateBrowsing").value !=
       Ci.nsICookieBannerService.MODE_DISABLED
     );
   },
@@ -2486,27 +2524,16 @@ var gPrivacyPane = {
    */
   writeCookieBannerMode() {
     let checkbox = document.getElementById("handleCookieBanners");
-    let mode;
-    if (checkbox.checked) {
-      mode = Ci.nsICookieBannerService.MODE_REJECT;
-
-      // Also unset the detect-only mode pref, just in case the user enabled
-      // the feature via about:preferences, not the onboarding doorhanger.
-      Services.prefs.setBoolPref("cookiebanners.service.detectOnly", false);
-    } else {
-      mode = Ci.nsICookieBannerService.MODE_DISABLED;
+    if (!checkbox.checked) {
+      /* because we removed UI control for the non-PBM pref, disabling it here
+         provides an off-ramp for profiles where it had previously been enabled from the UI */
+      Services.prefs.setIntPref(
+        "cookiebanners.service.mode",
+        Ci.nsICookieBannerService.MODE_DISABLED
+      );
+      return Ci.nsICookieBannerService.MODE_DISABLED;
     }
-
-    /**
-     * There is a second service.mode pref for private browsing,
-     * but for now we want it always be the same as service.mode
-     * more info: https://bugzilla.mozilla.org/show_bug.cgi?id=1817201
-     */
-    Services.prefs.setIntPref(
-      "cookiebanners.service.mode.privateBrowsing",
-      mode
-    );
-    return mode;
+    return Ci.nsICookieBannerService.MODE_REJECT;
   },
 
   /**
@@ -2552,6 +2579,10 @@ var gPrivacyPane = {
       );
     }
 
+    document.getElementById("clipboardSuggestion").hidden = !UrlbarPrefs.get(
+      "clipboard.featureGate"
+    );
+
     this._updateFirefoxSuggestSection(true);
     this._initQuickActionsSection();
   },
@@ -2564,10 +2595,6 @@ var gPrivacyPane = {
    *   Pass true when calling this when initializing the pane.
    */
   _updateFirefoxSuggestSection(onInit = false) {
-    // Show the best match checkbox container as appropriate.
-    document.getElementById("firefoxSuggestBestMatchContainer").hidden =
-      !UrlbarPrefs.get("bestMatchEnabled");
-
     let container = document.getElementById("firefoxSuggestContainer");
 
     if (UrlbarPrefs.get("quickSuggestEnabled")) {

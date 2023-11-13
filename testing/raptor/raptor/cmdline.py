@@ -14,12 +14,13 @@ from mozlog.commandline import add_logging_group
     "safari",
     "custom-car",
 ]
-(GECKOVIEW, REFBROW, FENIX, CHROME_ANDROID) = FIREFOX_ANDROID_APPS = [
+(GECKOVIEW, REFBROW, FENIX) = FIREFOX_ANDROID_APPS = [
     "geckoview",
     "refbrow",
     "fenix",
-    "chrome-m",
 ]
+(CHROME_ANDROID,) = CHROME_ANDROID_APPS = ["chrome-m"]
+FIREFOX_APPS = FIREFOX_ANDROID_APPS + [FIREFOX]
 
 CHROMIUM_DISTROS = [CHROME, CHROMIUM]
 APPS = {
@@ -50,6 +51,8 @@ APPS = {
     },
 }
 INTEGRATED_APPS = list(APPS.keys())
+
+GECKO_PROFILER_APPS = (FIREFOX, GECKOVIEW, REFBROW, FENIX)
 
 TRACE_APPS = (CHROME, CHROMIUM, CHROMIUM_RELEASE)
 

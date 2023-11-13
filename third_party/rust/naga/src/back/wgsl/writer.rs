@@ -17,6 +17,7 @@ enum Attribute {
     Invariant,
     Interpolate(Option<crate::Interpolation>, Option<crate::Sampling>),
     Location(u32),
+    SecondBlendSource,
     Stage(ShaderStage),
     WorkGroupSize([u32; 3]),
 }
@@ -96,6 +97,14 @@ impl<W: Write> Writer<W> {
         self.ep_results.clear();
     }
 
+    fn is_builtin_wgsl_struct(&self, module: &Module, handle: Handle<crate::Type>) -> bool {
+        module
+            .special_types
+            .predeclared_types
+            .values()
+            .any(|t| *t == handle)
+    }
+
     pub fn write(&mut self, module: &Module, info: &valid::ModuleInfo) -> BackendResult {
         self.reset(module);
 
@@ -108,13 +117,13 @@ impl<W: Write> Writer<W> {
 
         // Write all structs
         for (handle, ty) in module.types.iter() {
-            if let TypeInner::Struct {
-                ref members,
-                span: _,
-            } = ty.inner
-            {
-                self.write_struct(module, handle, members)?;
-                writeln!(self.out)?;
+            if let TypeInner::Struct { ref members, .. } = ty.inner {
+                {
+                    if !self.is_builtin_wgsl_struct(module, handle) {
+                        self.write_struct(module, handle, members)?;
+                        writeln!(self.out)?;
+                    }
+                }
             }
         }
 
@@ -238,14 +247,7 @@ impl<W: Write> Writer<W> {
                 self.write_attributes(&map_binding_to_attribute(binding))?;
             }
             // Write argument name
-            let argument_name = match func_ctx.ty {
-                back::FunctionType::Function(handle) => {
-                    &self.names[&NameKey::FunctionArgument(handle, index as u32)]
-                }
-                back::FunctionType::EntryPoint(ep_index) => {
-                    &self.names[&NameKey::EntryPointArgument(ep_index, index as u32)]
-                }
-            };
+            let argument_name = &self.names[&func_ctx.argument_key(index as u32)];
 
             write!(self.out, "{argument_name}: ")?;
             // Write argument type
@@ -319,6 +321,7 @@ impl<W: Write> Writer<W> {
         for attribute in attributes {
             match *attribute {
                 Attribute::Location(id) => write!(self.out, "@location({id}) ")?,
+                Attribute::SecondBlendSource => write!(self.out, "@second_blend_source ")?,
                 Attribute::BuiltIn(builtin_attrib) => {
                     let builtin = builtin_str(builtin_attrib)?;
                     write!(self.out, "@builtin({builtin}) ")?;
@@ -1122,6 +1125,12 @@ impl<W: Write> Writer<W> {
                 }
                 write!(self.out, ")")?
             }
+            Expression::Splat { size, value } => {
+                let size = back::vector_size_str(size);
+                write!(self.out, "vec{size}(")?;
+                write_expression(self, value)?;
+                write!(self.out, ")")?;
+            }
             _ => unreachable!(),
         }
 
@@ -1163,7 +1172,8 @@ impl<W: Write> Writer<W> {
             Expression::Literal(_)
             | Expression::Constant(_)
             | Expression::ZeroValue(_)
-            | Expression::Compose { .. } => {
+            | Expression::Compose { .. }
+            | Expression::Splat { .. } => {
                 self.write_possibly_const_expression(
                     module,
                     expr,
@@ -1440,23 +1450,6 @@ impl<W: Write> Writer<W> {
                 self.write_expr(module, expr, func_ctx)?;
                 write!(self.out, ")")?;
             }
-            Expression::Splat { size, value } => {
-                let inner = func_ctx.resolve_type(value, &module.types);
-                let (scalar_kind, scalar_width) = match *inner {
-                    crate::TypeInner::Scalar { kind, width } => (kind, width),
-                    _ => {
-                        return Err(Error::Unimplemented(format!(
-                            "write_expr expression::splat {inner:?}"
-                        )));
-                    }
-                };
-                let scalar = scalar_kind_str(scalar_kind, scalar_width);
-                let size = back::vector_size_str(size);
-
-                write!(self.out, "vec{size}<{scalar}>(")?;
-                self.write_expr(module, value, func_ctx)?;
-                write!(self.out, ")")?;
-            }
             Expression::Load { pointer } => {
                 let is_atomic_pointer = func_ctx
                     .resolve_type(pointer, &module.types)
@@ -1536,7 +1529,6 @@ impl<W: Write> Writer<W> {
                     Mf::Pow => Function::Regular("pow"),
                     // geometry
                     Mf::Dot => Function::Regular("dot"),
-                    Mf::Outer => Function::Regular("outerProduct"),
                     Mf::Cross => Function::Regular("cross"),
                     Mf::Distance => Function::Regular("distance"),
                     Mf::Length => Function::Regular("length"),
@@ -1575,7 +1567,7 @@ impl<W: Write> Writer<W> {
                     Mf::Unpack2x16snorm => Function::Regular("unpack2x16snorm"),
                     Mf::Unpack2x16unorm => Function::Regular("unpack2x16unorm"),
                     Mf::Unpack2x16float => Function::Regular("unpack2x16float"),
-                    Mf::Inverse => {
+                    Mf::Inverse | Mf::Outer => {
                         return Err(Error::UnsupportedMathFunction(fun));
                     }
                 };
@@ -1837,6 +1829,8 @@ const fn storage_format_str(format: crate::StorageFormat) -> &'static str {
         Sf::Rgba8Snorm => "rgba8snorm",
         Sf::Rgba8Uint => "rgba8uint",
         Sf::Rgba8Sint => "rgba8sint",
+        Sf::Bgra8Unorm => "bgra8unorm",
+        Sf::Rgb10a2Uint => "rgb10a2uint",
         Sf::Rgb10a2Unorm => "rgb10a2unorm",
         Sf::Rg11b10Float => "rg11b10float",
         Sf::Rg32Uint => "rg32uint",
@@ -1917,8 +1911,19 @@ fn map_binding_to_attribute(binding: &crate::Binding) -> Vec<Attribute> {
             location,
             interpolation,
             sampling,
+            second_blend_source: false,
         } => vec![
             Attribute::Location(location),
+            Attribute::Interpolate(interpolation, sampling),
+        ],
+        crate::Binding::Location {
+            location,
+            interpolation,
+            sampling,
+            second_blend_source: true,
+        } => vec![
+            Attribute::Location(location),
+            Attribute::SecondBlendSource,
             Attribute::Interpolate(interpolation, sampling),
         ],
     }

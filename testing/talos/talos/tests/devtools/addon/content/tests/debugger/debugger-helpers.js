@@ -43,6 +43,7 @@ function waitForState(dbg, predicate, msg) {
     return false;
   });
 }
+exports.waitForState = waitForState;
 
 function waitForDispatch(dbg, type, count = 1) {
   return new Promise(resolve => {
@@ -167,6 +168,7 @@ async function waitForPaused(dbg) {
   });
   return Promise.all([onLoadedScope, onStateChange]);
 }
+exports.waitForPaused = waitForPaused;
 
 async function waitForResumed(dbg) {
   const {
@@ -184,7 +186,9 @@ async function waitForElement(dbg, name) {
 }
 
 async function waitForLoadedScopes(dbg) {
-  const element = '.scopes-list .tree-node[aria-level="1"]';
+  // Since scopes auto-expand, we can assume they are loaded when there is a tree node
+  // with the aria-level attribute equal to "2".
+  const element = '.scopes-list .tree-node[aria-level="2"]';
   return waitForElement(dbg, element);
 }
 
@@ -215,6 +219,9 @@ async function selectSource(dbg, url) {
     state => {
       const location = dbg.selectors.getSelectedLocation(state);
       if (!location) {
+        return false;
+      }
+      if (location.source != source || location.line != line) {
         return false;
       }
       const sourceTextContent =
@@ -305,7 +312,7 @@ async function addBreakpoint(dbg, line, url) {
 }
 exports.addBreakpoint = addBreakpoint;
 
-async function removeBreakpoints(dbg, line, url) {
+async function removeBreakpoints(dbg) {
   dump(`remove all breakpoints\n`);
   const breakpoints = dbg.selectors.getBreakpointsList(dbg.getState());
 

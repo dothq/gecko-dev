@@ -120,9 +120,7 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
 
   mozilla::ipc::IPCResult Recv__delete__() override { return IPC_OK(); }
 
-  virtual void ObserveLayersUpdate(LayersId aLayersId,
-                                   LayersObserverEpoch aEpoch,
-                                   bool aActive) = 0;
+  virtual void ObserveLayersUpdate(LayersId aLayersId, bool aActive) = 0;
 
   // HostIPCAllocator
   base::ProcessId GetChildProcessId() override;
@@ -143,11 +141,6 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
     return HostIPCAllocator::Release();
   }
   virtual bool IsRemote() const { return false; }
-
-  virtual UniquePtr<SurfaceDescriptor> LookupSurfaceDescriptorForClientTexture(
-      const int64_t aTextureId) {
-    MOZ_CRASH("Should only be called on ContentCompositorBridgeParent.");
-  }
 
   virtual void NotifyMemoryPressure() {}
   virtual void AccumulateMemoryReport(wr::MemoryReport*) {}
@@ -214,9 +207,6 @@ class CompositorBridgeParentBase : public PCompositorBridgeParent,
       const uint32_t& startIndex, nsTArray<float>* intervals) = 0;
   virtual mozilla::ipc::IPCResult RecvCheckContentOnlyTDR(
       const uint32_t& sequenceNum, bool* isContentOnlyTDR) = 0;
-  virtual mozilla::ipc::IPCResult RecvInitPCanvasParent(
-      Endpoint<PCanvasParent>&& aEndpoint) = 0;
-  virtual mozilla::ipc::IPCResult RecvReleasePCanvasParent() = 0;
 
   bool mCanSend;
 
@@ -328,11 +318,6 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
       const wr::MaybeExternalImageId& aExternalImageId) override;
   bool DeallocPTextureParent(PTextureParent* actor) override;
 
-  mozilla::ipc::IPCResult RecvInitPCanvasParent(
-      Endpoint<PCanvasParent>&& aEndpoint) final;
-
-  mozilla::ipc::IPCResult RecvReleasePCanvasParent() final;
-
   bool IsSameProcess() const override;
 
   void NotifyWebRenderDisableNativeCompositor();
@@ -354,8 +339,7 @@ class CompositorBridgeParent final : public CompositorBridgeParentBase,
       const CompositorWidgetInitData& aInitData) override;
   bool DeallocPCompositorWidgetParent(PCompositorWidgetParent* aActor) override;
 
-  void ObserveLayersUpdate(LayersId aLayersId, LayersObserverEpoch aEpoch,
-                           bool aActive) override {}
+  void ObserveLayersUpdate(LayersId aLayersId, bool aActive) override {}
 
   /**
    * This forces the is-first-paint flag to true. This is intended to

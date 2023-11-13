@@ -210,6 +210,11 @@ MessagePort::MessagePort(nsIGlobalObject* aGlobal, State aState)
 
 MessagePort::~MessagePort() {
   CloseForced();
+  MOZ_ASSERT(!mActor);
+  if (mActor) {
+    mActor->SetPort(nullptr);
+    mActor = nullptr;
+  }
   MOZ_ASSERT(!mWorkerRef);
 }
 
@@ -282,8 +287,7 @@ void MessagePort::Initialize(const nsID& aUUID, const nsID& aDestinationUUID,
         workerPrivate, "MessagePort", [self]() { self->CloseForced(); });
     if (NS_WARN_IF(!strongWorkerRef)) {
       // The worker is shutting down.
-      mState = eStateDisentangled;
-      UpdateMustKeepAlive();
+      CloseForced();
       aRv.Throw(NS_ERROR_FAILURE);
       return;
     }
@@ -473,14 +477,6 @@ void MessagePort::Dispatch() {
   mMessages.RemoveElementAt(0);
 
   mPostMessageRunnable = new PostMessageRunnable(this, data);
-
-  nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal();
-  if (NS_IsMainThread() && global) {
-    MOZ_ALWAYS_SUCCEEDS(
-        global->Dispatch(TaskCategory::Other, do_AddRef(mPostMessageRunnable)));
-    return;
-  }
-
   MOZ_ALWAYS_SUCCEEDS(NS_DispatchToCurrentThread(mPostMessageRunnable));
 }
 

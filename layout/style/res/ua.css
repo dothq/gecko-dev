@@ -150,6 +150,7 @@
 
 :any-link {
   cursor: pointer;
+  text-decoration: underline;
 }
 
 :link {
@@ -162,6 +163,13 @@
 
 :visited {
   color: VisitedText;
+}
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media (-moz-bool-pref: "layout.css.always_underline_links") {
+  :any-link {
+    text-decoration: underline !important;
+  }
 }
 
 :focus-visible {

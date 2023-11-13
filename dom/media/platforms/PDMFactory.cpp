@@ -362,8 +362,7 @@ PDMFactory::CheckAndMaybeCreateDecoder(CreateDecoderParamsForAsync&& aParams,
   uint32_t i = aIndex;
   auto params = SupportDecoderParams(aParams);
   for (; i < mCurrentPDMs.Length(); i++) {
-    if (mCurrentPDMs[i]->Supports(params, nullptr /* diagnostic */) ==
-        media::DecodeSupport::Unsupported) {
+    if (mCurrentPDMs[i]->Supports(params, nullptr /* diagnostic */).isEmpty()) {
       continue;
     }
     RefPtr<PlatformDecoderModule::CreateDecoderPromise> p =
@@ -451,7 +450,8 @@ PDMFactory::CreateDecoderWithPDM(PlatformDecoderModule* aPDM,
 #ifdef MOZ_AV1
        AOMDecoder::IsAV1(config.mMimeType) ||
 #endif
-       VPXDecoder::IsVPX(config.mMimeType)) &&
+       VPXDecoder::IsVPX(config.mMimeType) ||
+       MP4Decoder::IsHEVC(config.mMimeType)) &&
       !aParams.mUseNullDecoder.mUse && !aParams.mNoWrapper.mDontUseWrapper) {
     return MediaChangeMonitor::Create(this, aParams);
   }
@@ -462,7 +462,7 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
     const nsACString& aMimeType) const {
   UniquePtr<TrackInfo> trackInfo = CreateTrackInfoWithMIMEType(aMimeType);
   if (!trackInfo) {
-    return DecodeSupport::Unsupported;
+    return DecodeSupportSet{};
   }
   return Supports(SupportDecoderParams(*trackInfo), nullptr);
 }
@@ -478,7 +478,7 @@ DecodeSupportSet PDMFactory::Supports(
       GetDecoderModule(aParams, aDiagnostics);
 
   if (!current) {
-    return DecodeSupport::Unsupported;
+    return DecodeSupportSet{};
   }
 
   // We have a PDM - check for + return SW/HW support info
@@ -780,8 +780,7 @@ already_AddRefed<PlatformDecoderModule> PDMFactory::GetDecoderModule(
 
   RefPtr<PlatformDecoderModule> pdm;
   for (const auto& current : mCurrentPDMs) {
-    if (current->Supports(aParams, aDiagnostics) !=
-        media::DecodeSupport::Unsupported) {
+    if (!current->Supports(aParams, aDiagnostics).isEmpty()) {
       pdm = current;
       break;
     }
@@ -828,6 +827,9 @@ media::MediaCodecsSupported PDMFactory::Supported(bool aForceRefresh) {
       supported += MCSInfo::GetDecodeMediaCodecsSupported(
           cd.codec, pdm->SupportsMimeType(nsCString(cd.mimeTypeString)));
     }
+#ifdef MOZ_WIDGET_ANDROID
+    supported += AndroidDecoderModule::GetSupportedCodecs();
+#endif
     return supported;
   };
 
@@ -864,6 +866,9 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
     if (TheoraDecoder::IsTheora(aMimeType)) {
       return MCSInfo::GetDecodeSupportSet(MediaCodec::Theora, aSupported);
     }
+    if (MP4Decoder::IsHEVC(aMimeType)) {
+      return MCSInfo::GetDecodeSupportSet(MediaCodec::HEVC, aSupported);
+    }
   }
 
   if (supports.contains(TrackSupport::Audio)) {
@@ -886,7 +891,7 @@ DecodeSupportSet PDMFactory::SupportsMimeType(
       return MCSInfo::GetDecodeSupportSet(MediaCodec::Wave, aSupported);
     }
   }
-  return DecodeSupport::Unsupported;
+  return DecodeSupportSet{};
 }
 
 /* static */

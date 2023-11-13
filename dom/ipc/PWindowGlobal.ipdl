@@ -210,10 +210,17 @@ parent:
   async DiscoverIdentityCredentialFromExternalSource(IdentityCredentialRequestOptions aOptions) 
       returns (IPCIdentityCredential? identityCredential);
 
-  async HasStorageAccessPermission() returns(bool granted);
+  async GetStorageAccessPermission() returns(uint32_t permission_action);
+
+
+  async SetCookies(nsCString baseDomain,
+                                      OriginAttributes attrs,
+                                      nullable nsIURI host,
+                                      bool fromHttp,
+                                      CookieStruct[] cookies);
 
 child:
-  async NotifyPermissionChange(nsCString type);
+  async NotifyPermissionChange(nsCString type, uint32_t permission);
 };
 
 } // namespace dom

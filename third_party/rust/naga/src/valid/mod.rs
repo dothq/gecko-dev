@@ -24,7 +24,7 @@ use std::ops;
 use crate::span::{AddSpan as _, WithSpan};
 pub use analyzer::{ExpressionInfo, FunctionInfo, GlobalUse, Uniformity, UniformityRequirements};
 pub use compose::ComposeError;
-pub use expression::ExpressionError;
+pub use expression::{ConstExpressionError, ExpressionError};
 pub use function::{CallError, FunctionError, LocalVariableError};
 pub use interface::{EntryPointError, GlobalVariableError, VaryingError};
 pub use r#type::{Disalignment, TypeError, TypeFlags};
@@ -112,6 +112,8 @@ bitflags::bitflags! {
         const MULTISAMPLED_SHADING = 0x800;
         /// Support for ray queries and acceleration structures.
         const RAY_QUERY = 0x1000;
+        /// Support for generating two sources for blending from fragement shaders
+        const DUAL_SOURCE_BLENDING = 0x2000;
     }
 }
 
@@ -176,16 +178,6 @@ pub struct Validator {
     switch_values: FastHashSet<crate::SwitchValue>,
     valid_expression_list: Vec<Handle<crate::Expression>>,
     valid_expression_set: BitSet,
-}
-
-#[derive(Clone, Debug, thiserror::Error)]
-pub enum ConstExpressionError {
-    #[error("The expression is not a constant expression")]
-    NonConst,
-    #[error(transparent)]
-    Compose(#[from] ComposeError),
-    #[error("Type resolution failed")]
-    Type(#[from] crate::proc::ResolveError),
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -398,7 +390,7 @@ impl Validator {
         #[cfg(feature = "validate")]
         if self.flags.contains(ValidationFlags::CONSTANTS) {
             for (handle, _) in module.const_expressions.iter() {
-                self.validate_const_expression(handle, module.to_ctx(), &mut mod_info)
+                self.validate_const_expression(handle, module.to_ctx(), &mod_info)
                     .map_err(|source| {
                         ValidationError::ConstExpression { handle, source }
                             .with_span_handle(handle, &module.const_expressions)

@@ -7,6 +7,7 @@
 #define __nsRFPService_h__
 
 #include <cstdint>
+#include <tuple>
 #include "ErrorList.h"
 #include "PLDHashTable.h"
 #include "mozilla/BasicEvents.h"
@@ -14,8 +15,10 @@
 #include "mozilla/TypedEnumBits.h"
 #include "nsHashtablesFwd.h"
 #include "nsICookieJarSettings.h"
+#include "nsIFingerprintingWebCompatService.h"
 #include "nsIObserver.h"
 #include "nsISupports.h"
+#include "nsIRFPService.h"
 #include "nsStringFwd.h"
 
 // Defines regarding spoofed values of Navigator object. These spoofed values
@@ -147,6 +150,9 @@ enum TimerPrecisionType {
 // NOLINTNEXTLINE(bugprone-macro-parentheses)
 #define ITEM_VALUE(name, val) name = val,
 
+// The definition for fingerprinting protections. Each enum represents one
+// fingerprinting protection that targets one specific WebAPI our fingerprinting
+// surface. The enums can be found in RFPTargets.inc.
 enum class RFPTarget : uint64_t {
 #include "RFPTargets.inc"
 };
@@ -157,18 +163,21 @@ MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(RFPTarget);
 
 // ============================================================================
 
-class nsRFPService final : public nsIObserver {
+class nsRFPService final : public nsIObserver, public nsIRFPService {
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSIRFPSERVICE
 
-  static nsRFPService* GetOrCreate();
+  static already_AddRefed<nsRFPService> GetOrCreate();
 
   // _Rarely_ you will need to know if RFP is enabled, or if FPP is enabled.
   // 98% of the time you should use nsContentUtils::ShouldResistFingerprinting
   // as the difference will not matter to you.
   static bool IsRFPPrefEnabled(bool aIsPrivateMode);
-  static bool IsRFPEnabledFor(RFPTarget aTarget);
+  static bool IsRFPEnabledFor(
+      RFPTarget aTarget,
+      const Maybe<RFPTarget>& aOverriddenFingerprintingSettings);
 
   // --------------------------------------------------------------------------
   static double TimerResolution(RTPCallerType aRTPCallerType);
@@ -220,6 +229,12 @@ class nsRFPService final : public nsIObserver {
 
   // This method generates the spoofed value of User Agent.
   static void GetSpoofedUserAgent(nsACString& userAgent, bool isForHTTPHeader);
+
+  // --------------------------------------------------------------------------
+
+  // This method generates the locale string (e.g. "en-US") that should be
+  // spoofed by the JavaScript engine.
+  static nsCString GetSpoofedJSLocale();
 
   // --------------------------------------------------------------------------
 
@@ -276,8 +291,27 @@ class nsRFPService final : public nsIObserver {
   // The method to add random noises to the image data based on the random key
   // of the given cookieJarSettings.
   static nsresult RandomizePixels(nsICookieJarSettings* aCookieJarSettings,
-                                  uint8_t* aData, uint32_t aSize,
+                                  uint8_t* aData, uint32_t aWidth,
+                                  uint32_t aHeight, uint32_t aSize,
                                   mozilla::gfx::SurfaceFormat aSurfaceFormat);
+
+  // --------------------------------------------------------------------------
+
+  // The method for getting the granular fingerprinting protection override of
+  // the given channel. Due to WebCompat reason, there can be a granular
+  // overrides to replace default enabled RFPTargets for the context of the
+  // channel. The method will return Nothing() to indicate using the default
+  // RFPTargets
+  static Maybe<RFPTarget> GetOverriddenFingerprintingSettingsForChannel(
+      nsIChannel* aChannel);
+
+  // The method for getting the granular fingerprinting protection override of
+  // the given first-party and third-party URIs. It will return the granular
+  // overrides if there is one defined for the context of the first-party URI
+  // and third-party URI. Otherwise, it will return Nothing() to indicate using
+  // the default RFPTargets.
+  static Maybe<RFPTarget> GetOverriddenFingerprintingSettingsForURI(
+      nsIURI* aFirstPartyURI, nsIURI* aThirdPartyURI);
 
   // --------------------------------------------------------------------------
 
@@ -345,6 +379,29 @@ class nsRFPService final : public nsIObserver {
   // the parent process.
   Maybe<nsID> mBrowsingSessionKey;
   Maybe<nsID> mPrivateBrowsingSessionKey;
+
+  nsCOMPtr<nsIFingerprintingWebCompatService> mWebCompatService;
+  nsTHashMap<nsCStringHashKey, RFPTarget> mFingerprintingOverrides;
+
+  // A helper function to create the domain key for the fingerprinting
+  // overrides. The key can be in the following five formats.
+  // 1. {first-party domain}: The override only apply to the first-party domain.
+  // 2. {first-party domain, *}: The overrides apply to every contexts under the
+  //    top-level domain, including itself.
+  // 3. {*, third-party domain}: The overrides apply to the third-party domain
+  //    under any top-level domain.
+  // 4. {first-party domain, third-party domain}: the overrides apply to the
+  //    specific third-party domain under the given first-party domain.
+  // 5. {*}: A global overrides that will apply to every context.
+  static nsresult CreateOverrideDomainKey(nsIFingerprintingOverride* aOverride,
+                                          nsACString& aDomainKey);
+
+  // A helper function to create the RFPTarget bitfield based on the given
+  // overrides text and the based overrides bitfield. The function will parse
+  // the text and update the based overrides bitfield accordingly. Then, it will
+  // return the updated bitfield.
+  static RFPTarget CreateOverridesFromText(
+      const nsString& aOverridesText, RFPTarget aBaseOverrides = RFPTarget(0));
 };
 
 }  // namespace mozilla

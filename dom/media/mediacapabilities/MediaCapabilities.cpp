@@ -254,8 +254,7 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
           InvokeAsync(taskQueue, __func__, [config = std::move(config)]() {
             RefPtr<PDMFactory> pdm = new PDMFactory();
             SupportDecoderParams params{*config};
-            if (pdm->Supports(params, nullptr /* decoder doctor */) ==
-                media::DecodeSupport::Unsupported) {
+            if (pdm->Supports(params, nullptr /* decoder doctor */).isEmpty()) {
               return CapabilitiesPromise::CreateAndReject(NS_ERROR_FAILURE,
                                                           __func__);
             }
@@ -297,7 +296,6 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
           // otherwise.
           static RefPtr<AllocPolicy> sVideoAllocPolicy = [&taskQueue]() {
             SchedulerGroup::Dispatch(
-                TaskCategory::Other,
                 NS_NewRunnableFunction(
                     "MediaCapabilities::AllocPolicy:Video", []() {
                       ClearOnShutdown(&sVideoAllocPolicy,
@@ -437,7 +435,7 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
   RefPtr<StrongWorkerRef> workerRef;
 
   if (NS_IsMainThread()) {
-    targetThread = mParent->AbstractMainThreadFor(TaskCategory::Other);
+    targetThread = GetMainThreadSerialEventTarget();
   } else {
     WorkerPrivate* wp = GetCurrentThreadWorkerPrivate();
     MOZ_ASSERT(wp, "Must be called from a worker thread");

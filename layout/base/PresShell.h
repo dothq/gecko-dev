@@ -385,6 +385,8 @@ class PresShell final : public nsStubDocumentObserver,
    */
   bool SimpleResizeReflow(nscoord aWidth, nscoord aHeight);
 
+  bool CanHandleUserInputEvents(WidgetGUIEvent* aGUIEvent);
+
  public:
   /**
    * Updates pending layout, assuming reasonable (up-to-date, or mid-update for
@@ -928,9 +930,7 @@ class PresShell final : public nsStubDocumentObserver,
   }
 
   void ActivenessMaybeChanged();
-  // See ComputeActiveness() for details of these two booleans.
   bool IsActive() const { return mIsActive; }
-  bool IsInActiveTab() const { return mIsInActiveTab; }
 
   /**
    * Keep track of how many times this presshell has been rendered to
@@ -1546,12 +1546,6 @@ class PresShell final : public nsStubDocumentObserver,
   void SetAuthorStyleDisabled(bool aDisabled);
   bool GetAuthorStyleDisabled() const;
 
-  /**
-   * Update the style set somehow to take into account changed prefs which
-   * affect document styling.
-   */
-  void UpdatePreferenceStyles();
-
   // aSheetType is one of the nsIStyleSheetService *_SHEET constants.
   void NotifyStyleSheetServiceSheetAdded(StyleSheet* aSheet,
                                          uint32_t aSheetType);
@@ -1757,12 +1751,8 @@ class PresShell final : public nsStubDocumentObserver,
  private:
   ~PresShell();
 
-  void SetIsActive(bool aIsActive, bool aIsInActiveTab);
-  struct Activeness {
-    bool mShouldBeActive = false;
-    bool mIsInActiveTab = false;
-  };
-  Activeness ComputeActiveness() const;
+  void SetIsActive(bool aIsActive);
+  bool ComputeActiveness() const;
 
   MOZ_CAN_RUN_SCRIPT
   void PaintInternal(nsView* aViewToPaint, PaintInternalFlags aFlags);
@@ -1879,7 +1869,6 @@ class PresShell final : public nsStubDocumentObserver,
   void AddUserSheet(StyleSheet*);
   void AddAgentSheet(StyleSheet*);
   void AddAuthorSheet(StyleSheet*);
-  void RemovePreferenceStyles();
 
   /**
    * Initialize cached font inflation preference values and do an initial
@@ -2762,7 +2751,7 @@ class PresShell final : public nsStubDocumentObserver,
      *
      * @param aEvent            The handled event.
      */
-    void FinalizeHandlingEvent(WidgetEvent* aEvent);
+    MOZ_CAN_RUN_SCRIPT void FinalizeHandlingEvent(WidgetEvent* aEvent);
 
     /**
      * AutoCurrentEventInfoSetter() pushes and pops current event info of
@@ -2883,8 +2872,6 @@ class PresShell final : public nsStubDocumentObserver,
   // call their can-run- script methods without local RefPtr variables.
   MOZ_KNOWN_LIVE RefPtr<Document> const mDocument;
   MOZ_KNOWN_LIVE RefPtr<nsPresContext> const mPresContext;
-  // The document's style set owns it but we maintain a ref, may be null.
-  RefPtr<StyleSheet> mPrefStyleSheet;
   UniquePtr<nsCSSFrameConstructor> mFrameConstructor;
   nsViewManager* mViewManager;  // [WEAK] docViewer owns it so I don't have to
   RefPtr<nsFrameSelection> mSelection;
@@ -3001,6 +2988,9 @@ class PresShell final : public nsStubDocumentObserver,
   // NS_UNCONSTRAINEDSIZE) if the mouse isn't over our window or there is no
   // last observed mouse location for some reason.
   nsPoint mMouseLocation;
+  // This is used for the synthetic mouse events too.  This is set when a mouse
+  // event is dispatched into the DOM.
+  static int16_t sMouseButtons;
   // The last observed pointer location relative to that root document in visual
   // coordinates.
   nsPoint mLastOverWindowPointerLocation;
@@ -3118,7 +3108,6 @@ class PresShell final : public nsStubDocumentObserver,
   bool mIgnoreFrameDestruction : 1;
 
   bool mIsActive : 1;
-  bool mIsInActiveTab : 1;
   bool mFrozen : 1;
   bool mIsFirstPaint : 1;
   bool mObservesMutationsForPrint : 1;
@@ -3185,11 +3174,6 @@ class PresShell final : public nsStubDocumentObserver,
   // Whether mForceDispatchKeyPressEventsForNonPrintableKeys and
   // mForceUseLegacyKeyCodeAndCharCodeValues are initialized.
   bool mInitializedWithKeyPressEventDispatchingBlacklist : 1;
-
-  // Whether we should dispatch click events for non-primary mouse buttons.
-  bool mForceUseLegacyNonPrimaryDispatch : 1;
-  // Whether mForceUseLegacyNonPrimaryDispatch is initialised.
-  bool mInitializedWithClickEventDispatchingBlacklist : 1;
 
   // Set to true if mMouseLocation is set by a mouse event which is synthesized
   // for tests.

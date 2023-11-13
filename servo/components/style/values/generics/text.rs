@@ -5,7 +5,6 @@
 //! Generic types for text properties.
 
 use crate::parser::ParserContext;
-use crate::values::animated::ToAnimatedZero;
 use cssparser::Parser;
 use style_traits::ParseError;
 
@@ -70,58 +69,6 @@ impl<Value> Spacing<Value> {
             return Ok(Spacing::Normal);
         }
         parse(context, input).map(Spacing::Value)
-    }
-}
-
-#[cfg(feature = "gecko")]
-fn line_height_moz_block_height_enabled(context: &ParserContext) -> bool {
-    context.in_ua_sheet() ||
-        static_prefs::pref!("layout.css.line-height-moz-block-height.content.enabled")
-}
-
-/// A generic value for the `line-height` property.
-#[derive(
-    Animate,
-    Clone,
-    ComputeSquaredDistance,
-    Copy,
-    Debug,
-    MallocSizeOf,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToAnimatedValue,
-    ToCss,
-    ToShmem,
-    Parse,
-)]
-#[repr(C, u8)]
-pub enum GenericLineHeight<N, L> {
-    /// `normal`
-    Normal,
-    /// `-moz-block-height`
-    #[cfg(feature = "gecko")]
-    #[parse(condition = "line_height_moz_block_height_enabled")]
-    MozBlockHeight,
-    /// `<number>`
-    Number(N),
-    /// `<length-percentage>`
-    Length(L),
-}
-
-pub use self::GenericLineHeight as LineHeight;
-
-impl<N, L> ToAnimatedZero for LineHeight<N, L> {
-    #[inline]
-    fn to_animated_zero(&self) -> Result<Self, ()> {
-        Err(())
-    }
-}
-
-impl<N, L> LineHeight<N, L> {
-    /// Returns `normal`.
-    #[inline]
-    pub fn normal() -> Self {
-        LineHeight::Normal
     }
 }
 

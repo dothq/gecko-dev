@@ -9,8 +9,8 @@ origin:
   description: "Cross platform audio library"
   url: https://github.com/mozilla/cubeb
   license: ISC
-  release: f9c118ddc050d15ffb3ac2babff06a833d0ac740 (2023-09-15T14:14:22Z).
-  revision: f9c118ddc050d15ffb3ac2babff06a833d0ac740
+  release: d07ea5aa6641afc916784e9cc7d69d763b621f32 (2023-11-08T13:42:49Z).
+  revision: d07ea5aa6641afc916784e9cc7d69d763b621f32
 
 vendoring:
   url: https://github.com/mozilla/cubeb
@@ -21,7 +21,7 @@ vendoring:
   skip-vendoring-steps:
     - update-moz-build
   exclude:
-    - .clang-format
+    - ".*"
     - CMakeLists.txt
     - Config.cmake.in
     - INSTALL.md

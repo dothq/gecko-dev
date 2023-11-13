@@ -208,7 +208,8 @@ class HttpChannelChild final : public PHttpChannelChild,
                              const bool& aUseResponseHead,
                              const nsHttpHeaderArray& aRequestHeaders,
                              const HttpChannelOnStartRequestArgs& aArgs,
-                             const HttpChannelAltDataStream& aAltData);
+                             const HttpChannelAltDataStream& aAltData,
+                             const TimeStamp& aOnStartRequestStartTime);
 
   // Callbacks while receiving OnTransportAndData/OnStopRequest/OnProgress/
   // OnStatus/FlushedForDiversion/DivertMessages on background IPC channel.
@@ -216,12 +217,14 @@ class HttpChannelChild final : public PHttpChannelChild,
                                  const nsresult& aTransportStatus,
                                  const uint64_t& aOffset,
                                  const uint32_t& aCount,
-                                 const nsACString& aData);
+                                 const nsACString& aData,
+                                 const TimeStamp& aOnDataAvailableStartTime);
   void ProcessOnStopRequest(const nsresult& aChannelStatus,
                             const ResourceTimingStructArgs& aTiming,
                             const nsHttpHeaderArray& aResponseTrailers,
                             nsTArray<ConsoleReportCollected>&& aConsoleReports,
-                            bool aFromSocketProcess);
+                            bool aFromSocketProcess,
+                            const TimeStamp& aOnStopRequestStartTime);
   void ProcessOnConsoleReport(
       nsTArray<ConsoleReportCollected>&& aConsoleReports);
 
@@ -442,6 +445,11 @@ class HttpChannelChild final : public PHttpChannelChild,
 
   // Collect telemetry for the successful rate of OMT.
   void CollectOMTTelemetry();
+
+  // Collect telemetry for mixed content.
+  void CollectMixedContentTelemetry();
+
+  void RecordChannelCompletionDurationForEarlyHint();
 
   friend class HttpAsyncAborter<HttpChannelChild>;
   friend class InterceptStreamListener;

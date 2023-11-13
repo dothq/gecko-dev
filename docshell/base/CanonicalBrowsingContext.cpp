@@ -320,6 +320,7 @@ void CanonicalBrowsingContext::ReplacedBy(
   txn.SetEmbedderColorSchemes(GetEmbedderColorSchemes());
   txn.SetHasRestoreData(GetHasRestoreData());
   txn.SetShouldDelayMediaFromStart(GetShouldDelayMediaFromStart());
+  txn.SetForceOffline(GetForceOffline());
 
   // Propagate some settings on BrowsingContext replacement so they're not lost
   // on bfcached navigations. These are important for GeckoView (see bug
@@ -381,9 +382,7 @@ void CanonicalBrowsingContext::ReplacedBy(
     aNewContext->SetChildSHistory(childSHistory);
   }
 
-  if (mozilla::SessionHistoryInParent()) {
-    BackgroundSessionStorageManager::PropagateManager(Id(), aNewContext->Id());
-  }
+  BackgroundSessionStorageManager::PropagateManager(Id(), aNewContext->Id());
 
   // Transfer the ownership of the priority active status from the old context
   // to the new context.

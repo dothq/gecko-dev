@@ -66,8 +66,7 @@ class nsTableCellFrame : public nsContainerFrame,
   void Init(nsIContent* aContent, nsContainerFrame* aParent,
             nsIFrame* aPrevInFlow) override;
 
-  void DestroyFrom(nsIFrame* aDestructRoot,
-                   PostDestroyData& aPostDestroyData) override;
+  void Destroy(DestroyContext&) override;
 
 #ifdef ACCESSIBILITY
   mozilla::a11y::AccType AccessibleType() override;
@@ -86,7 +85,7 @@ class nsTableCellFrame : public nsContainerFrame,
   void InsertFrames(ChildListID aListID, nsIFrame* aPrevFrame,
                     const nsLineList::iterator* aPrevFrameLine,
                     nsFrameList&& aFrameList) override;
-  void RemoveFrame(ChildListID aListID, nsIFrame* aOldFrame) override;
+  void RemoveFrame(DestroyContext&, ChildListID, nsIFrame*) override;
 #endif
 
   nsContainerFrame* GetContentInsertionFrame() override {
@@ -102,9 +101,9 @@ class nsTableCellFrame : public nsContainerFrame,
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                         const nsDisplayListSet& aLists) override;
 
-  virtual nsresult ProcessBorders(nsTableFrame* aFrame,
-                                  nsDisplayListBuilder* aBuilder,
-                                  const nsDisplayListSet& aLists);
+  virtual void ProcessBorders(nsTableFrame* aFrame,
+                              nsDisplayListBuilder* aBuilder,
+                              const nsDisplayListSet& aLists);
 
   nscoord GetMinISize(gfxContext* aRenderingContext) override;
   nscoord GetPrefISize(gfxContext* aRenderingContext) override;
@@ -210,12 +209,9 @@ class nsTableCellFrame : public nsContainerFrame,
 
   nsTableCellFrame* GetNextCell() const {
     nsIFrame* sibling = GetNextSibling();
-#ifdef DEBUG
-    if (sibling) {
-      nsTableCellFrame* cellFrame = do_QueryFrame(sibling);
-      MOZ_ASSERT(cellFrame, "How do we have a non-cell sibling?");
-    }
-#endif  // DEBUG
+    MOZ_ASSERT(
+        !sibling || static_cast<nsTableCellFrame*>(do_QueryFrame(sibling)),
+        "How do we have a non-cell sibling?");
     return static_cast<nsTableCellFrame*>(sibling);
   }
 
@@ -344,12 +340,9 @@ class nsBCTableCellFrame final : public nsTableCellFrame {
 // Implemented here because that's a sane-ish way to make the includes work out.
 inline nsTableCellFrame* nsTableRowFrame::GetFirstCell() const {
   nsIFrame* firstChild = mFrames.FirstChild();
-#ifdef DEBUG
-  if (firstChild) {
-    nsTableCellFrame* cellFrame = do_QueryFrame(firstChild);
-    MOZ_ASSERT(cellFrame, "How do we have a non-cell sibling?");
-  }
-#endif  // DEBUG
+  MOZ_ASSERT(
+      !firstChild || static_cast<nsTableCellFrame*>(do_QueryFrame(firstChild)),
+      "How do we have a non-cell child?");
   return static_cast<nsTableCellFrame*>(firstChild);
 }
 

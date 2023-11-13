@@ -37,6 +37,7 @@
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmIonCompile.h"
 #include "wasm/WasmJS.h"
+#include "wasm/WasmModuleTypes.h"
 #include "wasm/WasmSerialize.h"
 #include "wasm/WasmUtility.h"
 
@@ -476,12 +477,12 @@ bool Module::instantiateFunctions(JSContext* cx,
     Instance& instance = ExportedFunctionToInstance(f);
     Tier otherTier = instance.code().stableTier();
 
-    const FuncType& exportFuncType = instance.metadata().getFuncExportType(
+    const TypeDef& exportFuncType = instance.metadata().getFuncExportTypeDef(
         instance.metadata(otherTier).lookupFuncExport(funcIndex));
-    const FuncType& importFuncType =
-        metadata().getFuncImportType(metadata(tier).funcImports[i]);
+    const TypeDef& importFuncType =
+        metadata().getFuncImportTypeDef(metadata(tier).funcImports[i]);
 
-    if (!FuncType::strictlyEquals(exportFuncType, importFuncType)) {
+    if (!TypeDef::isSubTypeOf(&exportFuncType, &importFuncType)) {
       const Import& import = FindImportFunction(imports_, i);
       UniqueChars importModuleName = import.module.toQuotedString(cx);
       UniqueChars importFieldName = import.field.toQuotedString(cx);
@@ -863,13 +864,9 @@ static bool GetGlobalExport(JSContext* cx,
   // in its global data area. Either way, we must initialize the global object
   // with the same initial value.
   MOZ_ASSERT(!global.isMutable());
-  MOZ_ASSERT(!global.isImport());
-  RootedVal globalVal(cx);
   MOZ_RELEASE_ASSERT(!global.isImport());
-  const InitExpr& init = global.initExpr();
-  if (!init.evaluate(cx, instanceObj, &globalVal)) {
-    return false;
-  }
+  RootedVal globalVal(cx);
+  instanceObj->instance().constantGlobalGet(globalIndex, &globalVal);
   globalObj->val() = globalVal;
   return true;
 }

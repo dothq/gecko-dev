@@ -41,6 +41,8 @@ bitflags::bitflags! {
         const TEXTURE_LEVELS = 1 << 19;
         /// Image size query
         const IMAGE_SIZE = 1 << 20;
+        /// Dual source blending
+        const DUAL_SOURCE_BLENDING = 1 << 21;
     }
 }
 
@@ -104,6 +106,7 @@ impl FeaturesManager {
         check_feature!(CULL_DISTANCE, 450, 300 /* with extension */);
         check_feature!(SAMPLE_VARIABLES, 400, 300);
         check_feature!(DYNAMIC_ARRAY_SIZE, 430, 310);
+        check_feature!(DUAL_SOURCE_BLENDING, 330, 300 /* with extension */);
         match version {
             Version::Embedded { is_webgl: true, .. } => check_feature!(MULTI_VIEW, 140, 300),
             _ => check_feature!(MULTI_VIEW, 140, 310),
@@ -206,11 +209,6 @@ impl FeaturesManager {
             writeln!(out, "#extension GL_OES_sample_variables : require")?;
         }
 
-        if self.0.contains(Features::SAMPLE_VARIABLES) && version.is_es() {
-            // https://www.khronos.org/registry/OpenGL/extensions/OES/OES_sample_variables.txt
-            writeln!(out, "#extension GL_OES_sample_variables : require")?;
-        }
-
         if self.0.contains(Features::MULTI_VIEW) {
             if let Version::Embedded { is_webgl: true, .. } = version {
                 // https://www.khronos.org/registry/OpenGL/extensions/OVR/OVR_multiview2.txt
@@ -232,6 +230,10 @@ impl FeaturesManager {
         if self.0.contains(Features::TEXTURE_LEVELS) && version < Version::Desktop(430) {
             // https://www.khronos.org/registry/OpenGL/extensions/ARB/ARB_texture_query_levels.txt
             writeln!(out, "#extension GL_ARB_texture_query_levels : require")?;
+        }
+        if self.0.contains(Features::DUAL_SOURCE_BLENDING) && version.is_es() {
+            // https://registry.khronos.org/OpenGL/extensions/EXT/EXT_blend_func_extended.txt
+            writeln!(out, "#extension GL_EXT_blend_func_extended : require")?;
         }
 
         Ok(())
@@ -355,6 +357,7 @@ impl<'a, W> Writer<'a, W> {
                             | StorageFormat::Rg16Uint
                             | StorageFormat::Rg16Sint
                             | StorageFormat::Rg16Float
+                            | StorageFormat::Rgb10a2Uint
                             | StorageFormat::Rgb10a2Unorm
                             | StorageFormat::Rg11b10Float
                             | StorageFormat::Rg32Uint
@@ -497,12 +500,16 @@ impl<'a, W> Writer<'a, W> {
                             location: _,
                             interpolation,
                             sampling,
+                            second_blend_source,
                         } => {
                             if interpolation == Some(Interpolation::Linear) {
                                 self.features.request(Features::NOPERSPECTIVE_QUALIFIER);
                             }
                             if sampling == Some(Sampling::Sample) {
                                 self.features.request(Features::SAMPLE_QUALIFIER);
+                            }
+                            if second_blend_source {
+                                self.features.request(Features::DUAL_SOURCE_BLENDING);
                             }
                         }
                     }

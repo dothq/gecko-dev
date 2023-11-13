@@ -51,7 +51,11 @@ class BrowsingContextGroup;
   /* Whether this window's channel has been marked as a third-party      \
    * tracking resource */                                                \
   FIELD(IsThirdPartyTrackingResourceWindow, bool)                        \
+  /* Whether this window is using its unpartitioned cookies due to       \
+   * the Storage Access API */                                           \
+  FIELD(UsingStorageAccess, bool)                                        \
   FIELD(ShouldResistFingerprinting, bool)                                \
+  FIELD(OverriddenFingerprintingSettings, Maybe<RFPTarget>)              \
   FIELD(IsSecureContext, bool)                                           \
   FIELD(IsOriginalFrameSource, bool)                                     \
   /* Mixed-Content: If the corresponding documentURI is https,           \
@@ -130,6 +134,16 @@ class WindowContext : public nsISupports, public nsWrapperCache {
 
   bool ShouldResistFingerprinting() const {
     return GetShouldResistFingerprinting();
+  }
+
+  Nullable<uint64_t> GetOverriddenFingerprintingSettingsWebIDL() const {
+    Maybe<RFPTarget> overriddenFingerprintingSettings =
+        GetOverriddenFingerprintingSettings();
+
+    return overriddenFingerprintingSettings.isSome()
+               ? Nullable<uint64_t>(
+                     uint64_t(overriddenFingerprintingSettings.ref()))
+               : Nullable<uint64_t>();
   }
 
   nsGlobalWindowInner* GetInnerWindow() const;
@@ -266,8 +280,12 @@ class WindowContext : public nsISupports, public nsWrapperCache {
   bool CanSet(FieldIndex<IDX_IsThirdPartyTrackingResourceWindow>,
               const bool& aIsThirdPartyTrackingResourceWindow,
               ContentParent* aSource);
+  bool CanSet(FieldIndex<IDX_UsingStorageAccess>,
+              const bool& aUsingStorageAccess, ContentParent* aSource);
   bool CanSet(FieldIndex<IDX_ShouldResistFingerprinting>,
               const bool& aShouldResistFingerprinting, ContentParent* aSource);
+  bool CanSet(FieldIndex<IDX_OverriddenFingerprintingSettings>,
+              const Maybe<RFPTarget>& aValue, ContentParent* aSource);
   bool CanSet(FieldIndex<IDX_IsSecureContext>, const bool& aIsSecureContext,
               ContentParent* aSource);
   bool CanSet(FieldIndex<IDX_IsOriginalFrameSource>,

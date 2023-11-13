@@ -111,6 +111,8 @@
       Services.els.addSystemEventListener(document, "keypress", this, false);
       document.addEventListener("visibilitychange", this);
       window.addEventListener("framefocusrequested", this);
+      window.addEventListener("activate", this);
+      window.addEventListener("deactivate", this);
 
       this.tabContainer.init();
       this._setupInitialBrowserAndTab();
@@ -713,7 +715,10 @@
     },
 
     _notifyPinnedStatus(aTab) {
-      aTab.linkedBrowser.browsingContext.isAppTab = aTab.pinned;
+      // browsingContext is expected to not be defined on discarded tabs.
+      if (aTab.linkedBrowser.browsingContext) {
+        aTab.linkedBrowser.browsingContext.isAppTab = aTab.pinned;
+      }
 
       let event = document.createEvent("Events");
       event.initEvent(aTab.pinned ? "TabPinned" : "TabUnpinned", true, false);
@@ -1198,6 +1203,11 @@
         newTab.recordTimeFromUnloadToReload();
         newTab.updateLastAccessed();
         oldTab.updateLastAccessed();
+        // if this is the foreground window, update the last-seen timestamps.
+        if (this.ownerGlobal == BrowserWindowTracker.getTopWindow()) {
+          newTab.updateLastSeenActive();
+          oldTab.updateLastSeenActive();
+        }
 
         let oldFindBar = oldTab._findBar;
         if (
@@ -2580,6 +2590,7 @@
         insertTab = true,
         globalHistoryOptions,
         triggeringRemoteType,
+        wasSchemelessInput,
       } = {}
     ) {
       // all callers of addTab that pass a params object need to pass
@@ -2769,6 +2780,7 @@
           csp,
           globalHistoryOptions,
           triggeringRemoteType,
+          wasSchemelessInput,
         });
       }
 
@@ -3010,6 +3022,7 @@
         csp,
         globalHistoryOptions,
         triggeringRemoteType,
+        wasSchemelessInput,
       }
     ) {
       if (
@@ -3073,6 +3086,7 @@
             csp,
             globalHistoryOptions,
             triggeringRemoteType,
+            wasSchemelessInput,
           });
         } catch (ex) {
           console.error(ex);
@@ -3171,7 +3185,7 @@
           if (!tab.parentNode) {
             tab._tPos = this._numPinnedTabs;
             this.tabContainer.insertBefore(tab, this.tabs[this._numPinnedTabs]);
-            tab.setAttribute("pinned", "true");
+            tab.toggleAttribute("pinned", true);
             this.tabContainer._invalidateCachedTabs();
             // Then ensure all the tab open/pinning information is sent.
             this._fireTabOpen(tab, {});
@@ -3552,8 +3566,10 @@
      * @param   aParams
      *          An optional set of parameters that will be passed to the
      *          removeTabs function.
+     * @param   {boolean} [skipWarnAboutClosingTabs=false]
+     *          Whether to skip the tab close warning prompt.mach
      */
-    removeAllTabsBut(aTab, aParams) {
+    removeAllTabsBut(aTab, aParams, skipWarnAboutClosingTabs = false) {
       let tabsToRemove = [];
       if (aTab && aTab.multiselected) {
         tabsToRemove = this.visibleTabs.filter(
@@ -3566,6 +3582,7 @@
       }
 
       if (
+        !skipWarnAboutClosingTabs &&
         !this.warnAboutClosingTabs(
           tabsToRemove.length,
           this.closingTabsEnum.OTHER
@@ -3934,8 +3951,9 @@
         aTab.hidden ||
         this._removingTabs.size >
           3 /* don't want lots of concurrent animations */ ||
-        aTab.getAttribute("fadein") !=
-          "true" /* fade-in transition hasn't been triggered yet */ ||
+        !aTab.hasAttribute(
+          "fadein"
+        ) /* fade-in transition hasn't been triggered yet */ ||
         tabWidth == 0 /* fade-in transition hasn't moved yet */
       ) {
         // We're not animating, so we can cancel the animation stopwatch.
@@ -4493,7 +4511,7 @@
 
       let modifiedAttrs = [];
       if (aOtherTab.hasAttribute("muted")) {
-        aOurTab.setAttribute("muted", "true");
+        aOurTab.toggleAttribute("muted", true);
         aOurTab.muteReason = aOtherTab.muteReason;
         // For non-lazy tabs, mute() must be called.
         if (aOurTab.linkedPanel) {
@@ -4502,11 +4520,11 @@
         modifiedAttrs.push("muted");
       }
       if (aOtherTab.hasAttribute("undiscardable")) {
-        aOurTab.setAttribute("undiscardable", "true");
+        aOurTab.toggleAttribute("undiscardable", true);
         modifiedAttrs.push("undiscardable");
       }
       if (aOtherTab.hasAttribute("soundplaying")) {
-        aOurTab.setAttribute("soundplaying", "true");
+        aOurTab.toggleAttribute("soundplaying", true);
         modifiedAttrs.push("soundplaying");
       }
       if (aOtherTab.hasAttribute("usercontextid")) {
@@ -4520,7 +4538,7 @@
         webrtcUI.swapBrowserForNotification(otherBrowser, ourBrowser);
       }
       if (aOtherTab.hasAttribute("pictureinpicture")) {
-        aOurTab.setAttribute("pictureinpicture", true);
+        aOurTab.toggleAttribute("pictureinpicture", true);
         modifiedAttrs.push("pictureinpicture");
 
         let event = new CustomEvent("TabSwapPictureInPicture", {
@@ -5758,6 +5776,11 @@
             this.selectedBrowser.docShellIsActive = !inactive;
           }
           break;
+        case "activate":
+        // Intentional fallthrough
+        case "deactivate":
+          this.selectedTab.updateLastSeenActive();
+          break;
       }
     },
 
@@ -5871,6 +5894,8 @@
       }
       document.removeEventListener("visibilitychange", this);
       window.removeEventListener("framefocusrequested", this);
+      window.removeEventListener("activate", this);
+      window.removeEventListener("deactivate", this);
 
       if (gMultiProcessBrowser) {
         if (this._switcher) {
@@ -6121,7 +6146,7 @@
         }
 
         if (!tab.hasAttribute("soundplaying")) {
-          tab.setAttribute("soundplaying", true);
+          tab.toggleAttribute("soundplaying", true);
           modifiedAttrs.push("soundplaying");
         }
 
@@ -6149,7 +6174,7 @@
             "--soundplaying-removal-delay",
             `${removalDelay - 300}ms`
           );
-          tab.setAttribute("soundplaying-scheduledremoval", "true");
+          tab.toggleAttribute("soundplaying-scheduledremoval", true);
           this._tabAttrModified(tab, ["soundplaying-scheduledremoval"]);
 
           tab._soundPlayingAttrRemovalTimer = setTimeout(() => {

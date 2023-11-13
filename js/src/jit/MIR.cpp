@@ -782,12 +782,6 @@ void MDefinition::dumpLocation() const {
 }
 #endif
 
-#ifdef DEBUG
-bool MDefinition::trackedSiteMatchesBlock(const BytecodeSite* site) const {
-  return site == block()->trackedSite();
-}
-#endif
-
 #if defined(DEBUG) || defined(JS_JITSPEW)
 size_t MDefinition::useCount() const {
   size_t count = 0;
@@ -6503,9 +6497,10 @@ bool MGuardFunctionScript::congruentTo(const MDefinition* ins) const {
 
 AliasSet MGuardFunctionScript::getAliasSet() const {
   // A JSFunction's BaseScript pointer is immutable. Relazification of
-  // self-hosted functions is an exception to this, but we don't use this
-  // guard for self-hosted functions.
-  MOZ_ASSERT(!flags_.isSelfHostedOrIntrinsic());
+  // top-level/named self-hosted functions is an exception to this, but we don't
+  // use this guard for those self-hosted functions.
+  // See IRGenerator::emitCalleeGuard.
+  MOZ_ASSERT_IF(flags_.isSelfHostedOrIntrinsic(), flags_.isLambda());
   return AliasSet::None();
 }
 

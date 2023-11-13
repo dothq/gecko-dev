@@ -47,6 +47,7 @@ TEST_HARNESS_BINS = [
     "screentopng",
     "ssltunnel",
     "xpcshell",
+    "plugin-container",
 ]
 
 TEST_HARNESS_DLLS = ["crashinjectdll", "mozglue"]
@@ -285,6 +286,13 @@ ARCHIVE_FILES = {
             "base": "dist/xpi-stage",
             "pattern": "specialpowers/**",
             "dest": "mochitest/extensions",
+        },
+        # Needed by Windows a11y browser tests.
+        {
+            "source": buildconfig.topobjdir,
+            "base": "accessible/interfaces/ia2",
+            "pattern": "IA2Typelib.tlb",
+            "dest": "mochitest",
         },
     ],
     "mozharness": [

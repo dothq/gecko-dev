@@ -315,6 +315,7 @@ void Realm::purge() {
   dtoaCache.purge();
   newProxyCache.purge();
   newPlainObjectWithPropsCache.purge();
+  plainObjectAssignCache.purge();
   objects_.iteratorCache.clearAndCompact();
   arraySpeciesLookup.purge();
   promiseLookup.purge();
@@ -487,6 +488,14 @@ bool Realm::collectCoverageForDebug() const {
 void Realm::clearScriptCounts() { zone()->clearScriptCounts(this); }
 
 void Realm::clearScriptLCov() { zone()->clearScriptLCov(this); }
+
+const char* Realm::getLocale() const {
+  if (RefPtr<LocaleString> locale = creationOptions_.locale()) {
+    return locale->chars();
+  }
+
+  return runtime_->getDefaultLocale();
+}
 
 void ObjectRealm::addSizeOfExcludingThis(
     mozilla::MallocSizeOf mallocSizeOf, size_t* innerViewsArg,

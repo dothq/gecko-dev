@@ -39,6 +39,7 @@
 #include "mozilla/StaticPrefs_image.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_toolkit.h"
+#include "mozilla/Try.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/TouchEvents.h"
@@ -585,6 +586,7 @@ class MOZ_STACK_CLASS AutoPointerEventTargetUpdater final {
 };
 
 bool PresShell::sDisableNonTestMouseEvents = false;
+int16_t PresShell::sMouseButtons = MouseButtonsFlag::eNoButtons;
 
 LazyLogModule PresShell::gLog("PresShell");
 
@@ -762,7 +764,6 @@ PresShell::PresShell(Document* aDocument)
       mShouldUnsuppressPainting(false),
       mIgnoreFrameDestruction(false),
       mIsActive(true),
-      mIsInActiveTab(true),
       mFrozen(false),
       mIsFirstPaint(true),
       mObservesMutationsForPrint(false),
@@ -788,8 +789,6 @@ PresShell::PresShell(Document* aDocument)
       mForceDispatchKeyPressEventsForNonPrintableKeys(false),
       mForceUseLegacyKeyCodeAndCharCodeValues(false),
       mInitializedWithKeyPressEventDispatchingBlacklist(false),
-      mForceUseLegacyNonPrimaryDispatch(false),
-      mInitializedWithClickEventDispatchingBlacklist(false),
       mMouseLocationWasSetBySynthesizedMouseEventForTests(false),
       mHasTriedFastUnsuppress(false),
       mProcessingReflowCommands(false),
@@ -897,9 +896,6 @@ void PresShell::Init(nsPresContext* aPresContext, nsViewManager* aViewManager) {
   // being eagerly registered as a style flush observer. This shouldn't be
   // needed otherwise.
   EnsureStyleFlush();
-
-  // Add the preference style sheet.
-  UpdatePreferenceStyles();
 
   const bool accessibleCaretEnabled =
       AccessibleCaretEnabled(mDocument->GetDocShell());
@@ -1269,11 +1265,6 @@ void PresShell::Destroy() {
     frameSelection->DisconnectFromPresShell();
   }
 
-  // release our pref style sheet, if we have one still
-  //
-  // TODO(emilio): Should we move the preference sheet tracking to the Document?
-  RemovePreferenceStyles();
-
   mIsDestroying = true;
 
   // We can't release all the event content in
@@ -1422,53 +1413,6 @@ bool PresShell::GetAuthorStyleDisabled() const {
   return StyleSet()->GetAuthorStyleDisabled();
 }
 
-void PresShell::UpdatePreferenceStyles() {
-  if (!mDocument) {
-    return;
-  }
-
-  // If the document doesn't have a window there's no need to notify
-  // its presshell about changes to preferences since the document is
-  // in a state where it doesn't matter any more (see
-  // nsDocumentViewer::Close()).
-  if (!mDocument->GetWindow()) {
-    return;
-  }
-
-  // Documents in chrome shells do not have any preference style rules applied.
-  if (mDocument->IsInChromeDocShell()) {
-    return;
-  }
-
-  PreferenceSheet::EnsureInitialized();
-  auto* cache = GlobalStyleSheetCache::Singleton();
-
-  RefPtr<StyleSheet> newPrefSheet =
-      PreferenceSheet::ShouldUseChromePrefs(*mDocument)
-          ? cache->ChromePreferenceSheet()
-          : cache->ContentPreferenceSheet();
-
-  if (mPrefStyleSheet == newPrefSheet) {
-    return;
-  }
-
-  RemovePreferenceStyles();
-
-  // NOTE(emilio): This sheet is added as an agent sheet, because we don't want
-  // it to be modifiable from devtools and similar, see bugs 1239336 and
-  // 1436782. I think it conceptually should be a user sheet, and could be
-  // without too much trouble I'd think.
-  StyleSet()->AppendStyleSheet(*newPrefSheet);
-  mPrefStyleSheet = newPrefSheet;
-}
-
-void PresShell::RemovePreferenceStyles() {
-  if (mPrefStyleSheet) {
-    StyleSet()->RemoveStyleSheet(*mPrefStyleSheet);
-    mPrefStyleSheet = nullptr;
-  }
-}
-
 void PresShell::AddUserSheet(StyleSheet* aSheet) {
   // Make sure this does what nsDocumentViewer::CreateStyleSet does wrt
   // ordering. We want this new sheet to come after all the existing stylesheet
@@ -1525,9 +1469,6 @@ void PresShell::AddAuthorSheet(StyleSheet* aSheet) {
 }
 
 bool PresShell::FixUpFocus() {
-  if (!StaticPrefs::dom_focus_fixup()) {
-    return false;
-  }
   if (NS_WARN_IF(!mDocument)) {
     return false;
   }
@@ -1874,8 +1815,7 @@ nsresult PresShell::Initialize() {
       mPaintingSuppressed = false;
     } else {
       // Initialize the timer.
-      mPaintSuppressionTimer->SetTarget(
-          mDocument->EventTargetFor(TaskCategory::Other));
+      mPaintSuppressionTimer->SetTarget(GetMainThreadSerialEventTarget());
       InitPaintSuppressionTimer();
       if (mHasTriedFastUnsuppress) {
         // Someone tried to unsuppress painting before Initialize was called so
@@ -1980,6 +1920,27 @@ bool PresShell::SimpleResizeReflow(nscoord aWidth, nscoord aHeight) {
   if (mMobileViewportManager) {
     mMobileViewportManager->UpdateSizesBeforeReflow();
   }
+  return true;
+}
+
+bool PresShell::CanHandleUserInputEvents(WidgetGUIEvent* aGUIEvent) {
+  if (XRE_IsParentProcess()) {
+    return true;
+  }
+
+  if (aGUIEvent->mFlags.mIsSynthesizedForTests &&
+      !StaticPrefs::dom_input_events_security_isUserInputHandlingDelayTest()) {
+    return true;
+  }
+
+  if (!aGUIEvent->IsUserAction()) {
+    return true;
+  }
+
+  if (nsPresContext* rootPresContext = mPresContext->GetRootPresContext()) {
+    return rootPresContext->UserInputEventsAllowed();
+  }
+
   return true;
 }
 
@@ -2134,7 +2095,9 @@ void PresShell::FireResizeEventSync() {
   nsEventStatus status = nsEventStatus_eIgnore;
 
   if (RefPtr<nsPIDOMWindowOuter> window = mDocument->GetWindow()) {
-    EventDispatcher::Dispatch(window, mPresContext, &event, nullptr, &status);
+    // MOZ_KnownLive due to bug 1506441
+    EventDispatcher::Dispatch(MOZ_KnownLive(nsGlobalWindowOuter::Cast(window)),
+                              mPresContext, &event, nullptr, &status);
   }
 }
 
@@ -4275,9 +4238,6 @@ void PresShell::DoFlushPendingNotifications(mozilla::ChangesToFlush aFlush) {
 
     mDocument->UpdateSVGUseElementShadowTrees();
 
-    // Ensure our preference sheets are up-to-date.
-    UpdatePreferenceStyles();
-
     // Process pending restyles, since any flush of the presshell wants
     // up-to-date style data.
     if (MOZ_LIKELY(!mIsDestroying)) {
@@ -5829,6 +5789,7 @@ void PresShell::ProcessSynthMouseMoveEvent(bool aFromScroll) {
                          WidgetMouseEvent::eSynthesized);
   event.mRefPoint =
       LayoutDeviceIntPoint::FromAppUnitsToNearest(refpoint, viewAPD);
+  event.mButtons = PresShell::sMouseButtons;
   // XXX set event.mModifiers ?
   // XXX mnakano I think that we should get the latest information from widget.
 
@@ -6227,7 +6188,7 @@ void PresShell::ScheduleApproximateFrameVisibilityUpdateNow() {
   RefPtr<nsRunnableMethod<PresShell>> event =
       NewRunnableMethod("PresShell::UpdateApproximateFrameVisibility", this,
                         &PresShell::UpdateApproximateFrameVisibility);
-  nsresult rv = mDocument->Dispatch(TaskCategory::Other, do_AddRef(event));
+  nsresult rv = mDocument->Dispatch(do_AddRef(event));
 
   if (NS_SUCCEEDED(rv)) {
     mUpdateApproximateFrameVisibilityEvent = std::move(event);
@@ -6880,6 +6841,17 @@ nsresult PresShell::HandleEvent(nsIFrame* aFrameForPresShell,
       aGUIEvent->AsMouseEvent()->mReason == WidgetMouseEvent::eSynthesized) {
     return NS_OK;
   }
+
+  // Here we are granting some delays to ensure that user input events are
+  // created while the page content may not be visible to the user are not
+  // processed.
+  // The main purpose of this is to avoid user inputs are handled in the
+  // new document where as the user inputs were originally targeting some
+  // content in the old document.
+  if (!CanHandleUserInputEvents(aGUIEvent)) {
+    return NS_OK;
+  }
+
   EventHandler eventHandler(*this);
   return eventHandler.HandleEvent(aFrameForPresShell, aGUIEvent,
                                   aDontRetargetEvents, aEventStatus);
@@ -7349,6 +7321,32 @@ bool PresShell::EventHandler::DispatchPrecedingPointerEvent(
   return !!aEventTargetData->mPresShell;
 }
 
+/**
+ * Event retargetting may retarget a mouse event and change the reference point.
+ * If event retargetting changes the reference point of a event that accessible
+ * caret will not handle, restore the original reference point.
+ */
+class AutoEventTargetPointResetter {
+ public:
+  explicit AutoEventTargetPointResetter(WidgetGUIEvent* aGUIEvent)
+      : mGUIEvent(aGUIEvent),
+        mRefPoint(aGUIEvent->mRefPoint),
+        mHandledByAccessibleCaret(false) {}
+
+  void SetHandledByAccessibleCaret() { mHandledByAccessibleCaret = true; }
+
+  ~AutoEventTargetPointResetter() {
+    if (!mHandledByAccessibleCaret) {
+      mGUIEvent->mRefPoint = mRefPoint;
+    }
+  }
+
+ private:
+  WidgetGUIEvent* mGUIEvent;
+  LayoutDeviceIntPoint mRefPoint;
+  bool mHandledByAccessibleCaret;
+};
+
 bool PresShell::EventHandler::MaybeHandleEventWithAccessibleCaret(
     nsIFrame* aFrameForPresShell, WidgetGUIEvent* aGUIEvent,
     nsEventStatus* aEventStatus) {
@@ -7374,6 +7372,7 @@ bool PresShell::EventHandler::MaybeHandleEventWithAccessibleCaret(
     return false;
   }
 
+  AutoEventTargetPointResetter autoEventTargetPointResetter(aGUIEvent);
   // First, try the event hub at the event point to handle a long press to
   // select a word in an unfocused window.
   do {
@@ -7401,6 +7400,7 @@ bool PresShell::EventHandler::MaybeHandleEventWithAccessibleCaret(
     // If the event is consumed, cancel APZC panning by setting
     // mMultipleActionsPrevented.
     aGUIEvent->mFlags.mMultipleActionsPrevented = true;
+    autoEventTargetPointResetter.SetHandledByAccessibleCaret();
     return true;
   } while (false);
 
@@ -7430,6 +7430,7 @@ bool PresShell::EventHandler::MaybeHandleEventWithAccessibleCaret(
   // If the event is consumed, cancel APZC panning by setting
   // mMultipleActionsPrevented.
   aGUIEvent->mFlags.mMultipleActionsPrevented = true;
+  autoEventTargetPointResetter.SetHandledByAccessibleCaret();
   return true;
 }
 
@@ -8371,8 +8372,8 @@ void PresShell::EventHandler::FinalizeHandlingEvent(WidgetEvent* aEvent) {
           }
           if (aEvent->mMessage == eKeyDown &&
               !aEvent->mFlags.mDefaultPrevented) {
-            if (Document* doc = GetDocument()) {
-              doc->TryCancelDialog();
+            if (RefPtr<Document> doc = GetDocument()) {
+              doc->HandleEscKey();
             }
           }
         }
@@ -8657,29 +8658,6 @@ nsresult PresShell::EventHandler::DispatchEventToDOM(
       if (mPresShell->mForceUseLegacyKeyCodeAndCharCodeValues) {
         aEvent->AsKeyboardEvent()->mUseLegacyKeyCodeAndCharCodeValues = true;
       }
-    } else if (aEvent->mMessage == eMouseUp) {
-      // Historically Firefox has dispatched click events for non-primary
-      // buttons, but only on window and document (and inside input/textarea),
-      // not on elements in general. The UI events spec forbids click (and
-      // dblclick) for non-primary mouse buttons, and specifies auxclick
-      // instead. In case of some websites that rely on non-primary click to
-      // prevent new tab etc. and don't have auxclick code to do the same, we
-      // need to revert to the historial non-standard behaviour
-      if (!mPresShell->mInitializedWithClickEventDispatchingBlacklist) {
-        mPresShell->mInitializedWithClickEventDispatchingBlacklist = true;
-
-        nsCOMPtr<nsIPrincipal> principal =
-            GetDocumentPrincipalToCompareWithBlacklist(*mPresShell);
-
-        if (principal) {
-          mPresShell->mForceUseLegacyNonPrimaryDispatch =
-              principal->IsURIInPrefList(
-                  "dom.mouseevent.click.hack.use_legacy_non-primary_dispatch");
-        }
-      }
-      if (mPresShell->mForceUseLegacyNonPrimaryDispatch) {
-        aEvent->AsMouseEvent()->mUseLegacyNonPrimaryDispatch = true;
-      }
     }
 
     if (aEvent->mClass == eCompositionEventClass) {
@@ -8690,6 +8668,9 @@ nsresult PresShell::EventHandler::DispatchEventToDOM(
           eventTarget, presContext, browserParent, aEvent->AsCompositionEvent(),
           aEventStatus, eventCBPtr);
     } else {
+      if (aEvent->mClass == eMouseEventClass) {
+        PresShell::sMouseButtons = aEvent->AsMouseEvent()->mButtons;
+      }
       RefPtr<nsPresContext> presContext = GetPresContext();
       EventDispatcher::Dispatch(eventTarget, presContext, aEvent, nullptr,
                                 aEventStatus, eventCBPtr);
@@ -9302,6 +9283,10 @@ void PresShell::Freeze(bool aIncludeSubDocuments) {
     if (presContext->RefreshDriver()->GetPresContext() == presContext) {
       presContext->RefreshDriver()->Freeze();
     }
+
+    if (nsPresContext* rootPresContext = presContext->GetRootPresContext()) {
+      rootPresContext->ResetUserInputEventsAllowed();
+    }
   }
 
   mFrozen = true;
@@ -9360,6 +9345,16 @@ void PresShell::Thaw(bool aIncludeSubDocuments) {
   UpdateImageLockingState();
 
   UnsuppressPainting();
+
+  // In case the above UnsuppressPainting call didn't start the
+  // refresh driver, we manually start the refresh driver to
+  // ensure nsPresContext::MaybeIncreaseMeasuredTicksSinceLoading
+  // can be called for user input events handling.
+  if (presContext && presContext->IsRoot()) {
+    if (!presContext->RefreshDriver()->HasPendingTick()) {
+      presContext->RefreshDriver()->InitializeTimer();
+    }
+  }
 }
 
 //--------------------------------------------------------
@@ -9437,19 +9432,7 @@ void PresShell::DidDoReflow(bool aInterruptible) {
   }
 
   if (!mPresContext->HasPendingInterrupt()) {
-    // The ResizeObserver object may exist in the outer documents (e.g. observe
-    // an element in the in-process iframe) or any other documents which can
-    // access |mDocument|, so we have to schedule the resize observers for all
-    // possible documents via browsing context tree.
-    if (RefPtr<BrowsingContext> bc = mDocument->GetBrowsingContext()) {
-      bc->Top()->PreOrderWalk([](BrowsingContext* aCur) {
-        // Use extant document because we only want to schedule the observer to
-        // its refresh driver and so don't need to ensure the content viewer.
-        if (const Document* doc = aCur->GetExtantDocument()) {
-          doc->ScheduleResizeObserversNotification();
-        }
-      });
-    }
+    mPresContext->RefreshDriver()->EnsureResizeObserverUpdateHappens();
   }
 
   if (StaticPrefs::layout_reflow_synthMouseMove()) {
@@ -9489,7 +9472,7 @@ bool PresShell::ScheduleReflowOffTimer() {
     nsresult rv = NS_NewTimerWithFuncCallback(
         getter_AddRefs(mReflowContinueTimer), sReflowContinueCallback, this, 30,
         nsITimer::TYPE_ONE_SHOT, "sReflowContinueCallback",
-        mDocument->EventTargetFor(TaskCategory::Other));
+        GetMainThreadSerialEventTarget());
     return NS_SUCCEEDED(rv);
   }
   return true;
@@ -10020,8 +10003,7 @@ void PresShell::DelayedInputEvent::Dispatch() {
   widget->DispatchEvent(mEvent, status);
 }
 
-PresShell::DelayedMouseEvent::DelayedMouseEvent(WidgetMouseEvent* aEvent)
-    : DelayedInputEvent() {
+PresShell::DelayedMouseEvent::DelayedMouseEvent(WidgetMouseEvent* aEvent) {
   MOZ_DIAGNOSTIC_ASSERT(aEvent->IsTrusted());
   WidgetMouseEvent* mouseEvent =
       new WidgetMouseEvent(true, aEvent->mMessage, aEvent->mWidget,
@@ -10030,8 +10012,7 @@ PresShell::DelayedMouseEvent::DelayedMouseEvent(WidgetMouseEvent* aEvent)
   mEvent = mouseEvent;
 }
 
-PresShell::DelayedKeyEvent::DelayedKeyEvent(WidgetKeyboardEvent* aEvent)
-    : DelayedInputEvent() {
+PresShell::DelayedKeyEvent::DelayedKeyEvent(WidgetKeyboardEvent* aEvent) {
   MOZ_DIAGNOSTIC_ASSERT(aEvent->IsTrusted());
   WidgetKeyboardEvent* keyEvent =
       new WidgetKeyboardEvent(true, aEvent->mMessage, aEvent->mWidget);
@@ -10842,30 +10823,23 @@ void PresShell::ActivenessMaybeChanged() {
   if (!mDocument) {
     return;
   }
-  auto activeness = ComputeActiveness();
-  SetIsActive(activeness.mShouldBeActive, activeness.mIsInActiveTab);
+  SetIsActive(ComputeActiveness());
 }
 
 // A PresShell being active means that it is visible (or close to be visible, if
 // the front-end is warming it). That means that when it is active we always
 // tick its refresh driver at full speed if needed.
 //
-// However we also want to track whether we're in the active tab (represented by
-// the browsing context activeness) for the refresh driver to be able to treat
-// invisible-but-in-the-active-tab frames slightly differently in some
-// circumstances (give them a throttled or unthrottled refresh driver after a
-// while). mIsInActiveTab should ~always be GetBrowsingContext()->IsActive().
-//
 // Image documents behave specially in the sense that they are always "active"
 // and never "in the active tab". However these documents tick manually so
 // there's not much to worry about there.
-auto PresShell::ComputeActiveness() const -> Activeness {
+bool PresShell::ComputeActiveness() const {
   MOZ_LOG(gLog, LogLevel::Debug,
-          ("PresShell::ShouldBeActive(%s, %d, %d)\n",
+          ("PresShell::ComputeActiveness(%s, %d)\n",
            mDocument->GetDocumentURI()
                ? mDocument->GetDocumentURI()->GetSpecOrDefault().get()
                : "(no uri)",
-           mIsActive, mIsInActiveTab));
+           mIsActive));
 
   Document* doc = mDocument;
 
@@ -10876,7 +10850,7 @@ auto PresShell::ComputeActiveness() const -> Activeness {
     //
     // Image docs can be displayed in multiple docs at the same time so the "in
     // active tab" bool doesn't make much sense for them.
-    return {true, false};
+    return true;
   }
 
   if (Document* displayDoc = doc->GetDisplayDocument()) {
@@ -10913,7 +10887,7 @@ auto PresShell::ComputeActiveness() const -> Activeness {
     if (!browserChild->IsVisible()) {
       MOZ_LOG(gLog, LogLevel::Debug,
               (" > BrowserChild %p is not visible", browserChild));
-      return {false, inActiveTab};
+      return false;
     }
 
     // If the browser is visible but just due to be preserving layers
@@ -10923,40 +10897,38 @@ auto PresShell::ComputeActiveness() const -> Activeness {
       MOZ_LOG(gLog, LogLevel::Debug,
               (" > BrowserChild %p is visible and not preserving layers",
                browserChild));
-      return {true, inActiveTab};
+      return true;
     }
     MOZ_LOG(
         gLog, LogLevel::Debug,
         (" > BrowserChild %p is visible and preserving layers", browserChild));
   }
-  return {inActiveTab, inActiveTab};
+  return inActiveTab;
 }
 
-void PresShell::SetIsActive(bool aIsActive, bool aIsInActiveTab) {
+void PresShell::SetIsActive(bool aIsActive) {
   MOZ_ASSERT(mDocument, "should only be called with a document");
 
   const bool activityChanged = mIsActive != aIsActive;
-  const bool inActiveTabChanged = mIsInActiveTab != aIsInActiveTab;
 
   mIsActive = aIsActive;
-  mIsInActiveTab = aIsInActiveTab;
 
   nsPresContext* presContext = GetPresContext();
   if (presContext &&
       presContext->RefreshDriver()->GetPresContext() == presContext) {
-    presContext->RefreshDriver()->SetActivity(aIsActive, aIsInActiveTab);
+    presContext->RefreshDriver()->SetActivity(aIsActive);
   }
 
-  if (activityChanged || inActiveTabChanged) {
+  if (activityChanged) {
     // Propagate state-change to my resource documents' PresShells and other
     // subdocuments.
     //
     // Note that it is fine to not propagate to fission iframes. Those will
     // become active / inactive as needed as a result of they getting painted /
     // not painted eventually.
-    auto recurse = [aIsActive, aIsInActiveTab](Document& aSubDoc) {
+    auto recurse = [aIsActive](Document& aSubDoc) {
       if (PresShell* presShell = aSubDoc.GetPresShell()) {
-        presShell->SetIsActive(aIsActive, aIsInActiveTab);
+        presShell->SetIsActive(aIsActive);
       }
       return CallState::Continue;
     };

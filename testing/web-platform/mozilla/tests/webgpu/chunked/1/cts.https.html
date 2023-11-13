@@ -22,6 +22,7 @@
 <!doctype html>
 <title>WebGPU CTS</title>
 <meta charset=utf-8>
+<meta name="timeout" content="long"> <!-- TODO: narrow to only where it's needed, see https://bugzilla.mozilla.org/show_bug.cgi?id=1850537 -->
 <link rel=help href='https://gpuweb.github.io/gpuweb/'>
 
 <script src=/resources/testharness.js></script>
@@ -38,6 +39,7 @@
 <meta name=variant content='?q=webgpu:api,operation,adapter,requestAdapterInfo:adapter_info_with_hints:*'>
 <meta name=variant content='?q=webgpu:api,operation,adapter,requestDevice:default:*'>
 <meta name=variant content='?q=webgpu:api,operation,adapter,requestDevice:invalid:*'>
+<meta name=variant content='?q=webgpu:api,operation,adapter,requestDevice:stale:*'>
 <meta name=variant content='?q=webgpu:api,operation,adapter,requestDevice:features,unknown:*'>
 <meta name=variant content='?q=webgpu:api,operation,adapter,requestDevice:features,known:*'>
 <meta name=variant content='?q=webgpu:api,operation,adapter,requestDevice:limits,unknown:*'>
@@ -54,6 +56,5 @@
 <meta name=variant content='?q=webgpu:api,operation,buffers,map:remapped_for_write:*'>
 <meta name=variant content='?q=webgpu:api,operation,buffers,map_ArrayBuffer:postMessage:*'>
 <meta name=variant content='?q=webgpu:api,operation,buffers,map_detach:while_mapped:*'>
-<meta name=variant content='?q=webgpu:api,operation,buffers,map_oom:mapAsync:*'>
 <meta name=variant content='?q=webgpu:api,operation,buffers,map_oom:mappedAtCreation:*'>
 <meta name=variant content='?q=webgpu:api,operation,buffers,threading:serialize:*'>

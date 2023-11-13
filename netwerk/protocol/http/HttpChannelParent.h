@@ -195,6 +195,10 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   virtual mozilla::ipc::IPCResult RecvRemoveCorsPreflightCacheEntry(
       nsIURI* uri, const mozilla::ipc::PrincipalInfo& requestingPrincipal,
       const OriginAttributes& originAttributes) override;
+  virtual mozilla::ipc::IPCResult RecvSetCookies(
+      const nsACString& aBaseDomain, const OriginAttributes& aOriginAttributes,
+      nsIURI* aHost, const bool& aFromHttp,
+      nsTArray<CookieStruct>&& aCookies) override;
   virtual mozilla::ipc::IPCResult RecvBytesRead(const int32_t& aCount) override;
   virtual mozilla::ipc::IPCResult RecvOpenOriginalCacheInputStream() override;
   virtual void ActorDestroy(ActorDestroyReason why) override;
@@ -244,11 +248,14 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   // That is, we may suspend the channel if the ODA-s to child process are not
   // consumed quickly enough. Otherwise, memory explosion could happen.
   bool NeedFlowControl();
+
+  bool IsRedirectDueToAuthRetry(uint32_t redirectFlags);
+
   int32_t mSendWindowSize;
 
   friend class HttpBackgroundChannelParent;
 
-  uint64_t mEarlyHintPreloaderId;
+  uint64_t mEarlyHintPreloaderId{};
 
   RefPtr<HttpBaseChannel> mChannel;
   nsCOMPtr<nsICacheEntry> mCacheEntry;

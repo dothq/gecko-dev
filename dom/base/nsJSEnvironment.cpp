@@ -362,8 +362,10 @@ bool NS_HandleScriptError(nsIScriptGlobalObject* aScriptGlobal,
           nsGlobalWindowInner::Cast(win), u"error"_ns, aErrorEventInit);
       event->SetTrusted(true);
 
-      EventDispatcher::DispatchDOMEvent(win, nullptr, event, presContext,
-                                        aStatus);
+      // MOZ_KnownLive due to bug 1506441
+      EventDispatcher::DispatchDOMEvent(
+          MOZ_KnownLive(nsGlobalWindowInner::Cast(win)), nullptr, event,
+          presContext, aStatus);
       called = true;
     }
     --errorDepth;
@@ -419,8 +421,10 @@ class ScriptErrorEvent : public Runnable {
           nsGlobalWindowInner::Cast(win), u"error"_ns, init);
       event->SetTrusted(true);
 
-      EventDispatcher::DispatchDOMEvent(win, nullptr, event, presContext,
-                                        &status);
+      // MOZ_KnownLive due to bug 1506441
+      EventDispatcher::DispatchDOMEvent(
+          MOZ_KnownLive(nsGlobalWindowInner::Cast(win)), nullptr, event,
+          presContext, &status);
     }
 
     if (status != nsEventStatus_eConsumeNoDefault) {
@@ -1689,11 +1693,35 @@ void nsJSContext::MaybeRunNextCollectorSlice(nsIDocShell* aDocShell,
   }
 
   if (!sScheduler.IsUserActive()) {
-    Maybe<TimeStamp> next = nsRefreshDriver::GetNextTickHint();
-    // Try to not delay the next RefreshDriver tick, so give a reasonable
-    // deadline for collectors.
-    if (next.isSome()) {
-      sScheduler.RunNextCollectorTimer(aReason, next.value());
+    if (sScheduler.InIncrementalGC() || sScheduler.IsCollectingCycles()) {
+      Maybe<TimeStamp> next = nsRefreshDriver::GetNextTickHint();
+      if (next.isSome()) {
+        // Try to not delay the next RefreshDriver tick, so give a reasonable
+        // deadline for collectors.
+        sScheduler.RunNextCollectorTimer(aReason, next.value());
+      }
+    } else {
+      nsCOMPtr<nsIDocShell> shell = aDocShell;
+      NS_DispatchToCurrentThreadQueue(
+          NS_NewRunnableFunction(
+              "nsJSContext::MaybeRunNextCollectorSlice",
+              [shell] {
+                nsIDocShell::BusyFlags busyFlags = nsIDocShell::BUSY_FLAGS_NONE;
+                shell->GetBusyFlags(&busyFlags);
+                if (busyFlags == nsIDocShell::BUSY_FLAGS_NONE) {
+                  return;
+                }
+
+                // In order to improve performance on the next page, run a minor
+                // GC. The 16ms limit ensures it isn't called all the time if
+                // there are for example multiple iframes loading at the same
+                // time.
+                JS::RunNurseryCollection(
+                    CycleCollectedJSRuntime::Get()->Runtime(),
+                    JS::GCReason::PREPARE_FOR_PAGELOAD,
+                    mozilla::TimeDuration::FromMilliseconds(16));
+              }),
+          EventQueuePriority::Idle);
     }
   }
 }
@@ -2083,8 +2111,8 @@ void nsJSContext::EnsureStatics() {
 
   Preferences::RegisterCallbackAndCall(
       SetMemoryPrefChangedCallbackInt,
-      "javascript.options.mem.gc_parallel_marking_threshold_kb",
-      (void*)JSGC_PARALLEL_MARKING_THRESHOLD_KB);
+      "javascript.options.mem.gc_parallel_marking_threshold_mb",
+      (void*)JSGC_PARALLEL_MARKING_THRESHOLD_MB);
 
   Preferences::RegisterCallbackAndCall(
       SetMemoryGCSliceTimePrefChangedCallback,

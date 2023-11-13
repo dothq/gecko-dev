@@ -51,15 +51,11 @@ const EXPECTED_REMOTE_SETTINGS_URLBAR_RESULT = {
     descriptionL10n: { id: "urlbar-result-action-sponsored" },
     helpUrl: QuickSuggest.HELP_URL,
     helpL10n: {
-      id: UrlbarPrefs.get("resultMenu")
-        ? "urlbar-result-menu-learn-more-about-firefox-suggest"
-        : "firefox-suggest-urlbar-learn-more",
+      id: "urlbar-result-menu-learn-more-about-firefox-suggest",
     },
-    isBlockable: UrlbarPrefs.get("quickSuggestBlockingEnabled"),
+    isBlockable: true,
     blockL10n: {
-      id: UrlbarPrefs.get("resultMenu")
-        ? "urlbar-result-menu-dismiss-firefox-suggest"
-        : "firefox-suggest-urlbar-block",
+      id: "urlbar-result-menu-dismiss-firefox-suggest",
     },
     displayUrl: "http://test.com/q=frabbits",
     source: "remote-settings",
@@ -86,15 +82,11 @@ const EXPECTED_NON_SPONSORED_REMOTE_SETTINGS_RESULT = {
     isSponsored: false,
     helpUrl: QuickSuggest.HELP_URL,
     helpL10n: {
-      id: UrlbarPrefs.get("resultMenu")
-        ? "urlbar-result-menu-learn-more-about-firefox-suggest"
-        : "firefox-suggest-urlbar-learn-more",
+      id: "urlbar-result-menu-learn-more-about-firefox-suggest",
     },
-    isBlockable: UrlbarPrefs.get("quickSuggestBlockingEnabled"),
+    isBlockable: true,
     blockL10n: {
-      id: UrlbarPrefs.get("resultMenu")
-        ? "urlbar-result-menu-dismiss-firefox-suggest"
-        : "firefox-suggest-urlbar-block",
+      id: "urlbar-result-menu-dismiss-firefox-suggest",
     },
     displayUrl: "http://test.com/q=frabbits",
     source: "remote-settings",
@@ -128,7 +120,6 @@ add_setup(async function test_setup() {
 });
 
 add_task(async function testExposureCheck() {
-  UrlbarPrefs.set("quicksuggest.remoteSettings.enabled", true);
   UrlbarPrefs.set("exposureResults", "rs_adm_sponsored");
   UrlbarPrefs.set("showExposureResults", true);
 
@@ -147,7 +138,6 @@ add_task(async function testExposureCheck() {
 });
 
 add_task(async function testExposureCheckMultiple() {
-  UrlbarPrefs.set("quicksuggest.remoteSettings.enabled", true);
   UrlbarPrefs.set("exposureResults", "rs_adm_sponsored,rs_adm_nonsponsored");
   UrlbarPrefs.set("showExposureResults", true);
 
@@ -179,7 +169,6 @@ add_task(async function testExposureCheckMultiple() {
 });
 
 add_task(async function exposureDisplayFiltering() {
-  UrlbarPrefs.set("quicksuggest.remoteSettings.enabled", true);
   UrlbarPrefs.set("exposureResults", "rs_adm_sponsored");
   UrlbarPrefs.set("showExposureResults", false);
 

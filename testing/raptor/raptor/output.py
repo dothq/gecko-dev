@@ -114,7 +114,6 @@ class PerftestOutput(object):
         support_data_by_type = {}
 
         for data_set in self.supporting_data:
-
             data_type = data_set["type"]
             LOG.info("summarizing %s data" % data_type)
 
@@ -730,7 +729,15 @@ class PerftestOutput(object):
                 try:
                     # pylint: disable=W1633
                     replicate = round(
-                        float(page_cycle_results[suite][sub]["frameLength"]["average"]),
+                        float(
+                            page_cycle_results[suite][sub]["complexity"]["bootstrap"][
+                                "median"
+                            ]
+                            if "ramp" in test["name"]
+                            else page_cycle_results[suite][sub]["frameLength"][
+                                "average"
+                            ]
+                        ),
                         3,
                     )
                 except TypeError as e:
@@ -1353,7 +1360,6 @@ class RaptorOutput(PerftestOutput):
                     subtests.append(new_subtest)
 
             elif test["type"] == "benchmark":
-
                 if any(
                     [
                         "youtube-playback" in measurement

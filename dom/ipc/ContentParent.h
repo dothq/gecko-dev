@@ -404,6 +404,12 @@ class ContentParent final : public PContentParent,
 
   bool NeedsPermissionsUpdate(const nsACString& aPermissionKey) const;
 
+  // Getter for which permission keys should signal that a content
+  // process needs to know about the change of a permission with this as the
+  // secondary key, like for 3rdPartyFrameStorage^https://secondary.com
+  bool NeedsSecondaryKeyPermissionsUpdate(
+      const nsACString& aPermissionKey) const;
+
   // Manage pending load states which have been sent to this process, and are
   // expected to be used to start a load imminently.
   already_AddRefed<nsDocShellLoadState> TakePendingLoadStateForId(
@@ -504,8 +510,7 @@ class ContentParent final : public PContentParent,
 
   static void BroadcastBlobURLRegistration(
       const nsACString& aURI, BlobImpl* aBlobImpl, nsIPrincipal* aPrincipal,
-      const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey,
-      ContentParent* aIgnoreThisCP = nullptr);
+      const nsCString& aPartitionKey, ContentParent* aIgnoreThisCP = nullptr);
 
   static void BroadcastBlobURLUnregistration(
       const nsACString& aURI, nsIPrincipal* aPrincipal,
@@ -513,7 +518,7 @@ class ContentParent final : public PContentParent,
 
   mozilla::ipc::IPCResult RecvStoreAndBroadcastBlobURLRegistration(
       const nsACString& aURI, const IPCBlob& aBlob, nsIPrincipal* aPrincipal,
-      const Maybe<nsID>& aAgentCluster, const nsCString& aPartitionKey);
+      const nsCString& aPartitionKey);
 
   mozilla::ipc::IPCResult RecvUnstoreAndBroadcastBlobURLUnregistration(
       const nsACString& aURI, nsIPrincipal* aPrincipal);
@@ -555,11 +560,9 @@ class ContentParent final : public PContentParent,
   bool DeallocPURLClassifierParent(PURLClassifierParent* aActor);
 
   // Use the PHangMonitor channel to ask the child to repaint a tab.
-  void PaintTabWhileInterruptingJS(BrowserParent* aBrowserParent,
-                                   const layers::LayersObserverEpoch& aEpoch);
+  void PaintTabWhileInterruptingJS(BrowserParent*);
 
-  void UnloadLayersWhileInterruptingJS(
-      BrowserParent* aBrowserParent, const layers::LayersObserverEpoch& aEpoch);
+  void UnloadLayersWhileInterruptingJS(BrowserParent*);
 
   void CancelContentJSExecutionIfRunning(
       BrowserParent* aBrowserParent,
@@ -671,8 +674,7 @@ class ContentParent final : public PContentParent,
       const nsACString& aBlobURL, nsIPrincipal* pTriggeringPrincipal,
       nsIPrincipal* pLoadingPrincipal,
       const OriginAttributes& aOriginAttributes, uint64_t aInnerWindowId,
-      const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey,
-      BlobURLDataRequestResolver&& aResolver);
+      const nsCString& aPartitionKey, BlobURLDataRequestResolver&& aResolver);
 
  protected:
   bool CheckBrowsingContextEmbedder(CanonicalBrowsingContext* aBC,
@@ -1594,6 +1596,7 @@ class ContentParent final : public PContentParent,
   nsRefPtrHashtable<nsIDHashKey, GetFilesHelper> mGetFilesPendingRequests;
 
   nsTHashSet<nsCString> mActivePermissionKeys;
+  nsTHashSet<nsCString> mActiveSecondaryPermissionKeys;
 
   nsTArray<nsCString> mBlobURLs;
 

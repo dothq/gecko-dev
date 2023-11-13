@@ -3,6 +3,7 @@
 import json
 import os
 import platform
+import re
 import signal
 import subprocess
 import sys
@@ -104,12 +105,12 @@ def check_args(**kwargs):
     require_arg(kwargs, "binary")
 
 
-def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
+def browser_kwargs(logger, test_type, run_info_data, config, subsuite, **kwargs):
     browser_kwargs = {"binary": kwargs["binary"],
                       "webdriver_binary": kwargs["webdriver_binary"],
-                      "webdriver_args": kwargs["webdriver_args"],
+                      "webdriver_args": kwargs["webdriver_args"].copy(),
                       "prefs_root": kwargs["prefs_root"],
-                      "extra_prefs": kwargs["extra_prefs"],
+                      "extra_prefs": kwargs["extra_prefs"].copy(),
                       "test_type": test_type,
                       "debug_info": kwargs["debug_info"],
                       "symbols_path": kwargs["symbols_path"],
@@ -119,7 +120,7 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
                       "e10s": kwargs["gecko_e10s"],
                       "disable_fission": kwargs["disable_fission"],
                       "stackfix_dir": kwargs["stackfix_dir"],
-                      "binary_args": kwargs["binary_args"],
+                      "binary_args": kwargs["binary_args"].copy(),
                       "timeout_multiplier": get_timeout_multiplier(test_type,
                                                                    run_info_data,
                                                                    **kwargs),
@@ -134,6 +135,8 @@ def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
                       "debug_test": kwargs["debug_test"]}
     if test_type == "wdspec" and kwargs["binary"]:
         browser_kwargs["webdriver_args"].extend(["--binary", kwargs["binary"]])
+    browser_kwargs["binary_args"].extend(subsuite.config.get("binary_args", []))
+    browser_kwargs["extra_prefs"].extend(subsuite.config.get("prefs", []))
     return browser_kwargs
 
 
@@ -210,8 +213,7 @@ def run_info_extras(**kwargs):
           "fission": not kwargs.get("disable_fission"),
           "sessionHistoryInParent": (not kwargs.get("disable_fission") or
                                      not get_bool_pref("fission.disableSessionHistoryInParent")),
-          "swgl": get_bool_pref("gfx.webrender.software"),
-          "editorLegacyDirectionMode": get_bool_pref_if_exists("editor.join_split_direction.compatible_with_the_other_browsers") is False}
+          "swgl": get_bool_pref("gfx.webrender.software")}
 
     rv.update(run_info_browser_version(**kwargs))
 
@@ -233,8 +235,17 @@ def run_info_browser_version(**kwargs):
 
 
 def update_properties():
-    return (["os", "debug", "fission", "processor", "swgl", "asan", "tsan", "editorLegacyDirectionMode"],
-            {"os": ["version"], "processor": ["bits"]})
+    return ([
+        "os",
+        "debug",
+        "fission",
+        "processor",
+        "swgl",
+        "asan",
+        "tsan",
+        "subsuite"], {
+        "os": ["version"],
+        "processor": ["bits"]})
 
 
 def log_gecko_crashes(logger, process, test, profile_dir, symbols_path, stackwalk_binary):
@@ -594,6 +605,32 @@ class FirefoxOutputHandler(OutputHandler):
                                            command=" ".join(self.command))
 
 
+class GeckodriverOutputHandler(FirefoxOutputHandler):
+    PORT_RE = re.compile(b".*Listening on [^ :]*:(\d+)")
+
+    def __init__(self, logger, command, symbols_path=None, stackfix_dir=None, asan=False,
+                 leak_report_file=None, init_deadline=None):
+        super().__init__(logger, command, symbols_path=symbols_path, stackfix_dir=stackfix_dir, asan=asan,
+                         leak_report_file=leak_report_file)
+        self.port = None
+        self.init_deadline = None
+
+    def after_process_start(self, pid):
+        super().after_process_start(pid)
+        while self.port is None:
+            time.sleep(0.1)
+            if self.init_deadline is not None and time.time() > self.init_deadline:
+                raise TimeoutError("Failed to get geckodriver port within the timeout")
+
+    def __call__(self, line):
+        if self.port is None:
+            m = self.PORT_RE.match(line)
+            if m is not None:
+                self.port = int(m.groups()[0])
+                self.logger.debug(f"Got geckodriver port {self.port}")
+        super().__call__(line)
+
+
 class ProfileCreator:
     def __init__(self, logger, prefs_root, config, test_type, extra_prefs, e10s,
                  disable_fission, debug_test, browser_channel, binary, certutil_binary,
@@ -898,20 +935,16 @@ class FirefoxWdSpecBrowser(WebDriverBrowser):
                           headless,
                           chaos_mode_flags)
         env["RUST_BACKTRACE"] = "1"
-        # This doesn't work with wdspec tests
-        # In particular tests can create a session without passing in the capabilites
-        # and in those cases we get the default geckodriver profile which doesn't
-        # guarantee zero network access
-        del env["MOZ_DISABLE_NONLOCAL_CONNECTIONS"]
         return env
 
     def create_output_handler(self, cmd):
-        return FirefoxOutputHandler(self.logger,
-                                    cmd,
-                                    stackfix_dir=self.stackfix_dir,
-                                    symbols_path=self.symbols_path,
-                                    asan=self.asan,
-                                    leak_report_file=self.leak_report_file)
+        return GeckodriverOutputHandler(self.logger,
+                                        cmd,
+                                        stackfix_dir=self.stackfix_dir,
+                                        symbols_path=self.symbols_path,
+                                        asan=self.asan,
+                                        leak_report_file=self.leak_report_file,
+                                        init_deadline=self.init_deadline)
 
     def start(self, group_metadata, **kwargs):
         self.leak_report_file = setup_leak_report(self.leak_check, self.profile, self.env)
@@ -955,7 +988,12 @@ class FirefoxWdSpecBrowser(WebDriverBrowser):
                 time.sleep(1)
             else:
                 self.logger.debug("WebDriver session didn't end")
-        super().stop(force=force)
+        try:
+            super().stop(force=force)
+        finally:
+            if self._output_handler is not None:
+                self._output_handler.port = None
+            self._port = None
 
     def cleanup(self):
         super().cleanup()
@@ -969,10 +1007,19 @@ class FirefoxWdSpecBrowser(WebDriverBrowser):
                 "mozleak_allowed": self.leak_check and test.mozleak_allowed,
                 "mozleak_thresholds": self.leak_check and test.mozleak_threshold}
 
+    @property
+    def port(self):
+        # We read the port from geckodriver on startup
+        if self._port is None:
+            if self._output_handler is None or self._output_handler.port is None:
+                raise ValueError("Can't get geckodriver port before it's started")
+            self._port = self._output_handler.port
+        return self._port
+
     def make_command(self):
         return [self.webdriver_binary,
                 "--host", self.host,
-                "--port", str(self.port)] + self.webdriver_args
+                "--port", "0"] + self.webdriver_args
 
     def executor_browser(self):
         cls, args = super().executor_browser()

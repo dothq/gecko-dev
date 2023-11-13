@@ -54,7 +54,8 @@ IonCacheIRCompiler::IonCacheIRCompiler(JSContext* cx, TempAllocator& alloc,
       ic_(ic),
       ionScript_(ionScript),
       savedLiveRegs_(false),
-      localTracingSlots_(0) {
+      localTracingSlots_(0),
+      perfSpewer_(ic->pc()) {
   MOZ_ASSERT(ic_);
   MOZ_ASSERT(ionScript_);
 }
@@ -545,6 +546,21 @@ bool IonCacheIRCompiler::init() {
       allocator.initInputLocation(0, ic->iter(), JSVAL_TYPE_OBJECT);
       break;
     }
+    case CacheKind::OptimizeGetIterator: {
+      auto* ic = ic_->asOptimizeGetIteratorIC();
+      Register output = ic->output();
+
+      available.add(output);
+      available.add(ic->temp());
+
+      liveRegs_.emplace(ic->liveRegs());
+      outputUnchecked_.emplace(
+          TypedOrValueRegister(MIRType::Boolean, AnyRegister(output)));
+
+      MOZ_ASSERT(numInputs == 1);
+      allocator.initInputLocation(0, ic->value());
+      break;
+    }
     case CacheKind::Call:
     case CacheKind::TypeOf:
     case CacheKind::ToBool:
@@ -645,6 +661,7 @@ void IonCacheIRCompiler::assertFloatRegisterAvailable(FloatRegister reg) {
     case CacheKind::ToPropertyKey:
     case CacheKind::OptimizeSpreadCall:
     case CacheKind::CloseIter:
+    case CacheKind::OptimizeGetIterator:
       MOZ_CRASH("No float registers available");
     case CacheKind::SetProp:
     case CacheKind::SetElem:
@@ -2088,7 +2105,7 @@ bool IonCacheIRCompiler::emitGuardFunctionScript(ObjOperandId funId,
 
   Register fun = allocator.useRegister(masm, funId);
   AutoScratchRegister scratch(allocator, masm);
-  BaseScript* expected = baseScriptStubField(expectedOffset);
+  BaseScript* expected = weakBaseScriptStubField(expectedOffset);
 
   FailurePath* failure;
   if (!addFailurePath(&failure)) {

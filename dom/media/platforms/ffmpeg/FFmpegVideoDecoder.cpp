@@ -71,8 +71,6 @@ typedef int VAStatus;
 #endif
 // Use some extra HW frames for potential rendering lags.
 #define EXTRA_HW_FRAMES 6
-// Defines number of delayed frames until we switch back to SW decode.
-#define HW_DECODE_LATE_FRAMES 15
 
 #if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
 #  define CUSTOMIZED_BUFFER_ALLOCATION 1
@@ -99,43 +97,43 @@ using media::TimeUnit;
  */
 static AVPixelFormat ChoosePixelFormat(AVCodecContext* aCodecContext,
                                        const AVPixelFormat* aFormats) {
-  FFMPEG_LOG("Choosing FFmpeg pixel format for video decoding.");
+  FFMPEGV_LOG("Choosing FFmpeg pixel format for video decoding.");
   for (; *aFormats > -1; aFormats++) {
     switch (*aFormats) {
       case AV_PIX_FMT_YUV420P:
-        FFMPEG_LOG("Requesting pixel format YUV420P.");
+        FFMPEGV_LOG("Requesting pixel format YUV420P.");
         return AV_PIX_FMT_YUV420P;
       case AV_PIX_FMT_YUVJ420P:
-        FFMPEG_LOG("Requesting pixel format YUVJ420P.");
+        FFMPEGV_LOG("Requesting pixel format YUVJ420P.");
         return AV_PIX_FMT_YUVJ420P;
       case AV_PIX_FMT_YUV420P10LE:
-        FFMPEG_LOG("Requesting pixel format YUV420P10LE.");
+        FFMPEGV_LOG("Requesting pixel format YUV420P10LE.");
         return AV_PIX_FMT_YUV420P10LE;
       case AV_PIX_FMT_YUV422P:
-        FFMPEG_LOG("Requesting pixel format YUV422P.");
+        FFMPEGV_LOG("Requesting pixel format YUV422P.");
         return AV_PIX_FMT_YUV422P;
       case AV_PIX_FMT_YUV422P10LE:
-        FFMPEG_LOG("Requesting pixel format YUV422P10LE.");
+        FFMPEGV_LOG("Requesting pixel format YUV422P10LE.");
         return AV_PIX_FMT_YUV422P10LE;
       case AV_PIX_FMT_YUV444P:
-        FFMPEG_LOG("Requesting pixel format YUV444P.");
+        FFMPEGV_LOG("Requesting pixel format YUV444P.");
         return AV_PIX_FMT_YUV444P;
       case AV_PIX_FMT_YUV444P10LE:
-        FFMPEG_LOG("Requesting pixel format YUV444P10LE.");
+        FFMPEGV_LOG("Requesting pixel format YUV444P10LE.");
         return AV_PIX_FMT_YUV444P10LE;
 #if LIBAVCODEC_VERSION_MAJOR >= 57
       case AV_PIX_FMT_YUV420P12LE:
-        FFMPEG_LOG("Requesting pixel format YUV420P12LE.");
+        FFMPEGV_LOG("Requesting pixel format YUV420P12LE.");
         return AV_PIX_FMT_YUV420P12LE;
       case AV_PIX_FMT_YUV422P12LE:
-        FFMPEG_LOG("Requesting pixel format YUV422P12LE.");
+        FFMPEGV_LOG("Requesting pixel format YUV422P12LE.");
         return AV_PIX_FMT_YUV422P12LE;
       case AV_PIX_FMT_YUV444P12LE:
-        FFMPEG_LOG("Requesting pixel format YUV444P12LE.");
+        FFMPEGV_LOG("Requesting pixel format YUV444P12LE.");
         return AV_PIX_FMT_YUV444P12LE;
 #endif
       case AV_PIX_FMT_GBRP:
-        FFMPEG_LOG("Requesting pixel format GBRP.");
+        FFMPEGV_LOG("Requesting pixel format GBRP.");
         return AV_PIX_FMT_GBRP;
       default:
         break;
@@ -149,11 +147,11 @@ static AVPixelFormat ChoosePixelFormat(AVCodecContext* aCodecContext,
 #ifdef MOZ_USE_HWDECODE
 static AVPixelFormat ChooseVAAPIPixelFormat(AVCodecContext* aCodecContext,
                                             const AVPixelFormat* aFormats) {
-  FFMPEG_LOG("Choosing FFmpeg pixel format for VA-API video decoding.");
+  FFMPEGV_LOG("Choosing FFmpeg pixel format for VA-API video decoding.");
   for (; *aFormats > -1; aFormats++) {
     switch (*aFormats) {
       case AV_PIX_FMT_VAAPI_VLD:
-        FFMPEG_LOG("Requesting pixel format VAAPI_VLD");
+        FFMPEGV_LOG("Requesting pixel format VAAPI_VLD");
         return AV_PIX_FMT_VAAPI_VLD;
       default:
         break;
@@ -165,11 +163,11 @@ static AVPixelFormat ChooseVAAPIPixelFormat(AVCodecContext* aCodecContext,
 
 static AVPixelFormat ChooseV4L2PixelFormat(AVCodecContext* aCodecContext,
                                            const AVPixelFormat* aFormats) {
-  FFMPEG_LOG("Choosing FFmpeg pixel format for V4L2 video decoding.");
+  FFMPEGV_LOG("Choosing FFmpeg pixel format for V4L2 video decoding.");
   for (; *aFormats > -1; aFormats++) {
     switch (*aFormats) {
       case AV_PIX_FMT_DRM_PRIME:
-        FFMPEG_LOG("Requesting pixel format DRM PRIME");
+        FFMPEGV_LOG("Requesting pixel format DRM PRIME");
         return AV_PIX_FMT_DRM_PRIME;
       default:
         break;
@@ -270,13 +268,19 @@ bool FFmpegVideoDecoder<LIBAV_VER>::CreateVAAPIDeviceContext() {
 }
 
 void FFmpegVideoDecoder<LIBAV_VER>::AdjustHWDecodeLogging() {
-  if (MOZ_LOG_TEST(sPDMLog, LogLevel::Debug)) {
+  if (!getenv("MOZ_AV_LOG_LEVEL") &&
+      MOZ_LOG_TEST(sFFmpegVideoLog, LogLevel::Debug)) {
     mLib->av_log_set_level(AV_LOG_DEBUG);
-    setenv("LIBVA_MESSAGING_LEVEL", "1", false);
-  } else if (MOZ_LOG_TEST(sPDMLog, LogLevel::Info)) {
-    setenv("LIBVA_MESSAGING_LEVEL", "2", false);
-  } else {
-    setenv("LIBVA_MESSAGING_LEVEL", "0", false);
+  }
+
+  if (!getenv("LIBVA_MESSAGING_LEVEL")) {
+    if (MOZ_LOG_TEST(sFFmpegVideoLog, LogLevel::Debug)) {
+      setenv("LIBVA_MESSAGING_LEVEL", "1", false);
+    } else if (MOZ_LOG_TEST(sFFmpegVideoLog, LogLevel::Info)) {
+      setenv("LIBVA_MESSAGING_LEVEL", "2", false);
+    } else {
+      setenv("LIBVA_MESSAGING_LEVEL", "0", false);
+    }
   }
 }
 
@@ -443,6 +447,7 @@ MediaResult FFmpegVideoDecoder<LIBAV_VER>::InitV4L2Decoder() {
 }
 #endif
 
+#if LIBAVCODEC_VERSION_MAJOR < 58
 FFmpegVideoDecoder<LIBAV_VER>::PtsCorrectionContext::PtsCorrectionContext()
     : mNumFaultyPts(0),
       mNumFaultyDts(0),
@@ -476,6 +481,7 @@ void FFmpegVideoDecoder<LIBAV_VER>::PtsCorrectionContext::Reset() {
   mLastPts = INT64_MIN;
   mLastDts = INT64_MIN;
 }
+#endif
 
 #ifdef MOZ_USE_HWDECODE
 void FFmpegVideoDecoder<LIBAV_VER>::InitHWDecodingPrefs() {
@@ -538,12 +544,6 @@ FFmpegVideoDecoder<LIBAV_VER>::FFmpegVideoDecoder(
       mImageAllocator(aAllocator),
       mImageContainer(aImageContainer),
       mInfo(aConfig),
-      mDecodedFrames(0),
-#if LIBAVCODEC_VERSION_MAJOR >= 58
-      mDecodedFramesLate(0),
-      mMissedDecodeInAverangeTime(0),
-#endif
-      mAverangeDecodeTime(0),
       mLowLatency(aLowLatency),
       mTrackingId(std::move(aTrackingId)) {
   FFMPEG_LOG("FFmpegVideoDecoder::FFmpegVideoDecoder MIME %s Codec ID %d",
@@ -975,7 +975,7 @@ void FFmpegVideoDecoder<LIBAV_VER>::InitHWCodecContext(bool aUsingV4L2) {
 }
 #endif
 
-static int64_t GetFramePts(AVFrame* aFrame) {
+static int64_t GetFramePts(const AVFrame* aFrame) {
 #if LIBAVCODEC_VERSION_MAJOR > 57
   return aFrame->pts;
 #else
@@ -983,38 +983,69 @@ static int64_t GetFramePts(AVFrame* aFrame) {
 #endif
 }
 
-void FFmpegVideoDecoder<LIBAV_VER>::UpdateDecodeTimes(TimeStamp aDecodeStart) {
-  mDecodedFrames++;
-  float decodeTime = (TimeStamp::Now() - aDecodeStart).ToMilliseconds();
-  mAverangeDecodeTime =
-      (mAverangeDecodeTime * (mDecodedFrames - 1) + decodeTime) /
-      mDecodedFrames;
-  FFMPEG_LOG(
-      "Frame decode finished, time %.2f ms averange decode time %.2f ms "
-      "decoded %d frames\n",
-      decodeTime, mAverangeDecodeTime, mDecodedFrames);
 #if LIBAVCODEC_VERSION_MAJOR >= 58
-  if (mFrame->pkt_duration > 0) {
-    // Switch frame duration to ms
-    float frameDuration = mFrame->pkt_duration / 1000.0f;
-    if (frameDuration < decodeTime) {
-      PROFILER_MARKER_TEXT("FFmpegVideoDecoder::DoDecode", MEDIA_PLAYBACK, {},
-                           "frame decode takes too long");
-      mDecodedFramesLate++;
-      if (frameDuration < mAverangeDecodeTime) {
-        mMissedDecodeInAverangeTime++;
-      }
-      FFMPEG_LOG(
-          "  slow decode: failed to decode in time, frame duration %.2f ms, "
-          "decode time %.2f\n",
-          frameDuration, decodeTime);
-      FFMPEG_LOG("  frames: all decoded %d late decoded %d over averange %d\n",
-                 mDecodedFrames, mDecodedFramesLate,
-                 mMissedDecodeInAverangeTime);
+void FFmpegVideoDecoder<LIBAV_VER>::DecodeStats::DecodeStart() {
+  mDecodeStart = TimeStamp::Now();
+}
+
+bool FFmpegVideoDecoder<LIBAV_VER>::DecodeStats::IsDecodingSlow() const {
+  return mDecodedFramesLate > mMaxLateDecodedFrames;
+}
+
+void FFmpegVideoDecoder<LIBAV_VER>::DecodeStats::UpdateDecodeTimes(
+    const AVFrame* aFrame) {
+  TimeStamp now = TimeStamp::Now();
+  float decodeTime = (now - mDecodeStart).ToMilliseconds();
+  mDecodeStart = now;
+
+  if (aFrame->pkt_duration <= 0) {
+    FFMPEGV_LOG("Incorrect frame duration, skipping decode stats.");
+    return;
+  }
+
+  float frameDuration = aFrame->pkt_duration / 1000.0f;
+
+  mDecodedFrames++;
+  mAverageFrameDuration =
+      (mAverageFrameDuration * (mDecodedFrames - 1) + frameDuration) /
+      mDecodedFrames;
+  mAverageFrameDecodeTime =
+      (mAverageFrameDecodeTime * (mDecodedFrames - 1) + decodeTime) /
+      mDecodedFrames;
+
+  FFMPEGV_LOG(
+      "Frame decode takes %.2f ms average decode time %.2f ms frame duration "
+      "%.2f average frame duration %.2f decoded %d frames\n",
+      decodeTime, mAverageFrameDecodeTime, frameDuration, mAverageFrameDuration,
+      mDecodedFrames);
+
+  // Frame duration and frame decode times may vary and may not
+  // neccessarily lead to video playback failure.
+  //
+  // Checks frame decode time and recent frame duration and also
+  // frame decode time and average frame duration (video fps).
+  //
+  // Log a problem only if both indicators fails.
+  if (decodeTime > frameDuration && decodeTime > mAverageFrameDuration) {
+    PROFILER_MARKER_TEXT("FFmpegVideoDecoder::DoDecode", MEDIA_PLAYBACK, {},
+                         "frame decode takes too long");
+    mDecodedFramesLate++;
+    mLastDelayedFrameNum = mDecodedFrames;
+    FFMPEGV_LOG("  slow decode: failed to decode in time (decoded late %d)",
+                mDecodedFramesLate);
+  } else if (mLastDelayedFrameNum) {
+    // Reset mDecodedFramesLate in case of correct decode during
+    // mDelayedFrameReset period.
+    float correctPlaybackTime =
+        (mDecodedFrames - mLastDelayedFrameNum) * mAverageFrameDuration;
+    if (correctPlaybackTime > mDelayedFrameReset) {
+      FFMPEGV_LOG("  mLastFramePts reset due to seamless decode period");
+      mDecodedFramesLate = 0;
+      mLastDelayedFrameNum = 0;
     }
   }
-#endif
 }
+#endif
 
 MediaResult FFmpegVideoDecoder<LIBAV_VER>::DoDecode(
     MediaRawData* aSample, uint8_t* aData, int aSize, bool* aGotFrame,
@@ -1023,7 +1054,9 @@ MediaResult FFmpegVideoDecoder<LIBAV_VER>::DoDecode(
   AVPacket packet;
   mLib->av_init_packet(&packet);
 
-  TimeStamp decodeStart = TimeStamp::Now();
+#if LIBAVCODEC_VERSION_MAJOR >= 58
+  mDecodeStats.DecodeStart();
+#endif
 
   packet.data = aData;
   packet.size = aSize;
@@ -1113,13 +1146,12 @@ MediaResult FFmpegVideoDecoder<LIBAV_VER>::DoDecode(
           RESULT_DETAIL("avcodec_receive_frame error: %s", errStr));
     }
 
-    UpdateDecodeTimes(decodeStart);
-    decodeStart = TimeStamp::Now();
+    mDecodeStats.UpdateDecodeTimes(mFrame);
 
     MediaResult rv;
 #  ifdef MOZ_USE_HWDECODE
     if (IsHardwareAccelerated()) {
-      if (mMissedDecodeInAverangeTime > HW_DECODE_LATE_FRAMES) {
+      if (mDecodeStats.IsDecodingSlow()) {
         PROFILER_MARKER_TEXT("FFmpegVideoDecoder::DoDecode", MEDIA_PLAYBACK, {},
                              "Fallback to SW decode");
         FFMPEG_LOG("  HW decoding is slow, switch back to SW decode");
@@ -1231,8 +1263,6 @@ MediaResult FFmpegVideoDecoder<LIBAV_VER>::DoDecode(
     }
     return NS_OK;
   }
-
-  UpdateDecodeTimes(decodeStart);
 
   // If we've decoded a frame then we need to output it
   int64_t pts =
@@ -1570,8 +1600,10 @@ RefPtr<MediaDataDecoder::FlushPromise>
 FFmpegVideoDecoder<LIBAV_VER>::ProcessFlush() {
   FFMPEG_LOG("ProcessFlush()");
   MOZ_ASSERT(mTaskQueue->IsOnCurrentThread());
+#if LIBAVCODEC_VERSION_MAJOR < 58
   mPtsContext.Reset();
   mDurationMap.Clear();
+#endif
   mPerformanceRecorder.Record(std::numeric_limits<int64_t>::max());
   return FFmpegDataDecoder::ProcessFlush();
 }

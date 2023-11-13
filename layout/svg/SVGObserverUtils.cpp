@@ -250,7 +250,6 @@ nsIFrame* SVGRenderingObserver::GetAndObserveReferencedFrame(
 }
 
 void SVGRenderingObserver::OnNonDOMMutationRenderingChange() {
-  mInObserverSet = false;
   OnRenderingChange();
 }
 
@@ -959,8 +958,10 @@ void SVGFilterObserverListForCanvasContext::OnRenderingChange() {
   // If this filter is not at the top of the state stack, we'll refresh the
   // wrong filter, but that's ok, because we'll refresh the right filter
   // when we pop the state stack in CanvasRenderingContext2D::Restore().
+  //
+  // We don't need to flush, we're called by layout.
   RefPtr<CanvasRenderingContext2D> kungFuDeathGrip(mContext);
-  kungFuDeathGrip->UpdateFilter();
+  kungFuDeathGrip->UpdateFilter(/* aFlushIfNeeded = */ false);
 }
 
 class SVGMaskObserverList final : public nsISupports {
@@ -1094,10 +1095,7 @@ class SVGRenderingObserverSet {
     MOZ_COUNT_CTOR(SVGRenderingObserverSet);
   }
 
-  ~SVGRenderingObserverSet() {
-    InvalidateAll();
-    MOZ_COUNT_DTOR(SVGRenderingObserverSet);
-  }
+  ~SVGRenderingObserverSet() { MOZ_COUNT_DTOR(SVGRenderingObserverSet); }
 
   void Add(SVGRenderingObserver* aObserver) { mObservers.Insert(aObserver); }
   void Remove(SVGRenderingObserver* aObserver) { mObservers.Remove(aObserver); }
@@ -1137,6 +1135,13 @@ void SVGRenderingObserverSet::InvalidateAll() {
 
   const auto observers = std::move(mObservers);
 
+  // We've moved all the observers from mObservers, effectively
+  // evicting them so we need to notify all observers of eviction
+  // before we process any rendering changes. In short, don't
+  // try to merge these loops.
+  for (const auto& observer : observers) {
+    observer->NotifyEvictedFromRenderingObserverSet();
+  }
   for (const auto& observer : observers) {
     observer->OnNonDOMMutationRenderingChange();
   }
@@ -1155,6 +1160,7 @@ void SVGRenderingObserverSet::InvalidateAllForReflow() {
     if (obs->ObservesReflow()) {
       observers.AppendElement(obs);
       mObservers.Remove(it);
+      obs->NotifyEvictedFromRenderingObserverSet();
     }
   }
 
@@ -1317,7 +1323,7 @@ static SVGFilterObserverListForCSSProp* GetOrCreateFilterObserverListForCSS(
 }
 
 static SVGObserverUtils::ReferenceState GetAndObserveFilters(
-    SVGFilterObserverListForCSSProp* aObserverList,
+    SVGFilterObserverList* aObserverList,
     nsTArray<SVGFilterFrame*>* aFilterFrames) {
   if (!aObserverList) {
     return SVGObserverUtils::eHasNoRefs;
@@ -1350,6 +1356,13 @@ SVGObserverUtils::ReferenceState SVGObserverUtils::GetAndObserveFilters(
   SVGFilterObserverListForCSSProp* observerList =
       GetOrCreateFilterObserverListForCSS(aFilteredFrame);
   return mozilla::GetAndObserveFilters(observerList, aFilterFrames);
+}
+
+SVGObserverUtils::ReferenceState SVGObserverUtils::GetAndObserveFilters(
+    nsISupports* aObserverList, nsTArray<SVGFilterFrame*>* aFilterFrames) {
+  return mozilla::GetAndObserveFilters(
+      static_cast<SVGFilterObserverListForCanvasContext*>(aObserverList),
+      aFilterFrames);
 }
 
 SVGObserverUtils::ReferenceState SVGObserverUtils::GetFiltersIfObserving(
@@ -1607,6 +1620,9 @@ nsIFrame* SVGObserverUtils::GetAndObserveTemplate(
     nsCOMPtr<nsIURI> targetURI;
     nsContentUtils::NewURIWithDocumentCharset(
         getter_AddRefs(targetURI), href, content->GetUncomposedDoc(), baseURI);
+    if (!targetURI) {
+      return nullptr;
+    }
 
     // There's no clear refererer policy spec about non-CSS SVG resource
     // references.  Bug 1415044 to investigate which referrer we should use.
@@ -1745,7 +1761,8 @@ void SVGObserverUtils::AddRenderingObserver(Element* aElement,
   if (!observers) {
     observers = new SVGRenderingObserverSet();
     aElement->SetProperty(nsGkAtoms::renderingobserverset, observers,
-                          nsINode::DeleteProperty<SVGRenderingObserverSet>);
+                          nsINode::DeleteProperty<SVGRenderingObserverSet>,
+                          /* aTransfer = */ true);
   }
   aElement->SetHasRenderingObservers(true);
   observers->Add(aObserver);

@@ -90,7 +90,6 @@ nsFormFillController::nsFormFillController()
       mTimeout(50),
       mMinResultsForPopup(1),
       mMaxRows(0),
-      mLastRightClickTimeStamp(TimeStamp()),
       mDisableAutoComplete(false),
       mCompleteDefaultIndex(false),
       mCompleteSelectedIndex(false),
@@ -153,7 +152,7 @@ void nsFormFillController::AttributeChanged(mozilla::dom::Element* aElement,
         mozilla::NewRunnableMethod<RefPtr<HTMLInputElement>>(
             "nsFormFillController::MaybeStartControllingInput", this,
             &nsFormFillController::MaybeStartControllingInput, focusedInput);
-    aElement->OwnerDoc()->Dispatch(TaskCategory::Other, event.forget());
+    aElement->OwnerDoc()->Dispatch(event.forget());
   }
 
   if (mListNode && mListNode->Contains(aElement)) {
@@ -856,7 +855,7 @@ nsFormFillController::HandleEvent(Event* aEvent) {
 
   nsIGlobalObject* global = target->GetOwnerGlobal();
   NS_ENSURE_STATE(global);
-  nsPIDOMWindowInner* inner = global->AsInnerWindow();
+  nsPIDOMWindowInner* inner = global->GetAsInnerWindow();
   NS_ENSURE_STATE(inner);
 
   if (!inner->GetBrowsingContext()->IsContent()) {

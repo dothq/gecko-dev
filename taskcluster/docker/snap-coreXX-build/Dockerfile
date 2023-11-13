@@ -14,6 +14,8 @@ RUN apt-get update && \
     apt-get install -y \
         build-essential \
         curl \
+        libavcodec58 \
+        libavutil56 \
         jq \
         patch \
         patchelf \
@@ -37,7 +39,7 @@ RUN install-snap.sh core20
 # Snapcraft snap depends on core20 for python3.8 even when we target core22
 RUN install-snap.sh snapcraft
 
-RUN if [ "$SNAP_BASE" != "core20" ]; then install-snap.sh core22; fi
+RUN install-snap.sh core22
 
 ARG SNAP_LIST
 

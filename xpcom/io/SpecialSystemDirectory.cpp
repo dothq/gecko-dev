@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "SpecialSystemDirectory.h"
+#include "mozilla/Try.h"
 #include "nsString.h"
 #include "nsDependentString.h"
 #include "nsIXULAppInfo.h"
@@ -92,25 +93,6 @@ static nsresult GetWindowsFolder(int aFolder, nsIFile** aFile) {
 
   return NS_NewLocalFile(nsDependentString(path, len), true, aFile);
 }
-
-#  if WINVER < 0x0601
-__inline HRESULT SHLoadLibraryFromKnownFolder(REFKNOWNFOLDERID aFolderId,
-                                              DWORD aMode, REFIID riid,
-                                              void** ppv) {
-  *ppv = nullptr;
-  IShellLibrary* plib;
-  HRESULT hr = CoCreateInstance(CLSID_ShellLibrary, nullptr,
-                                CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&plib));
-  if (SUCCEEDED(hr)) {
-    hr = plib->LoadLibraryFromKnownFolder(aFolderId, aMode);
-    if (SUCCEEDED(hr)) {
-      hr = plib->QueryInterface(riid, ppv);
-    }
-    plib->Release();
-  }
-  return hr;
-}
-#  endif
 
 #  if defined(MOZ_THUNDERBIRD) || defined(MOZ_SUITE)
 /*

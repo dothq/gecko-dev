@@ -898,7 +898,9 @@ NS_IMETHODIMP
 nsBaseChannel::RetargetDeliveryTo(nsISerialEventTarget* aEventTarget) {
   MOZ_ASSERT(NS_IsMainThread());
 
-  NS_ENSURE_TRUE(mRequest, NS_ERROR_NOT_INITIALIZED);
+  if (!mRequest) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
 
   nsCOMPtr<nsIThreadRetargetableRequest> req;
   if (mAllowThreadRetargeting) {
@@ -946,8 +948,7 @@ NS_IMETHODIMP nsBaseChannel::GetCanceled(bool* aCanceled) {
 }
 
 void nsBaseChannel::SetupNeckoTarget() {
-  mNeckoTarget =
-      nsContentUtils::GetEventTargetByLoadInfo(mLoadInfo, TaskCategory::Other);
+  mNeckoTarget = GetMainThreadSerialEventTarget();
 }
 
 nsBaseChannel::ContentRange::ContentRange(const nsACString& aRangeHeader,

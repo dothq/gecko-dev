@@ -14,7 +14,6 @@ use crate::properties::{CSSWideKeyword, PropertyDeclaration, NonCustomPropertyIt
 use crate::properties::longhands;
 use crate::properties::longhands::visibility::computed_value::T as Visibility;
 use crate::properties::LonghandId;
-use servo_arc::Arc;
 use std::ptr;
 use std::mem;
 use fxhash::FxHashMap;
@@ -198,6 +197,11 @@ impl AnimationValue {
         id
     }
 
+    /// Returns whether this value is interpolable with another one.
+    pub fn interpolable_with(&self, other: &Self) -> bool {
+        self.animate(other, Procedure::Interpolate { progress: 0.5 }).is_ok()
+    }
+
     /// "Uncompute" this animation value in order to be used inside the CSS
     /// cascade.
     pub fn uncompute(&self) -> PropertyDeclaration {
@@ -245,7 +249,7 @@ impl AnimationValue {
     pub fn from_declaration(
         decl: &PropertyDeclaration,
         context: &mut Context,
-        extra_custom_properties: Option<<&Arc<crate::custom_properties::CustomPropertiesMap>>,
+        extra_custom_properties: Option< &crate::custom_properties::ComputedCustomProperties>,
         initial: &ComputedValues,
     ) -> Option<Self> {
         use super::PropertyDeclarationVariantRepr;
@@ -365,15 +369,18 @@ impl AnimationValue {
             PropertyDeclaration::WithVariables(ref declaration) => {
                 let mut cache = Default::default();
                 let substituted = {
-                    let custom_properties =
-                        extra_custom_properties.or_else(|| context.style().custom_properties());
+                    let custom_properties = extra_custom_properties.unwrap_or(&context.style().custom_properties());
 
+                    debug_assert!(
+                        context.builder.stylist.is_some(),
+                        "Need a Stylist to substitute variables!"
+                    );
                     declaration.value.substitute_variables(
                         declaration.id,
                         context.builder.writing_mode,
                         custom_properties,
                         context.quirks_mode,
-                        context.device(),
+                        context.builder.stylist.unwrap(),
                         &mut cache,
                     )
                 };

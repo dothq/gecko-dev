@@ -1,40 +1,41 @@
-From: Andreas Pehrson <apehrson@mozilla.com>
-Date: Tue, 16 May 2023 06:38:00 +0000
-Subject: Bug 1832804 - Revert changeset b0339fd77c82. r=webrtc-reviewers,mjf
+From: stransky <stransky@redhat.com>
+Date: Tue, 29 Aug 2023 12:43:00 +0000
+Subject: Bug 1821629 [DMABuf] Don't use DMABuf if it's disabled by Firefox gfx
+ config r=ng,webrtc-reviewers
 
-This bit is now restored to original libwebrtc M111 code.
-
-Differential Revision: https://phabricator.services.mozilla.com/D178006
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/47b1b27c8f75293c0861ca6197d438076ca9e693
+Differential Revision: https://phabricator.services.mozilla.com/D172224
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/158a888cad8869a2f0026fa7cfaaa13ecbfcf2ed
 ---
- modules/rtp_rtcp/source/packet_sequencer.cc | 14 ++------------
- 1 file changed, 2 insertions(+), 12 deletions(-)
+ .../linux/wayland/shared_screencast_stream.cc            | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
 
-diff --git a/modules/rtp_rtcp/source/packet_sequencer.cc b/modules/rtp_rtcp/source/packet_sequencer.cc
-index acc2e87aa3..55edd768a8 100644
---- a/modules/rtp_rtcp/source/packet_sequencer.cc
-+++ b/modules/rtp_rtcp/source/packet_sequencer.cc
-@@ -118,18 +118,8 @@ void PacketSequencer::PopulatePaddingFields(RtpPacketToSend& packet) {
-     return;
-   }
+diff --git a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
+index 0c26e7a7d5..22aa355e44 100644
+--- a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
++++ b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
+@@ -28,6 +28,13 @@
+ #include "rtc_base/synchronization/mutex.h"
+ #include "rtc_base/time_utils.h"
  
--  if (last_timestamp_time_ms_ > 0) {
--    RTC_DCHECK_GT(last_rtp_timestamp_, 0);
--    RTC_DCHECK_GT(last_capture_time_ms_, 0);
--    packet.SetTimestamp(last_rtp_timestamp_);
--    packet.set_capture_time(Timestamp::Millis(last_capture_time_ms_));
--  } else {
--    // No media packet has been sent yet so timestamps are not known. Set them
--    // now as they will be needed when serializing the packet later on.
--    auto now = clock_->CurrentTime();
--    packet.SetTimestamp(now.ms() * kTimestampTicksPerMs);
--    packet.set_capture_time(now);
--  }
-+  packet.SetTimestamp(last_rtp_timestamp_);
-+  packet.set_capture_time(Timestamp::Millis(last_capture_time_ms_));
++// Wrapper for gfxVars::UseDMABuf() as we can't include gfxVars here.
++// We don't want to use dmabuf of known broken systems.
++// See FEATURE_DMABUF for details.
++namespace mozilla::gfx {
++bool IsDMABufEnabled();
++}
++
+ namespace webrtc {
  
-   // Only change the timestamp of padding packets sent over RTX.
-   // Padding only packets over RTP has to be sent as part of a media
+ const int kBytesPerPixel = 4;
+@@ -294,7 +301,7 @@ void SharedScreenCastStreamPrivate::OnStreamParamChanged(
+   that->modifier_ =
+       has_modifier ? that->spa_video_format_.modifier : DRM_FORMAT_MOD_INVALID;
+   std::vector<const spa_pod*> params;
+-  const int buffer_types = has_modifier
++  const int buffer_types = has_modifier && mozilla::gfx::IsDMABufEnabled()
+                                ? (1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd)
+                                : (1 << SPA_DATA_MemFd);
+ 
 -- 
-2.34.1
+2.37.3
 

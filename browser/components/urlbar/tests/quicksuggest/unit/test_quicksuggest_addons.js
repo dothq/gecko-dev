@@ -11,6 +11,9 @@ ChromeUtils.defineESModuleGetters(this, {
   ExtensionTestCommon: "resource://testing-common/ExtensionTestCommon.sys.mjs",
 });
 
+// TODO: Firefox no longer uses `rating` and `number_of_ratings` but they are
+// still present in Merino and RS suggestions, so they are included here for
+// greater accuracy. We should remove them from Merino, RS, and tests.
 const MERINO_SUGGESTIONS = [
   {
     provider: "amo",
@@ -102,7 +105,7 @@ add_task(async function telemetryType() {
 });
 
 // When quick suggest prefs are disabled, addon suggestions should be disabled.
-add_task(async function quickSuggestPrefsDisabled() {
+add_tasks_with_rust(async function quickSuggestPrefsDisabled() {
   let prefs = ["quicksuggest.enabled", "suggest.quicksuggest.nonsponsored"];
   for (let pref of prefs) {
     // Before disabling the pref, first make sure the suggestion is added.
@@ -115,7 +118,6 @@ add_task(async function quickSuggestPrefsDisabled() {
         makeExpectedResult({
           suggestion: MERINO_SUGGESTIONS[0],
           source: "merino",
-          isTopPick: true,
         }),
       ],
     });
@@ -137,7 +139,7 @@ add_task(async function quickSuggestPrefsDisabled() {
 
 // When addon suggestions specific preference is disabled, addon suggestions
 // should not be added.
-add_task(async function addonSuggestionsSpecificPrefDisabled() {
+add_tasks_with_rust(async function addonSuggestionsSpecificPrefDisabled() {
   const prefs = ["suggest.addons", "addons.featureGate"];
   for (const pref of prefs) {
     // First make sure the suggestion is added.
@@ -150,7 +152,6 @@ add_task(async function addonSuggestionsSpecificPrefDisabled() {
         makeExpectedResult({
           suggestion: MERINO_SUGGESTIONS[0],
           source: "merino",
-          isTopPick: true,
         }),
       ],
     });
@@ -173,7 +174,7 @@ add_task(async function addonSuggestionsSpecificPrefDisabled() {
 
 // Check wheather the addon suggestions will be shown by the setup of Nimbus
 // variable.
-add_task(async function nimbus() {
+add_tasks_with_rust(async function nimbus() {
   // Disable the fature gate.
   UrlbarPrefs.set("addons.featureGate", false);
   await check_results({
@@ -198,7 +199,6 @@ add_task(async function nimbus() {
       makeExpectedResult({
         suggestion: MERINO_SUGGESTIONS[0],
         source: "merino",
-        isTopPick: true,
       }),
     ],
   });
@@ -226,7 +226,7 @@ add_task(async function nimbus() {
   await waitForRemoteSettingsSuggestions();
 });
 
-add_task(async function hideIfAlreadyInstalled() {
+add_tasks_with_rust(async function hideIfAlreadyInstalled() {
   // Show suggestion.
   await check_results({
     context: createContext("test", {
@@ -237,7 +237,6 @@ add_task(async function hideIfAlreadyInstalled() {
       makeExpectedResult({
         suggestion: MERINO_SUGGESTIONS[0],
         source: "merino",
-        isTopPick: true,
       }),
     ],
   });
@@ -265,7 +264,7 @@ add_task(async function hideIfAlreadyInstalled() {
   xpi.remove(false);
 });
 
-add_task(async function remoteSettings() {
+add_tasks_with_rust(async function remoteSettings() {
   const testCases = [
     {
       input: "f",
@@ -288,7 +287,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
     },
     {
@@ -296,7 +294,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
     },
     {
@@ -312,55 +309,54 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "two ",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "two w",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "two wo",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "two wor",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "two word",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "two words",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
     },
     {
@@ -368,39 +364,38 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "a ",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "a b",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "a b ",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
+      expectedRust: null,
     },
     {
       input: "a b c",
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
         source: "remote-settings",
-        isTopPick: true,
       }),
     },
     {
@@ -408,7 +403,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[1],
         source: "remote-settings",
-        isTopPick: false,
       }),
     },
     {
@@ -416,7 +410,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[1],
         source: "remote-settings",
-        isTopPick: false,
       }),
     },
     {
@@ -424,7 +417,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[2],
         source: "remote-settings",
-        isTopPick: true,
       }),
     },
     {
@@ -432,7 +424,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[2],
         source: "remote-settings",
-        isTopPick: true,
       }),
     },
     {
@@ -440,7 +431,6 @@ add_task(async function remoteSettings() {
       expected: makeExpectedResult({
         suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[3],
         source: "remote-settings",
-        isTopPick: true,
         setUtmParams: false,
       }),
     },
@@ -449,7 +439,13 @@ add_task(async function remoteSettings() {
   // Disable Merino so we trigger only remote settings suggestions.
   UrlbarPrefs.set("quicksuggest.dataCollection.enabled", false);
 
-  for (const { input, expected } of testCases) {
+  for (let { input, expected, expectedRust } of testCases) {
+    // TODO: The Rust implementation of addon suggestions is currently different
+    // from desktop: For Rust, the full keyword must be typed. `expectedRust`
+    // should be removed when the Rust implementation is fixed.
+    if (UrlbarPrefs.get("quicksuggest.rustEnabled")) {
+      expected = expectedRust === undefined ? expected : expectedRust;
+    }
     await check_results({
       context: createContext(input, {
         providers: [UrlbarProviderQuickSuggest.name],
@@ -477,7 +473,6 @@ add_task(async function merinoIsTopPick() {
       makeExpectedResult({
         suggestion,
         source: "merino",
-        isTopPick: false,
       }),
     ],
   });
@@ -494,7 +489,6 @@ add_task(async function merinoIsTopPick() {
       makeExpectedResult({
         suggestion,
         source: "merino",
-        isTopPick: true,
       }),
     ],
   });
@@ -509,29 +503,30 @@ add_task(async function showLessFrequently() {
     expectedResult: makeExpectedResult({
       suggestion: REMOTE_SETTINGS_RESULTS[0].attachment[0],
       source: "remote-settings",
-      isTopPick: true,
     }),
     keyword: "two words",
   });
 });
 
-function makeExpectedResult({
-  suggestion,
-  source,
-  isTopPick,
-  setUtmParams = true,
-}) {
+function makeExpectedResult({ suggestion, source, setUtmParams = true }) {
+  if (
+    source == "remote-settings" &&
+    UrlbarPrefs.get("quicksuggest.rustEnabled")
+  ) {
+    source = "rust";
+  }
+
   let provider;
-  let rating;
-  let number_of_ratings;
-  if (source === "remote-settings") {
-    provider = "AddonSuggestions";
-    rating = suggestion.rating;
-    number_of_ratings = suggestion.number_of_ratings;
-  } else {
-    provider = "amo";
-    rating = suggestion.custom_details.amo.rating;
-    number_of_ratings = suggestion.custom_details.amo.number_of_ratings;
+  switch (source) {
+    case "remote-settings":
+      provider = "AddonSuggestions";
+      break;
+    case "rust":
+      provider = "Amo";
+      break;
+    case "merino":
+      provider = "amo";
+      break;
   }
 
   let url;
@@ -545,23 +540,21 @@ function makeExpectedResult({
   }
 
   return {
-    isBestMatch: isTopPick,
-    suggestedIndex: isTopPick ? 1 : -1,
-    type: UrlbarUtils.RESULT_TYPE.DYNAMIC,
+    isBestMatch: true,
+    suggestedIndex: 1,
+    type: UrlbarUtils.RESULT_TYPE.URL,
     source: UrlbarUtils.RESULT_SOURCE.SEARCH,
     heuristic: false,
     payload: {
       telemetryType: "amo",
-      dynamicType: "addons",
       title: suggestion.title,
       url,
       originalUrl: suggestion.url,
       displayUrl: url.replace(/^https:\/\//, ""),
+      shouldShowUrl: true,
       icon: suggestion.icon,
       description: suggestion.description,
-      rating: Number(rating),
-      reviews: Number(number_of_ratings),
-      shouldNavigate: true,
+      bottomTextL10n: { id: "firefox-suggest-addons-recommended" },
       helpUrl: QuickSuggest.HELP_URL,
       source,
       provider,

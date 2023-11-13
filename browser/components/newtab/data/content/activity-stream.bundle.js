@@ -211,6 +211,7 @@ for (const type of [
   "SNIPPETS_PREVIEW_MODE",
   "SNIPPETS_RESET",
   "SNIPPET_BLOCKED",
+  "SOV_UPDATED",
   "SUBMIT_EMAIL",
   "SUBMIT_SIGNIN",
   "SYSTEM_TICK",
@@ -816,12 +817,6 @@ function relativeTime(timestamp) {
   return new Date(timestamp).toLocaleString();
 }
 
-const LAYOUT_VARIANTS = {
-  basic: "Basic default layout (on by default in nightly)",
-  staging_spocs: "A layout with all spocs shown",
-  "dev-test-all": "A little bit of everything. Good layout for testing all components",
-  "dev-test-feeds": "Stress testing for slow feeds"
-};
 class ToggleStoryButton extends (external_React_default()).PureComponent {
   constructor(props) {
     super(props);
@@ -921,7 +916,6 @@ class DiscoveryStreamAdmin extends (external_React_default()).PureComponent {
     this.idleDaily = this.idleDaily.bind(this);
     this.systemTick = this.systemTick.bind(this);
     this.syncRemoteSettings = this.syncRemoteSettings.bind(this);
-    this.changeEndpointVariant = this.changeEndpointVariant.bind(this);
     this.onStoryToggle = this.onStoryToggle.bind(this);
     this.state = {
       toggledStories: {}
@@ -976,26 +970,12 @@ class DiscoveryStreamAdmin extends (external_React_default()).PureComponent {
     this.dispatchSimpleAction(actionTypes.DISCOVERY_STREAM_DEV_SYNC_RS);
   }
 
-  changeEndpointVariant(event) {
-    const endpoint = this.props.state.DiscoveryStream.config.layout_endpoint;
-
-    if (endpoint) {
-      this.setConfigValue("layout_endpoint", endpoint.replace(/layout_variant=.+/, `layout_variant=${event.target.value}`));
-    }
-  }
-
   renderComponent(width, component) {
     return /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
       className: "min"
     }, "Type"), /*#__PURE__*/external_React_default().createElement("td", null, component.type)), /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
       className: "min"
     }, "Width"), /*#__PURE__*/external_React_default().createElement("td", null, width)), component.feed && this.renderFeed(component.feed)));
-  }
-
-  isCurrentVariant(id) {
-    const endpoint = this.props.state.DiscoveryStream.config.layout_endpoint;
-    const isMatch = endpoint && !!endpoint.match(`layout_variant=${id}`);
-    return isMatch;
   }
 
   renderFeedData(url) {
@@ -1080,10 +1060,9 @@ class DiscoveryStreamAdmin extends (external_React_default()).PureComponent {
   }
 
   render() {
-    const prefToggles = "enabled hardcoded_layout show_spocs collapsible".split(" ");
+    const prefToggles = "enabled collapsible".split(" ");
     const {
       config,
-      lastUpdated,
       layout
     } = this.props.state.DiscoveryStream;
     const personalized = this.props.otherPrefs["discoverystream.personalization.enabled"];
@@ -1111,28 +1090,7 @@ class DiscoveryStreamAdmin extends (external_React_default()).PureComponent {
       checked: config[pref],
       pref: pref,
       onChange: this.setConfigValue
-    })))))), /*#__PURE__*/external_React_default().createElement("h3", null, "Endpoint variant"), /*#__PURE__*/external_React_default().createElement("p", null, "You can also change this manually by changing this pref:", " ", /*#__PURE__*/external_React_default().createElement("code", null, "browser.newtabpage.activity-stream.discoverystream.config")), /*#__PURE__*/external_React_default().createElement("table", {
-      style: config.enabled && !config.hardcoded_layout ? null : {
-        opacity: 0.5
-      }
-    }, /*#__PURE__*/external_React_default().createElement("tbody", null, Object.keys(LAYOUT_VARIANTS).map(id => /*#__PURE__*/external_React_default().createElement(Row, {
-      key: id
-    }, /*#__PURE__*/external_React_default().createElement("td", {
-      className: "min"
-    }, /*#__PURE__*/external_React_default().createElement("input", {
-      type: "radio",
-      value: id,
-      checked: this.isCurrentVariant(id),
-      onChange: this.changeEndpointVariant
-    })), /*#__PURE__*/external_React_default().createElement("td", {
-      className: "min"
-    }, id), /*#__PURE__*/external_React_default().createElement("td", null, LAYOUT_VARIANTS[id]))))), /*#__PURE__*/external_React_default().createElement("h3", null, "Caching info"), /*#__PURE__*/external_React_default().createElement("table", {
-      style: config.enabled ? null : {
-        opacity: 0.5
-      }
-    }, /*#__PURE__*/external_React_default().createElement("tbody", null, /*#__PURE__*/external_React_default().createElement(Row, null, /*#__PURE__*/external_React_default().createElement("td", {
-      className: "min"
-    }, "Data last fetched"), /*#__PURE__*/external_React_default().createElement("td", null, relativeTime(lastUpdated) || "(no data)")))), /*#__PURE__*/external_React_default().createElement("h3", null, "Layout"), layout.map((row, rowIndex) => /*#__PURE__*/external_React_default().createElement("div", {
+    })))))), /*#__PURE__*/external_React_default().createElement("h3", null, "Layout"), layout.map((row, rowIndex) => /*#__PURE__*/external_React_default().createElement("div", {
       key: `row-${rowIndex}`
     }, row.components.map((component, componentIndex) => /*#__PURE__*/external_React_default().createElement("div", {
       key: `component-${componentIndex}`,
@@ -1900,21 +1858,6 @@ class ASRouterAdminInner extends (external_React_default()).PureComponent {
     }
 
     return "n/a";
-  }
-
-  renderDiscoveryStream() {
-    const {
-      config
-    } = this.props.DiscoveryStream;
-    return /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("table", null, /*#__PURE__*/external_React_default().createElement("tbody", null, /*#__PURE__*/external_React_default().createElement("tr", {
-      className: "message-item"
-    }, /*#__PURE__*/external_React_default().createElement("td", {
-      className: "min"
-    }, "Enabled"), /*#__PURE__*/external_React_default().createElement("td", null, config.enabled ? "yes" : "no")), /*#__PURE__*/external_React_default().createElement("tr", {
-      className: "message-item"
-    }, /*#__PURE__*/external_React_default().createElement("td", {
-      className: "min"
-    }, "Endpoint"), /*#__PURE__*/external_React_default().createElement("td", null, config.endpoint || "(empty)")))));
   }
 
   renderAttributionParamers() {
@@ -6674,7 +6617,12 @@ const LinkMenuOptions = {
     id: "newtab-menu-show-privacy-info",
     icon: "info",
     action: actionCreators.AlsoToMain({
-      type: actionTypes.ABOUT_SPONSORED_TOP_SITES
+      type: actionTypes.ABOUT_SPONSORED_TOP_SITES,
+      data: {
+        advertiser_name: (site.label || site.hostname).toLocaleLowerCase(),
+        position: site.sponsored_position,
+        tile_id: site.sponsored_tile_id
+      }
     }),
     userEvent: "TOPSITE_SPONSOR_INFO"
   }),
@@ -6727,16 +6675,30 @@ const LinkMenuOptions = {
     icon: "dismiss",
     action: actionCreators.AlsoToMain({
       type: actionTypes.BLOCK_URL,
-      data: tiles.map(site => ({
-        url: site.original_url || site.open_url || site.url,
-        // pocket_id is only for pocket stories being in highlights, and then dismissed.
-        pocket_id: site.pocket_id,
-        // used by PlacesFeed and TopSitesFeed for sponsored top sites blocking.
-        isSponsoredTopSite: site.sponsored_position,
-        ...(site.flight_id ? {
-          flight_id: site.flight_id
-        } : {})
-      }))
+      data: tiles.map(site => {
+        var _ref;
+
+        return {
+          url: site.original_url || site.open_url || site.url,
+          // pocket_id is only for pocket stories being in highlights, and then dismissed.
+          pocket_id: site.pocket_id,
+          // used by PlacesFeed and TopSitesFeed for sponsored top sites blocking.
+          isSponsoredTopSite: site.sponsored_position,
+          ...(site.flight_id ? {
+            flight_id: site.flight_id
+          } : {}),
+          // If not sponsored, hostname could be anything (Cat3 Data!).
+          // So only put in advertiser_name for sponsored topsites.
+          ...(site.sponsored_position ? {
+            advertiser_name: (_ref = site.label || site.hostname) === null || _ref === void 0 ? void 0 : _ref.toLocaleLowerCase()
+          } : {}),
+          position: pos,
+          ...(site.sponsored_tile_id ? {
+            tile_id: site.sponsored_tile_id
+          } : {}),
+          is_pocket_card: site.type === "CardGrid"
+        };
+      })
     }),
     impression: actionCreators.ImpressionStats({
       source: eventSource,
@@ -7273,7 +7235,8 @@ class ImpressionStats_ImpressionStats extends (external_React_default()).PureCom
           type: this.props.flightId ? "spoc" : "organic",
           ...(link.shim ? {
             shim: link.shim
-          } : {})
+          } : {}),
+          recommendation_id: link.recommendation_id
         }))
       }));
       this.impressionCardGuids = cards.map(link => link.id);
@@ -7851,7 +7814,8 @@ class _DSCard extends (external_React_default()).PureComponent {
         source: this.props.type.toUpperCase(),
         action_position: this.props.pos,
         value: {
-          card_type: this.props.flightId ? "spoc" : "organic"
+          card_type: this.props.flightId ? "spoc" : "organic",
+          recommendation_id: this.props.recommendation_id
         }
       }));
       this.props.dispatch(actionCreators.ImpressionStats({
@@ -7865,7 +7829,8 @@ class _DSCard extends (external_React_default()).PureComponent {
           ...(this.props.shim && this.props.shim.click ? {
             shim: this.props.shim.click
           } : {}),
-          type: this.props.flightId ? "spoc" : "organic"
+          type: this.props.flightId ? "spoc" : "organic",
+          recommendation_id: this.props.recommendation_id
         }]
       }));
     }
@@ -7887,7 +7852,8 @@ class _DSCard extends (external_React_default()).PureComponent {
         source: "CARDGRID_HOVER",
         action_position: this.props.pos,
         value: {
-          card_type: this.props.flightId ? "spoc" : "organic"
+          card_type: this.props.flightId ? "spoc" : "organic",
+          recommendation_id: this.props.recommendation_id
         }
       }));
       this.props.dispatch(actionCreators.ImpressionStats({
@@ -7898,7 +7864,8 @@ class _DSCard extends (external_React_default()).PureComponent {
           pos: this.props.pos,
           ...(this.props.shim && this.props.shim.save ? {
             shim: this.props.shim.save
-          } : {})
+          } : {}),
+          recommendation_id: this.props.recommendation_id
         }]
       }));
     }
@@ -8072,7 +8039,8 @@ class _DSCard extends (external_React_default()).PureComponent {
         pos: this.props.pos,
         ...(this.props.shim && this.props.shim.impression ? {
           shim: this.props.shim.impression
-        } : {})
+        } : {}),
+        recommendation_id: this.props.recommendation_id
       }],
       dispatch: this.props.dispatch,
       source: this.props.type
@@ -8742,7 +8710,8 @@ class _CardGrid extends (external_React_default()).PureComponent {
         context_type: rec.context_type,
         bookmarkGuid: rec.bookmarkGuid,
         is_collection: this.props.is_collection,
-        saveToPocketCard: saveToPocketCard
+        saveToPocketCard: saveToPocketCard,
+        recommendation_id: rec.recommendation_id
       }));
     }
 
@@ -10689,6 +10658,14 @@ const INITIAL_STATE = {
     showSearchShortcutsForm: false,
     // The list of available search shortcuts.
     searchShortcuts: [],
+    // The "Share-of-Voice" allocations generated by TopSitesFeed
+    sov: {
+      ready: false,
+      positions: [
+        // {position: 0, assignedPartner: "amp"},
+        // {position: 1, assignedPartner: "moz-sales"},
+      ],
+    },
   },
   Prefs: {
     initialized: false,
@@ -10707,9 +10684,8 @@ const INITIAL_STATE = {
   // This is the new pocket configurable layout state.
   DiscoveryStream: {
     // This is a JSON-parsed copy of the discoverystream.config pref value.
-    config: { enabled: false, layout_endpoint: "" },
+    config: { enabled: false },
     layout: [],
-    lastUpdated: null,
     isPrivacyInfoModalVisible: false,
     isCollectionDismissible: false,
     feeds: {
@@ -10943,6 +10919,12 @@ function TopSites(prevState = INITIAL_STATE.TopSites, action) {
       return { ...prevState, searchShortcuts: action.data.searchShortcuts };
     case actionTypes.SNIPPETS_PREVIEW_MODE:
       return { ...prevState, rows: [] };
+    case actionTypes.SOV_UPDATED:
+      const sov = {
+        ready: action.data.ready,
+        positions: action.data.positions,
+      };
+      return { ...prevState, sov };
     default:
       return prevState;
   }
@@ -11302,7 +11284,6 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
     case actionTypes.DISCOVERY_STREAM_LAYOUT_UPDATE:
       return {
         ...prevState,
-        lastUpdated: action.data.lastUpdated || null,
         layout: action.data.layout || [],
       };
     case actionTypes.DISCOVERY_STREAM_COLLECTION_DISMISSIBLE_TOGGLE:
@@ -14233,6 +14214,12 @@ class ContentSection extends (external_React_default()).PureComponent {
       if (eventSource) {
         this.inputUserEvent(eventSource, value);
       }
+    } else if (e.target.nodeName === "MOZ-TOGGLE") {
+      value = e.target.pressed;
+
+      if (eventSource) {
+        this.inputUserEvent(eventSource, value);
+      }
     }
 
     this.props.setPref(prefName, value);
@@ -14300,31 +14287,15 @@ class ContentSection extends (external_React_default()).PureComponent {
     }, /*#__PURE__*/external_React_default().createElement("div", {
       id: "shortcuts-section",
       className: "section"
-    }, /*#__PURE__*/external_React_default().createElement("label", {
-      className: "switch"
-    }, /*#__PURE__*/external_React_default().createElement("input", {
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "shortcuts-toggle",
-      checked: topSitesEnabled,
-      type: "checkbox",
-      onChange: this.onPreferenceSelect,
+      pressed: topSitesEnabled || null,
+      onToggle: this.onPreferenceSelect,
       preference: "feeds.topsites",
-      "aria-labelledby": "custom-shortcuts-title",
-      "aria-describedby": "custom-shortcuts-subtitle",
-      eventSource: "TOP_SITES"
-    }), /*#__PURE__*/external_React_default().createElement("span", {
-      className: "slider",
-      role: "presentation"
-    })), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("h2", {
-      id: "custom-shortcuts-title",
-      className: "title"
-    }, /*#__PURE__*/external_React_default().createElement("label", {
-      htmlFor: "shortcuts-toggle",
-      "data-l10n-id": "newtab-custom-shortcuts-title"
-    })), /*#__PURE__*/external_React_default().createElement("p", {
-      id: "custom-shortcuts-subtitle",
-      className: "subtitle",
-      "data-l10n-id": "newtab-custom-shortcuts-subtitle"
-    }), /*#__PURE__*/external_React_default().createElement("div", {
+      eventSource: "TOP_SITES",
+      "data-l10n-id": "newtab-custom-shortcuts-toggle",
+      "data-l10n-attrs": "label, description"
+    }), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-info-top-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-information",
@@ -14375,29 +14346,16 @@ class ContentSection extends (external_React_default()).PureComponent {
       className: "section"
     }, /*#__PURE__*/external_React_default().createElement("label", {
       className: "switch"
-    }, /*#__PURE__*/external_React_default().createElement("input", {
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "pocket-toggle",
-      checked: pocketEnabled,
-      type: "checkbox",
-      onChange: this.onPreferenceSelect,
+      pressed: pocketEnabled || null,
+      onToggle: this.onPreferenceSelect,
       preference: "feeds.section.topstories",
-      "aria-labelledby": "custom-pocket-title",
       "aria-describedby": "custom-pocket-subtitle",
-      eventSource: "TOP_STORIES"
-    }), /*#__PURE__*/external_React_default().createElement("span", {
-      className: "slider",
-      role: "presentation"
-    })), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("h2", {
-      id: "custom-pocket-title",
-      className: "title"
-    }, /*#__PURE__*/external_React_default().createElement("label", {
-      htmlFor: "pocket-toggle",
-      "data-l10n-id": "newtab-custom-pocket-title"
-    })), /*#__PURE__*/external_React_default().createElement("p", {
-      id: "custom-pocket-subtitle",
-      className: "subtitle",
-      "data-l10n-id": "newtab-custom-pocket-subtitle"
-    }), (mayHaveSponsoredStories || mayHaveRecentSaves) && /*#__PURE__*/external_React_default().createElement("div", {
+      eventSource: "TOP_STORIES",
+      "data-l10n-id": "newtab-custom-pocket-toggle",
+      "data-l10n-attrs": "label, description"
+    })), /*#__PURE__*/external_React_default().createElement("div", null, (mayHaveSponsoredStories || mayHaveRecentSaves) && /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-info-pocket-wrapper"
     }, /*#__PURE__*/external_React_default().createElement("div", {
       className: "more-information",
@@ -14439,28 +14397,14 @@ class ContentSection extends (external_React_default()).PureComponent {
       className: "section"
     }, /*#__PURE__*/external_React_default().createElement("label", {
       className: "switch"
-    }, /*#__PURE__*/external_React_default().createElement("input", {
+    }, /*#__PURE__*/external_React_default().createElement("moz-toggle", {
       id: "highlights-toggle",
-      checked: highlightsEnabled,
-      type: "checkbox",
-      onChange: this.onPreferenceSelect,
+      pressed: highlightsEnabled || null,
+      onToggle: this.onPreferenceSelect,
       preference: "feeds.section.highlights",
       eventSource: "HIGHLIGHTS",
-      "aria-labelledby": "custom-recent-title",
-      "aria-describedby": "custom-recent-subtitle"
-    }), /*#__PURE__*/external_React_default().createElement("span", {
-      className: "slider",
-      role: "presentation"
-    })), /*#__PURE__*/external_React_default().createElement("div", null, /*#__PURE__*/external_React_default().createElement("h2", {
-      id: "custom-recent-title",
-      className: "title"
-    }, /*#__PURE__*/external_React_default().createElement("label", {
-      htmlFor: "highlights-toggle",
-      "data-l10n-id": "newtab-custom-recent-title"
-    })), /*#__PURE__*/external_React_default().createElement("p", {
-      id: "custom-recent-subtitle",
-      className: "subtitle",
-      "data-l10n-id": "newtab-custom-recent-subtitle"
+      "data-l10n-id": "newtab-custom-recent-toggle",
+      "data-l10n-attrs": "label, description"
     }))), /*#__PURE__*/external_React_default().createElement("span", {
       className: "divider",
       role: "separator"
@@ -14534,7 +14478,7 @@ class _CustomizeMenu extends (external_React_default()).PureComponent {
       enabledSections: this.props.enabledSections,
       pocketRegion: this.props.pocketRegion,
       mayHaveSponsoredTopSites: this.props.mayHaveSponsoredTopSites,
-      mayHaveSponsoredStories: this.props.DiscoveryStream.config.show_spocs,
+      mayHaveSponsoredStories: this.props.mayHaveSponsoredStories,
       mayHaveRecentSaves: this.props.DiscoveryStream.recentSavesEnabled,
       dispatch: this.props.dispatch
     }))));
@@ -14951,6 +14895,7 @@ class BaseContent extends (external_React_default()).PureComponent {
       topSitesRowsCount: prefs.topSitesRows
     };
     const pocketRegion = prefs["feeds.system.topstories"];
+    const mayHaveSponsoredStories = prefs["system.showSponsored"];
     const {
       mayHaveSponsoredTopSites
     } = prefs;
@@ -14964,6 +14909,7 @@ class BaseContent extends (external_React_default()).PureComponent {
       enabledSections: enabledSections,
       pocketRegion: pocketRegion,
       mayHaveSponsoredTopSites: mayHaveSponsoredTopSites,
+      mayHaveSponsoredStories: mayHaveSponsoredStories,
       showing: customizeMenuVisible
     }), /*#__PURE__*/external_React_default().createElement("div", {
       className: outerClassName,

@@ -1,43 +1,31 @@
-From: Andreas Pehrson <apehrson@mozilla.com>
-Date: Tue, 16 May 2023 06:37:00 +0000
-Subject: Bug 1832770 - Cherry-pick upstream libwebrtc commit 7b0d7f48fb.
- r=grulja,webrtc-reviewers,mjf
+From: Michael Froman <mfroman@mozilla.com>
+Date: Sat, 12 Aug 2023 18:57:00 +0000
+Subject: Bug 1848045 - to upstream - fix misuse of rtc::strcpyn in
+ ApmDataDumper::SetOutputDirectory. r=ng,webrtc-reviewers
 
-Upstream commit:
-    PipeWire capturer: fix fcntl call when duplicating a file descriptor
+rtc::strcpyn second param should be the size of the destination buffer,
+not the size of the source string.  This has been masked because FormFileName
+helpfully adds a trailing path separator if one is missing.
 
-    The fcntl() call has variable arguments, therefore we need to pass 0 to
-    specify there are no other arguments for this call, otherwise we might
-    end up with an argument that is random garbage.
-
-    Bug: webrtc:15174
-    Change-Id: I34f16a942d80913b667d8ade7eed557b0233be01
-    Reviewed-on: https://webrtc-review.googlesource.com/c/src/+/305120
-    Reviewed-by: Alexander Cooper <alcooper@chromium.org>
-    Commit-Queue: Jan Grulich <grulja@gmail.com>
-    Cr-Commit-Position: refs/heads/main@{#40060}
-
-Differential Revision: https://phabricator.services.mozilla.com/D178009
-Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/47978aa145282f737fc77fcdcadc995e80e2a743
+Differential Revision: https://phabricator.services.mozilla.com/D185862
+Mercurial Revision: https://hg.mozilla.org/mozilla-central/rev/5d935bb2573445a198af03cd3d5186243880ecdf
 ---
- .../desktop_capture/linux/wayland/shared_screencast_stream.cc | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ modules/audio_processing/logging/apm_data_dumper.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-index 1eea8bfbf5..17c895088a 100644
---- a/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-+++ b/modules/desktop_capture/linux/wayland/shared_screencast_stream.cc
-@@ -449,8 +449,8 @@ bool SharedScreenCastStreamPrivate::StartScreenCastStream(
-     PipeWireThreadLoopLock thread_loop_lock(pw_main_loop_);
+diff --git a/modules/audio_processing/logging/apm_data_dumper.h b/modules/audio_processing/logging/apm_data_dumper.h
+index 4ab6baad83..76f8b34c0b 100644
+--- a/modules/audio_processing/logging/apm_data_dumper.h
++++ b/modules/audio_processing/logging/apm_data_dumper.h
+@@ -91,7 +91,7 @@ class ApmDataDumper {
+   static void SetOutputDirectory(absl::string_view output_dir) {
+ #if WEBRTC_APM_DEBUG_DUMP == 1
+     RTC_CHECK_LT(output_dir.size(), kOutputDirMaxLength);
+-    rtc::strcpyn(output_dir_, output_dir.size(), output_dir);
++    rtc::strcpyn(output_dir_, kOutputDirMaxLength, output_dir);
+ #endif
+   }
  
-     if (fd >= 0) {
--      pw_core_ = pw_context_connect_fd(pw_context_, fcntl(fd, F_DUPFD_CLOEXEC),
--                                       nullptr, 0);
-+      pw_core_ = pw_context_connect_fd(
-+          pw_context_, fcntl(fd, F_DUPFD_CLOEXEC, 0), nullptr, 0);
-     } else {
-       pw_core_ = pw_context_connect(pw_context_, nullptr, 0);
-     }
 -- 
-2.34.1
+2.37.3
 

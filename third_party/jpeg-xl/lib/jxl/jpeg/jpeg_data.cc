@@ -7,6 +7,7 @@
 
 #include "lib/jxl/base/printf_macros.h"
 #include "lib/jxl/base/status.h"
+#include "lib/jxl/common.h"  // kMaxNumPasses, JPEGXL_ENABLE_TRANSCODE_JPEG
 
 namespace jxl {
 namespace jpeg {
@@ -355,6 +356,7 @@ Status JPEGData::VisitFields(Visitor* visitor) {
     uint32_t nbit = padding_bits.size();
     JXL_RETURN_IF_ERROR(visitor->Bits(24, 0, &nbit));
     if (visitor->IsReading()) {
+      JXL_RETURN_IF_ERROR(CheckHasEnoughBits(visitor, nbit));
       padding_bits.reserve(std::min<uint32_t>(1024u, nbit));
       for (uint32_t i = 0; i < nbit; i++) {
         bool bbit = false;
@@ -448,7 +450,8 @@ void JPEGData::CalculateMcuSize(const JPEGScanInfo& scan, int* MCUs_per_row,
 
 #if JPEGXL_ENABLE_TRANSCODE_JPEG
 
-Status SetJPEGDataFromICC(const PaddedBytes& icc, jpeg::JPEGData* jpeg_data) {
+Status SetJPEGDataFromICC(const std::vector<uint8_t>& icc,
+                          jpeg::JPEGData* jpeg_data) {
   size_t icc_pos = 0;
   for (size_t i = 0; i < jpeg_data->app_data.size(); i++) {
     if (jpeg_data->app_marker_type[i] != jpeg::AppMarkerType::kICC) {

@@ -301,6 +301,10 @@
       "type": "string"
     },
 
+    "DisableAccounts": {
+      "type": "boolean"
+    },
+
     "DisableAppUpdate": {
       "type": "boolean"
     },
@@ -1138,6 +1142,10 @@
     },
 
     "PrimaryPassword": {
+      "type": "boolean"
+    },
+
+    "PrintingEnabled": {
       "type": "boolean"
     },
 

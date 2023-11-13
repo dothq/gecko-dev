@@ -64,7 +64,7 @@ mochitest-plain:
         - headless+socketprocess_networking
         - http3
         - http2
-        - editor-legacy-direction
+        - geckoview-fission-isolate-high-value
     run-on-projects:
         by-variant:
             conditioned_profile:
@@ -125,31 +125,29 @@ mochitest-plain:
                 by-test-platform:
                     linux1804-64-qr/debug: built-projects
                     default: []
-            editor-legacy-direction:
+            geckoview-fission-isolate-high-value:
                 by-test-platform:
-                    linux1804-64-qr/debug: ['mozilla-central']
+                    android-em-7.0-x86_64-qr/debug-isolated-process: []
+                    android-em.*: built-projects
                     default: []
             default:
                 by-test-platform:
                     android-em-7.0-x86_64-qr/debug-isolated-process: []
                     android.*: built-projects
-                    .*wayland.*: []
                     default: built-projects
     chunks:
         by-test-platform:
-            android-em-7.*: 4
+            android.*/debug: 10
             linux.*/debug: 16
-            linux.*64-asan/opt: 10
             linux.*64-tsan-qr/opt: 20
-            linux.*64-.*cov/opt: 10
-            windows.*-ccov.*/.*: 10
-            macosx.*64-ccov.*/.*: 10
+            .*(asan|ccov).*: 10
+            linux.*/opt: 8
             default: 5
     instance-size:
         by-test-platform:
             linux.*64-tsan-qr/opt: xlarge  # runs out of memory using 8GB
             default: default
-    max-run-time: 5400
+    max-run-time: 3600
     allow-software-gl-layers: false
     mozharness:
         mochitest-flavor: plain
@@ -199,7 +197,6 @@ mochitest-a11y:
         - 1proc
         - socketprocess_networking+1proc
         - webrender-sw+1proc
-        - editor-legacy-direction
     run-on-projects:
         by-variant:
             socketprocess_networking+1proc:
@@ -213,12 +210,8 @@ mochitest-a11y:
                     default: []
             1proc:
                 by-test-platform:
-                    .*wayland.*: []
+                    .*-wayland/debug.*: []
                     default: built-projects
-            editor-legacy-direction:
-                by-test-platform:
-                    linux1804-64-qr/debug: ['mozilla-central']
-                    default: []
     mozharness:
         mochitest-flavor: a11y
 
@@ -234,7 +227,6 @@ mochitest-browser-chrome:
         - webrender-sw+a11y-checks
         - socketprocess_networking
         - msix
-        - editor-legacy-direction
     run-on-projects:
         by-variant:
             webrender-sw:
@@ -261,10 +253,6 @@ mochitest-browser-chrome:
                     windows11-64-2009-qr/debug: built-projects
                     windows11-64-2009(-shippable)?-qr/opt: built-projects
                     default: []
-            editor-legacy-direction:
-                by-test-platform:
-                    linux1804-64-qr/debug: ['mozilla-central']
-                    default: []
             default:
                 by-test-platform:
                     android.*: []
@@ -278,15 +266,22 @@ mochitest-browser-chrome:
                     default: default
             default: default
     chunks:
-        by-test-platform:
-            linux.*-qr/debug: 16
-            linux.*64-asan-qr/opt: 16
-            linux.*64-tsan-qr/opt: 32
-            macosx.*64/debug: 16
-            windows.*-ccov.*/.*: 14
-            windows.*-asan-qr/opt: 14
-            windows.*32-qr/debug: 12
-            default: 7
+        by-variant:
+            msix:
+                by-test-platform:
+                    .*/debug: 16
+                    default: 7
+            default:
+                by-test-platform:
+                    linux.*-qr/debug: 16
+                    linux.*64-asan-qr/opt: 16
+                    linux.*64-tsan-qr/opt: 32
+                    macosx.*64-qr/debug: 12
+                    macosx.*64-qr/opt: 8
+                    windows.*-ccov.*/.*: 14
+                    windows.*-asan-qr/opt: 14
+                    windows.*32-qr/debug: 12
+                    default: 8
     max-run-time:
         by-variant:
             msix: 5400
@@ -341,6 +336,7 @@ mochitest-browser-a11y:
     chunks:
         by-test-platform:
             .*tsan.*: 2
+            .*asan.*: 2
             default: 1
     instance-size: default
     allow-software-gl-layers: false
@@ -366,7 +362,7 @@ mochitest-browser-media:
             default:
                 by-test-platform:
                     android.*: []
-                    .*wayland.*: []
+                    .*-wayland/debug: []
                     default: built-projects
     tier: default
     max-run-time:
@@ -406,7 +402,6 @@ mochitest-chrome:
         - 1proc
         - socketprocess_networking+1proc
         - webrender-sw+1proc
-        - editor-legacy-direction
     run-on-projects:
         by-variant:
             socketprocess_networking+1proc:
@@ -419,10 +414,6 @@ mochitest-chrome:
                 by-test-platform:
                     android-em-7.0-x86_64-qr/debug: built-projects
                     linux.*64-qr/debug: built-projects
-                    default: []
-            editor-legacy-direction:
-                by-test-platform:
-                    linux1804-64-qr/debug: ['mozilla-central']
                     default: []
             1proc:
                 by-test-platform:
@@ -495,7 +486,7 @@ mochitest-devtools-chrome:
     chunks:
         by-test-platform:
             .*-ccov.*/.*: 12
-            linux.*64-qr/debug: 12
+            linux.*64-qr/debug: 14
             macosx.*64-qr/debug: 8
             .*-asan(-qr)?/opt: 8
             .*-tsan-qr/opt: 16
@@ -571,7 +562,6 @@ mochitest-plain-gpu:
             default:
                 by-test-platform:
                     android-em-7.0-x86_64-qr/debug-isolated-process: []
-                    .*wayland.*: []
                     default: built-projects
     virtualization: virtual-with-gpu
     tier:
@@ -615,7 +605,7 @@ mochitest-chrome-gpu:
             1proc:
                 by-test-platform:
                     android.*/.*: []
-                    .*wayland.*: []
+                    .*-wayland/debug.*: []
                     default: built-projects
     tier: default
     mozharness:
@@ -643,6 +633,7 @@ mochitest-media:
             linux.*64-tsan-qr/opt: 7200
             default: 5400
     variants:
+        - media-gpu
         - no-fission
         - socketprocess+no-fission
         - socketprocess
@@ -658,7 +649,7 @@ mochitest-media:
                     android.*: []
                     windows.*ccov.*: []
                     linux.*64(-shippable|-asan|-tsan)?-qr/opt: ['autoland', 'mozilla-central']
-                    macosx.*64(-shippable)?-qr/(opt|debug): ['autoland', 'mozilla-central']
+                    macosx.*-64(-shippable)?-qr/(opt|debug): ['autoland', 'mozilla-central']
                     windows1.*(-shippable)?-qr/(opt|debug): ['autoland', 'mozilla-central']
                     windows.*-asan-qr/opt: ['autoland', 'mozilla-central']
                     default: []
@@ -709,6 +700,12 @@ mochitest-media:
                     windows11-64-2009-qr/opt: ['autoland']
                     windows11-64-2009-qr/debug: ['autoland']
                     default: []
+            media-gpu:
+                by-test-platform:
+                    (macosx.*64|windows11.*)(-shippable)?-qr/(opt|debug): ['autoland', 'mozilla-central', 'mozilla-beta']
+                    default: []
+                    # TODO : add Android, it hasn't supported 'tags'
+                    # TODO : add Linux, it would crash on gfxFeature.cpp:180
             default:
                 by-test-platform:
                     android-hw.*/opt: []
@@ -722,6 +719,7 @@ mochitest-media:
     chunks:
         by-variant:
             wmf-media-engine: 1
+            media-gpu: 1
             default:
                 by-test-platform:
                     (android|macos).*/opt: 1
@@ -816,7 +814,8 @@ mochitest-webgl1-core:
             default:
                 by-test-platform:
                     android.*: []
-                    .*-(tsan|wayland).*: []
+                    .*-tsan.*: []
+                    .*-wayland/debug.*: []
                     default: built-projects
     # Bug 1296733: llvmpipe with mesa 9.2.1 lacks thread safety
     allow-software-gl-layers: false
@@ -871,7 +870,8 @@ mochitest-webgl1-ext:
             default:
                 by-test-platform:
                     android.*: []
-                    .*-(tsan|wayland).*: []
+                    .*-tsan.*: []
+                    .*-wayland/debug.*: []
                     default: built-projects
     # Bug 1296733: llvmpipe with mesa 9.2.1 lacks thread safety
     allow-software-gl-layers: false
@@ -972,7 +972,8 @@ mochitest-webgl2-ext:
             default:
                 by-test-platform:
                     android.*: []
-                    .*-(tsan|wayland).*: []
+                    .*-tsan.*: []
+                    .*-wayland/debug.*: []
                     default: built-projects
     chunks: 4
     test-manifest-loader: null  # don't load tests in the taskgraph
@@ -1025,8 +1026,8 @@ mochitest-webgpu:
                     default: []
             no-fission:
                 by-test-platform:
-                    linux1804-64-qr/debug: ['trunk']
-                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    linux2204-64-qr/debug: ['trunk']
+                    linux2204-64(-shippable|-asan)?-qr/opt: ['trunk']
                     default: []
             default:
                 by-test-platform:
@@ -1080,7 +1081,6 @@ mochitest-remote:
             default:
                 by-test-platform:
                     android.*: []
-                    .*wayland.*: []
                     default: built-projects
     tier: default
     max-run-time: 5400

@@ -101,12 +101,10 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(LocalAccessible)
 NS_IMPL_CYCLE_COLLECTING_RELEASE_WITH_DESTROY(LocalAccessible, LastRelease())
 
 LocalAccessible::LocalAccessible(nsIContent* aContent, DocAccessible* aDoc)
-    : Accessible(),
-      mContent(aContent),
+    : mContent(aContent),
       mDoc(aDoc),
       mParent(nullptr),
       mIndexInParent(-1),
-      mBounds(),
       mFirstLineStart(-1),
       mStateFlags(0),
       mContextFlags(0),
@@ -622,18 +620,28 @@ nsRect LocalAccessible::ParentRelativeBounds() {
       result.MoveBy(frame->GetOffsetTo(boundingFrame));
     }
 
-    if (boundingFrame->GetRect().IsEmpty()) {
-      // boundingFrame might be the first in an ib-split-sibling chain. If its
-      // rect is empty, GetAllInFlowRectsUnion might exclude its origin. For
-      // example, if boundingFrame is empty with an origin of (0, -840) but
-      // has a non-empty ib-split-sibling with (0, 0), the union rect will
-      // originate at (0, 0). This means the bounds returned for our parent
-      // Accessible might be offset from boundingFrame's rect. Since result is
-      // currently relative to boundingFrame's rect, we might need to adjust it
-      // to make it parent relative.
+    if (boundingFrame->GetRect().IsEmpty() ||
+        nsLayoutUtils::GetNextContinuationOrIBSplitSibling(boundingFrame)) {
+      // Constructing a bounding box across a frame that has an IB split means
+      // the origin is likely be different from that of boundingFrame.
+      // Descendants will need their parent-relative bounds adjusted
+      // accordingly, since parent-relative bounds are constructed to the
+      // bounding box of the entire element and not each individual IB split
+      // frame. In the case that boundingFrame's rect is empty,
+      // GetAllInFlowRectsUnion might exclude its origin. For example, if
+      // boundingFrame is empty with an origin of (0, -840) but has a non-empty
+      // ib-split-sibling with (0, 0), the union rect will originate at (0, 0).
+      // This means the bounds returned for our parent Accessible might be
+      // offset from boundingFrame's rect. Since result is currently relative to
+      // boundingFrame's rect, we might need to adjust it to make it parent
+      // relative.
       nsRect boundingUnion =
           nsLayoutUtils::GetAllInFlowRectsUnion(boundingFrame, boundingFrame);
       if (!boundingUnion.IsEmpty()) {
+        // The origin of boundingUnion is relative to boundingFrame, meaning
+        // when we call MoveBy on result with this value we're offsetting
+        // `result` by the distance boundingFrame's origin was moved to
+        // construct its bounding box.
         result.MoveBy(-boundingUnion.TopLeft());
       } else {
         // Since GetAllInFlowRectsUnion returned an empty rect on our parent
@@ -1495,7 +1503,9 @@ void LocalAccessible::DOMAttributeChanged(int32_t aNameSpaceID,
   }
 
   if (aAttribute == nsGkAtoms::aria_controls ||
-      aAttribute == nsGkAtoms::aria_flowto) {
+      aAttribute == nsGkAtoms::aria_flowto ||
+      aAttribute == nsGkAtoms::aria_details ||
+      aAttribute == nsGkAtoms::aria_errormessage) {
     mDoc->QueueCacheUpdate(this, CacheDomain::Relations);
   }
 
@@ -3550,6 +3560,22 @@ already_AddRefed<AccAttributes> LocalAccessible::BundleFieldsForCache(
             currTextFrame->GetCharacterRectsInRange(
                 currTextFrame->GetContentOffset(), length, charBounds);
             for (nsRect& charRect : charBounds) {
+              if (charRect.width == 0 &&
+                  !currTextFrame->StyleText()->WhiteSpaceIsSignificant()) {
+                // GetCharacterRectsInRange gives us one rect per content
+                // offset. However, TextLeafAccessibles use rendered offsets;
+                // e.g. they might exclude some content white space. If we get
+                // a 0 width rect and it's white space, skip this rect, since
+                // this character isn't in the rendered text. We do have
+                // a way to convert between content and rendered offsets, but
+                // doing this for every character is expensive.
+                const char16_t contentChar = mContent->GetText()->CharAt(
+                    charData.Length() / kNumbersInRect);
+                if (contentChar == u' ' || contentChar == u'\t' ||
+                    contentChar == u'\n') {
+                  continue;
+                }
+              }
               // We expect each char rect to be relative to the text leaf
               // acc this text lives in. Unfortunately, GetCharacterRectsInRange
               // returns rects relative to their continuation. Add the

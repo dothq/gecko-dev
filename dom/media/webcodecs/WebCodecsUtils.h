@@ -31,10 +31,12 @@ enum class YUVColorSpace : uint8_t;
 namespace dom {
 
 /*
- * The followings are helpers for WebCodecs methods
+ * The followings are helpers for WebCodecs methods.
  */
 
 nsTArray<nsCString> GuessContainers(const nsAString& aCodec);
+
+Maybe<nsString> ParseCodecString(const nsAString& aCodec);
 
 /*
  * Below are helpers for conversion among Maybe, Optional, and Nullable.
@@ -72,15 +74,6 @@ Nullable<T> MaybeToNullable(const Maybe<T>& aOptional) {
 /*
  * Below are helpers to operate ArrayBuffer or ArrayBufferView.
  */
-
-template <class T>
-Result<Span<uint8_t>, nsresult> GetArrayBufferData(const T& aBuffer);
-
-Result<Span<uint8_t>, nsresult> GetSharedArrayBufferData(
-    const MaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer);
-
-Result<Span<uint8_t>, nsresult> GetSharedArrayBufferData(
-    const OwningMaybeSharedArrayBufferViewOrMaybeSharedArrayBuffer& aBuffer);
 
 Result<Ok, nsresult> CloneBuffer(
     JSContext* aCx,

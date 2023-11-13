@@ -16,6 +16,7 @@
 #include "mozilla/dom/IPCBlobUtils.h"
 #include "mozilla/dom/MediaSource.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/AppShutdown.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/LoadInfo.h"
@@ -51,22 +52,20 @@ struct DataInfo {
   enum ObjectType { eBlobImpl, eMediaSource };
 
   DataInfo(mozilla::dom::BlobImpl* aBlobImpl, nsIPrincipal* aPrincipal,
-           const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey)
+           const nsCString& aPartitionKey)
       : mObjectType(eBlobImpl),
         mBlobImpl(aBlobImpl),
         mPrincipal(aPrincipal),
-        mAgentClusterId(aAgentClusterId),
         mPartitionKey(aPartitionKey),
         mRevoked(false) {
     MOZ_ASSERT(aPrincipal);
   }
 
   DataInfo(MediaSource* aMediaSource, nsIPrincipal* aPrincipal,
-           const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey)
+           const nsCString& aPartitionKey)
       : mObjectType(eMediaSource),
         mMediaSource(aMediaSource),
         mPrincipal(aPrincipal),
-        mAgentClusterId(aAgentClusterId),
         mPartitionKey(aPartitionKey),
         mRevoked(false) {
     MOZ_ASSERT(aPrincipal);
@@ -78,7 +77,6 @@ struct DataInfo {
   RefPtr<MediaSource> mMediaSource;
 
   nsCOMPtr<nsIPrincipal> mPrincipal;
-  Maybe<nsID> mAgentClusterId;
 
   nsCString mPartitionKey;
 
@@ -142,15 +140,14 @@ static mozilla::dom::DataInfo* GetDataInfoFromURI(nsIURI* aURI,
 void BroadcastBlobURLRegistration(const nsACString& aURI,
                                   mozilla::dom::BlobImpl* aBlobImpl,
                                   nsIPrincipal* aPrincipal,
-                                  const Maybe<nsID>& aAgentClusterId,
                                   const nsCString& aPartitionKey) {
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aBlobImpl);
   MOZ_ASSERT(aPrincipal);
 
   if (XRE_IsParentProcess()) {
-    dom::ContentParent::BroadcastBlobURLRegistration(
-        aURI, aBlobImpl, aPrincipal, aAgentClusterId, aPartitionKey);
+    dom::ContentParent::BroadcastBlobURLRegistration(aURI, aBlobImpl,
+                                                     aPrincipal, aPartitionKey);
     return;
   }
 
@@ -162,7 +159,7 @@ void BroadcastBlobURLRegistration(const nsACString& aURI,
 
   dom::ContentChild* cc = dom::ContentChild::GetSingleton();
   (void)NS_WARN_IF(!cc->SendStoreAndBroadcastBlobURLRegistration(
-      nsCString(aURI), ipcBlob, aPrincipal, aAgentClusterId, aPartitionKey));
+      nsCString(aURI), ipcBlob, aPrincipal, aPartitionKey));
 }
 
 void BroadcastBlobURLUnregistration(const nsCString& aURI,
@@ -407,8 +404,7 @@ class ReleasingTimerHolder final : public Runnable,
     // but we need at least to be able to dispatch to the main thread here.
     auto raii = MakeScopeExit([holder] { holder->CancelTimerAndRevokeURI(); });
 
-    nsresult rv =
-        SchedulerGroup::Dispatch(TaskCategory::Other, holder.forget());
+    nsresult rv = SchedulerGroup::Dispatch(holder.forget());
     NS_ENSURE_SUCCESS_VOID(rv);
 
     raii.release();
@@ -528,7 +524,6 @@ NS_IMPL_ISUPPORTS_INHERITED(ReleasingTimerHolder, Runnable, nsITimerCallback,
 template <typename T>
 static void AddDataEntryInternal(const nsACString& aURI, T aObject,
                                  nsIPrincipal* aPrincipal,
-                                 const Maybe<nsID>& aAgentClusterId,
                                  const nsCString& aPartitionKey) {
   MOZ_ASSERT(NS_IsMainThread(), "changing gDataTable is main-thread only");
   StaticMutexAutoLock lock(sMutex);
@@ -537,8 +532,8 @@ static void AddDataEntryInternal(const nsACString& aURI, T aObject,
   }
 
   mozilla::UniquePtr<mozilla::dom::DataInfo> info =
-      mozilla::MakeUnique<mozilla::dom::DataInfo>(
-          aObject, aPrincipal, aAgentClusterId, aPartitionKey);
+      mozilla::MakeUnique<mozilla::dom::DataInfo>(aObject, aPrincipal,
+                                                  aPartitionKey);
   BlobURLsReporter::GetJSStackForBlob(info.get());
 
   gDataTable->InsertOrUpdate(aURI, std::move(info));
@@ -558,10 +553,10 @@ BlobURLProtocolHandler::BlobURLProtocolHandler() { Init(); }
 BlobURLProtocolHandler::~BlobURLProtocolHandler() = default;
 
 /* static */
-nsresult BlobURLProtocolHandler::AddDataEntry(
-    mozilla::dom::BlobImpl* aBlobImpl, nsIPrincipal* aPrincipal,
-    const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey,
-    nsACString& aUri) {
+nsresult BlobURLProtocolHandler::AddDataEntry(mozilla::dom::BlobImpl* aBlobImpl,
+                                              nsIPrincipal* aPrincipal,
+                                              const nsCString& aPartitionKey,
+                                              nsACString& aUri) {
   MOZ_ASSERT(aBlobImpl);
   MOZ_ASSERT(aPrincipal);
 
@@ -570,19 +565,17 @@ nsresult BlobURLProtocolHandler::AddDataEntry(
   nsresult rv = GenerateURIString(aPrincipal, aUri);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  AddDataEntryInternal(aUri, aBlobImpl, aPrincipal, aAgentClusterId,
-                       aPartitionKey);
+  AddDataEntryInternal(aUri, aBlobImpl, aPrincipal, aPartitionKey);
 
-  BroadcastBlobURLRegistration(aUri, aBlobImpl, aPrincipal, aAgentClusterId,
-                               aPartitionKey);
+  BroadcastBlobURLRegistration(aUri, aBlobImpl, aPrincipal, aPartitionKey);
   return NS_OK;
 }
 
 /* static */
-nsresult BlobURLProtocolHandler::AddDataEntry(
-    MediaSource* aMediaSource, nsIPrincipal* aPrincipal,
-    const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey,
-    nsACString& aUri) {
+nsresult BlobURLProtocolHandler::AddDataEntry(MediaSource* aMediaSource,
+                                              nsIPrincipal* aPrincipal,
+                                              const nsCString& aPartitionKey,
+                                              nsACString& aUri) {
   MOZ_ASSERT(aMediaSource);
   MOZ_ASSERT(aPrincipal);
 
@@ -591,28 +584,24 @@ nsresult BlobURLProtocolHandler::AddDataEntry(
   nsresult rv = GenerateURIString(aPrincipal, aUri);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  AddDataEntryInternal(aUri, aMediaSource, aPrincipal, aAgentClusterId,
-                       aPartitionKey);
+  AddDataEntryInternal(aUri, aMediaSource, aPrincipal, aPartitionKey);
   return NS_OK;
 }
 
 /* static */
 void BlobURLProtocolHandler::AddDataEntry(const nsACString& aURI,
                                           nsIPrincipal* aPrincipal,
-                                          const Maybe<nsID>& aAgentClusterId,
                                           const nsCString& aPartitionKey,
                                           mozilla::dom::BlobImpl* aBlobImpl) {
   MOZ_ASSERT(aPrincipal);
   MOZ_ASSERT(aBlobImpl);
-  AddDataEntryInternal(aURI, aBlobImpl, aPrincipal, aAgentClusterId,
-                       aPartitionKey);
+  AddDataEntryInternal(aURI, aBlobImpl, aPrincipal, aPartitionKey);
 }
 
 /* static */
 bool BlobURLProtocolHandler::ForEachBlobURL(
-    std::function<bool(mozilla::dom::BlobImpl*, nsIPrincipal*,
-                       const Maybe<nsID>&, const nsCString&, const nsACString&,
-                       bool aRevoked)>&& aCb) {
+    std::function<bool(mozilla::dom::BlobImpl*, nsIPrincipal*, const nsCString&,
+                       const nsACString&, bool aRevoked)>&& aCb) {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (!gDataTable) {
@@ -628,8 +617,8 @@ bool BlobURLProtocolHandler::ForEachBlobURL(
     }
 
     MOZ_ASSERT(info->mBlobImpl);
-    if (!aCb(info->mBlobImpl, info->mPrincipal, info->mAgentClusterId,
-             info->mPartitionKey, entry.GetKey(), info->mRevoked)) {
+    if (!aCb(info->mBlobImpl, info->mPrincipal, info->mPartitionKey,
+             entry.GetKey(), info->mRevoked)) {
       return false;
     }
   }
@@ -668,7 +657,6 @@ void BlobURLProtocolHandler::RemoveDataEntry(const nsACString& aUri,
 /*static */
 bool BlobURLProtocolHandler::RemoveDataEntry(const nsACString& aUri,
                                              nsIPrincipal* aPrincipal,
-                                             const Maybe<nsID>& aAgentClusterId,
                                              const nsCString& aPartitionKey) {
   MOZ_ASSERT(NS_IsMainThread(), "changing gDataTable is main-thread only");
   if (!gDataTable) {
@@ -681,12 +669,6 @@ bool BlobURLProtocolHandler::RemoveDataEntry(const nsACString& aUri,
   }
 
   if (!aPrincipal || !aPrincipal->Subsumes(info->mPrincipal)) {
-    return false;
-  }
-
-  if (StaticPrefs::privacy_partition_bloburl_per_agent_cluster() &&
-      aAgentClusterId.isSome() && info->mAgentClusterId.isSome() &&
-      !aAgentClusterId.value().Equals(info->mAgentClusterId.value())) {
     return false;
   }
 
@@ -756,8 +738,7 @@ bool BlobURLProtocolHandler::GetDataEntry(
     const nsACString& aUri, mozilla::dom::BlobImpl** aBlobImpl,
     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
     const OriginAttributes& aOriginAttributes, uint64_t aInnerWindowId,
-    const Maybe<nsID>& aAgentClusterId, const nsCString& aPartitionKey,
-    bool aAlsoIfRevoked) {
+    const nsCString& aPartitionKey, bool aAlsoIfRevoked) {
   MOZ_ASSERT(NS_IsMainThread(),
              "without locking gDataTable is main-thread only");
   MOZ_ASSERT(aTriggeringPrincipal);
@@ -793,28 +774,10 @@ bool BlobURLProtocolHandler::GetDataEntry(
     return false;
   }
 
-  // BlobURLs are openable on the same agent-cluster-id only.
-  if (StaticPrefs::privacy_partition_bloburl_per_agent_cluster() &&
-      aAgentClusterId.isSome() && info->mAgentClusterId.isSome() &&
-      NS_WARN_IF(!aAgentClusterId->Equals(info->mAgentClusterId.value()))) {
-    nsAutoString localizedMsg;
-    AutoTArray<nsString, 1> param;
-    CopyUTF8toUTF16(aUri, *param.AppendElement());
-    nsresult rv = nsContentUtils::FormatLocalizedString(
-        nsContentUtils::eDOM_PROPERTIES, "BlobDifferentClusterError", param,
-        localizedMsg);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return false;
-    }
-
-    nsContentUtils::ReportToConsoleByWindowID(
-        localizedMsg, nsIScriptError::errorFlag, "DOM"_ns, aInnerWindowId);
-    return false;
-  }
-
   if (StaticPrefs::privacy_partition_bloburl_per_partition_key() &&
       !aPartitionKey.IsEmpty() && !info->mPartitionKey.IsEmpty() &&
       !aPartitionKey.Equals(info->mPartitionKey)) {
+    mozilla::glean::bloburl::resolve_stopped.Add();
     nsAutoString localizedMsg;
     AutoTArray<nsString, 1> param;
     CopyUTF8toUTF16(aUri, *param.AppendElement());

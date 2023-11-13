@@ -69,6 +69,7 @@
 #include "wasm/WasmInstance.h"
 #include "wasm/WasmIonCompile.h"
 #include "wasm/WasmJS.h"
+#include "wasm/WasmModuleTypes.h"
 #include "wasm/WasmSerialize.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmValidate.h"
@@ -1770,14 +1771,12 @@ class MOZ_STACK_CLASS ModuleValidatorShared {
       index += funcImportMap_.count();
     }
 
-    MutableElemSegment seg = js_new<ElemSegment>();
-    if (!seg) {
-      return false;
-    }
-    seg->elemType = RefType::func();
-    seg->tableIndex = tableIndex;
-    seg->offsetIfActive = Some(InitExpr(LitVal(uint32_t(0))));
-    seg->elemFuncIndices = std::move(elems);
+    ModuleElemSegment seg = ModuleElemSegment();
+    seg.elemType = RefType::func();
+    seg.tableIndex = tableIndex;
+    seg.offsetIfActive = Some(InitExpr(LitVal(uint32_t(0))));
+    seg.encoding = ModuleElemSegment::Encoding::Indices;
+    seg.elemIndices = std::move(elems);
     return moduleEnv_.elemSegments.append(std::move(seg));
   }
 
@@ -2149,6 +2148,9 @@ class MOZ_STACK_CLASS ModuleValidator : public ModuleValidatorShared {
     }
 
     moduleEnv_.numFuncImports = funcImportMap_.count();
+
+    // All globals (inits and imports) are imports from Wasm point of view.
+    moduleEnv_.numGlobalImports = moduleEnv_.globals.length();
 
     MOZ_ASSERT(asmJSMetadata_->asmJSFuncNames.empty());
     if (!asmJSMetadata_->asmJSFuncNames.resize(funcImportMap_.count())) {

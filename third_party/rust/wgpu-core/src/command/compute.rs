@@ -1,6 +1,7 @@
 use crate::{
     binding_model::{
-        BindError, BindGroup, LateMinBufferBindingSizeMismatch, PushConstantUploadError,
+        BindError, BindGroup, BindGroupLayouts, LateMinBufferBindingSizeMismatch,
+        PushConstantUploadError,
     },
     command::{
         bind::Binder,
@@ -15,6 +16,7 @@ use crate::{
     hal_api::HalApi,
     hub::Token,
     id,
+    id::DeviceId,
     identity::GlobalIdentityHandlerFactory,
     init_tracker::MemoryInitKind,
     pipeline,
@@ -192,6 +194,8 @@ pub enum ComputePassErrorInner {
     Encoder(#[from] CommandEncoderError),
     #[error("Bind group {0:?} is invalid")]
     InvalidBindGroup(id::BindGroupId),
+    #[error("Device {0:?} is invalid")]
+    InvalidDevice(DeviceId),
     #[error("Bind group index {index} is greater than the device's requested `max_bind_group` limit {max}")]
     BindGroupIndexOutOfRange { index: u32, max: u32 },
     #[error("Compute pipeline {0:?} is invalid")]
@@ -283,8 +287,8 @@ struct State<A: HalApi> {
 }
 
 impl<A: HalApi> State<A> {
-    fn is_ready(&self) -> Result<(), DispatchError> {
-        let bind_mask = self.binder.invalid_mask();
+    fn is_ready(&self, bind_group_layouts: &BindGroupLayouts<A>) -> Result<(), DispatchError> {
+        let bind_mask = self.binder.invalid_mask(bind_group_layouts);
         if bind_mask != 0 {
             //let (expected, provided) = self.binder.entries[index as usize].info();
             return Err(DispatchError::IncompatibleBindGroup {
@@ -389,6 +393,12 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         let raw = cmd_buf.encoder.open();
 
         let device = &device_guard[cmd_buf.device_id.value];
+        if !device.is_valid() {
+            return Err(ComputePassErrorInner::InvalidDevice(
+                cmd_buf.device_id.value.0,
+            ))
+            .map_pass_err(init_scope);
+        }
 
         #[cfg(feature = "trace")]
         if let Some(ref mut list) = cmd_buf.commands {
@@ -403,6 +413,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         let (bind_group_guard, mut token) = hub.bind_groups.read(&mut token);
         let (pipeline_guard, mut token) = hub.compute_pipelines.read(&mut token);
         let (query_set_guard, mut token) = hub.query_sets.read(&mut token);
+        let (bind_group_layout_guard, mut token) = hub.bind_group_layouts.read(&mut token);
         let (buffer_guard, mut token) = hub.buffers.read(&mut token);
         let (texture_guard, _) = hub.textures.read(&mut token);
 
@@ -663,7 +674,9 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         pipeline: state.pipeline,
                     };
 
-                    state.is_ready().map_pass_err(scope)?;
+                    state
+                        .is_ready(&*bind_group_layout_guard)
+                        .map_pass_err(scope)?;
                     state
                         .flush_states(
                             raw,
@@ -700,7 +713,9 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         pipeline: state.pipeline,
                     };
 
-                    state.is_ready().map_pass_err(scope)?;
+                    state
+                        .is_ready(&*bind_group_layout_guard)
+                        .map_pass_err(scope)?;
 
                     device
                         .require_downlevel_flags(wgt::DownlevelFlags::INDIRECT_EXECUTION)

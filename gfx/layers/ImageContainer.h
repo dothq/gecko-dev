@@ -44,6 +44,7 @@ namespace mozilla {
 
 namespace layers {
 
+class GPUVideoImage;
 class ImageClient;
 class ImageCompositeNotification;
 class ImageContainer;
@@ -124,7 +125,7 @@ class Image {
   int32_t GetSerial() const { return mSerial; }
 
   bool IsDRM() const { return mIsDRM; }
-  void SetIsDRM(bool aIsDRM) { mIsDRM = aIsDRM; }
+  virtual void SetIsDRM(bool aIsDRM) { mIsDRM = aIsDRM; }
 
   virtual already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() = 0;
 
@@ -140,6 +141,7 @@ class Image {
 
   /* Access to derived classes. */
   virtual GLImage* AsGLImage() { return nullptr; }
+  virtual GPUVideoImage* AsGPUVideoImage() { return nullptr; }
 #ifdef MOZ_WIDGET_ANDROID
   virtual SurfaceTextureImage* AsSurfaceTextureImage() { return nullptr; }
 #endif

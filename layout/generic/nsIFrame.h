@@ -482,9 +482,9 @@ static void ReleaseValue(T* aPropertyValue) {
     return nsQueryFrame::class##_id;                                           \
   }
 
-#define NS_IMPL_FRAMEARENA_HELPERS(class)                             \
-  void* class ::operator new(size_t sz, mozilla::PresShell* aShell) { \
-    return aShell->AllocateFrame(nsQueryFrame::class##_id, sz);       \
+#define NS_IMPL_FRAMEARENA_HELPERS(class)                              \
+  void* class ::operator new(size_t sz, mozilla::PresShell * aShell) { \
+    return aShell->AllocateFrame(nsQueryFrame::class##_id, sz);        \
   }
 
 #define NS_DECL_ABSTRACT_FRAME(class)                                         \
@@ -492,6 +492,35 @@ static void ReleaseValue(T* aPropertyValue) {
   nsQueryFrame::FrameIID GetFrameId() const override MOZ_MUST_OVERRIDE = 0;
 
 //----------------------------------------------------------------------
+
+namespace mozilla {
+
+// A simple class to group stuff that we need to keep around when tearing down
+// a frame tree.
+//
+// Native anonymous content created by the frames need to get unbound _after_
+// the frame has been destroyed, see bug 1400618.
+//
+// We destroy the anonymous content bottom-up (so, in reverse order), because
+// it's a bit simpler, though we generally don't have that much nested anonymous
+// content (except for scrollbars).
+struct MOZ_RAII FrameDestroyContext {
+  explicit FrameDestroyContext(PresShell* aPs) : mPresShell(aPs) {}
+
+  void AddAnonymousContent(already_AddRefed<nsIContent>&& aContent) {
+    if (RefPtr<nsIContent> content = aContent) {
+      mAnonymousContent.AppendElement(std::move(content));
+    }
+  }
+
+  ~FrameDestroyContext();
+
+ private:
+  PresShell* const mPresShell;
+  AutoTArray<RefPtr<nsIContent>, 100> mAnonymousContent;
+};
+
+}  // namespace mozilla
 
 /**
  * A frame in the layout model. This interface is supported by all frame
@@ -561,8 +590,7 @@ class nsIFrame : public nsQueryFrame {
 
   explicit nsIFrame(ComputedStyle* aStyle, nsPresContext* aPresContext,
                     ClassID aID)
-      : mRect(),
-        mContent(nullptr),
+      : mContent(nullptr),
         mComputedStyle(aStyle),
         mPresContext(aPresContext),
         mParent(nullptr),
@@ -631,31 +659,7 @@ class nsIFrame : public nsQueryFrame {
 
   void* operator new(size_t, mozilla::PresShell*) MOZ_MUST_OVERRIDE;
 
-  using PostDestroyData = mozilla::PostFrameDestroyData;
-  struct MOZ_RAII AutoPostDestroyData {
-    explicit AutoPostDestroyData(nsPresContext* aPresContext)
-        : mPresContext(aPresContext) {}
-    ~AutoPostDestroyData() {
-      for (auto& content : mozilla::Reversed(mData.mAnonymousContent)) {
-        nsIFrame::DestroyAnonymousContent(mPresContext, content.forget());
-      }
-    }
-    nsPresContext* mPresContext;
-    PostDestroyData mData;
-  };
-  /**
-   * Destroys this frame and each of its child frames (recursively calls
-   * Destroy() for each child). If this frame is a first-continuation, this
-   * also removes the frame from the primary frame map and clears undisplayed
-   * content for its content node.
-   * If the frame is a placeholder, it also ensures the out-of-flow frame's
-   * removal and destruction.
-   */
-  void Destroy() {
-    AutoPostDestroyData data(PresContext());
-    DestroyFrom(this, data.mData);
-    // Note that |this| is deleted at this point.
-  }
+  using DestroyContext = mozilla::FrameDestroyContext;
 
   /**
    * Flags for PeekOffsetCharacter, PeekOffsetNoAmount, PeekOffsetWord return
@@ -689,32 +693,19 @@ class nsIFrame : public nsQueryFrame {
         : mRespectClusters(true), mIgnoreUserStyleAll(false) {}
   };
 
- protected:
-  friend class nsBlockFrame;  // for access to DestroyFrom
+  virtual void Destroy(DestroyContext&);
 
+ protected:
   /**
    * Return true if the frame is part of a Selection.
    * Helper method to implement the public IsSelected() API.
    */
   virtual bool IsFrameSelected() const;
 
-  /**
-   * Implements Destroy(). Do not call this directly except from within a
-   * DestroyFrom() implementation.
-   *
-   * @note This will always be called, so it is not necessary to override
-   *       Destroy() in subclasses of nsFrame, just DestroyFrom().
-   *
-   * @param  aDestructRoot is the root of the subtree being destroyed
-   */
-  virtual void DestroyFrom(nsIFrame* aDestructRoot,
-                           PostDestroyData& aPostDestroyData);
-  friend class nsFrameList;  // needed to pass aDestructRoot through to children
-  friend class nsLineBox;    // needed to pass aDestructRoot through to children
-  friend class nsContainerFrame;  // needed to pass aDestructRoot through to
-                                  // children
   template <class Source>
   friend class do_QueryFrameHelper;  // to read mClass
+  friend class nsBlockFrame;         // for GetCaretBaseline
+  friend class nsContainerFrame;     // for ReparentFrameViewTo
 
   virtual ~nsIFrame();
 
@@ -1071,6 +1062,12 @@ class nsIFrame : public nsQueryFrame {
         std::max(0, size.ISize(aWritingMode) - bp.IStartEnd(aWritingMode)),
         std::max(0, size.BSize(aWritingMode) - bp.BStartEnd(aWritingMode)));
   }
+  nscoord ContentISize(mozilla::WritingMode aWritingMode) const {
+    return ContentSize(aWritingMode).ISize(aWritingMode);
+  }
+  nscoord ContentBSize(mozilla::WritingMode aWritingMode) const {
+    return ContentSize(aWritingMode).BSize(aWritingMode);
+  }
 
   /**
    * When we change the size of the frame's border-box rect, we may need to
@@ -1292,7 +1289,6 @@ class nsIFrame : public nsQueryFrame {
 
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(UsedMarginProperty, nsMargin)
   NS_DECLARE_FRAME_PROPERTY_DELETABLE(UsedPaddingProperty, nsMargin)
-  NS_DECLARE_FRAME_PROPERTY_DELETABLE(UsedBorderProperty, nsMargin)
 
   // This tracks the start and end page value for a frame.
   //
@@ -1321,6 +1317,17 @@ class nsIFrame : public nsQueryFrame {
     if (const PageValues* const values = GetProperty(PageValuesProperty())) {
       return values->mEndPageValue;
     }
+    return nullptr;
+  }
+
+  // Returns the page name based on style information for this frame, or null
+  // if the value is auto.
+  const nsAtom* GetStylePageName() const {
+    const mozilla::StylePageName& pageName = StylePage()->mPage;
+    if (pageName.IsPageName()) {
+      return pageName.AsPageName().AsAtom();
+    }
+    MOZ_ASSERT(pageName.IsAuto(), "Impossible page name");
     return nullptr;
   }
 
@@ -1578,6 +1585,15 @@ class nsIFrame : public nsQueryFrame {
                                                  const nsFontMetrics&) const;
   // Gets the page-name value to be used for the page that contains this frame
   // during paginated reflow.
+  // This only inspects the first in-flow child of this frame, and if that
+  // is a container frame then its first in-flow child, until it reaches the
+  // deepest child of the tree.
+  // This will resolve auto values, including the case where no frame has a
+  // page-name set in which case it will return the empty atom. It will never
+  // return null.
+  // This is intended to be used either on the root frame to find the first
+  // page's page-name, or on a newly created continuation to find what the new
+  // page's page-name will be.
   const nsAtom* ComputePageValue() const MOZ_NONNULL_RETURN;
 
   ///////////////////////////////////////////////////////////////////////////////
@@ -2108,6 +2124,22 @@ class nsIFrame : public nsQueryFrame {
   MOZ_CAN_RUN_SCRIPT nsresult MoveCaretToEventPoint(
       nsPresContext* aPresContext, mozilla::WidgetMouseEvent* aMouseEvent,
       nsEventStatus* aEventStatus);
+
+  /**
+   * Check whether aSecondaryButtonMouseEvent should or should not cause moving
+   * caret at event point.  This is designed only for the secondary mouse button
+   * event (i.e., right button event in general).
+   *
+   * @param aFrameSelection         The nsFrameSelection which should handle the
+   *                                caret move with.
+   * @param aSecondaryButtonEvent   Must be the button value is
+   *                                MouseButton::eSecondary.
+   * @param aContentAtEventPoint    The content node at the event point.
+   */
+  [[nodiscard]] bool MovingCaretToEventPointAllowedIfSecondaryButtonEvent(
+      const nsFrameSelection& aFrameSelection,
+      mozilla::WidgetMouseEvent& aSecondaryButtonEvent,
+      const nsIContent& aContentAtEventPoint) const;
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD HandleMultiplePress(
       nsPresContext* aPresContext, mozilla::WidgetGUIEvent* aEvent,
@@ -4900,9 +4932,6 @@ class nsIFrame : public nsQueryFrame {
   void HandleLastRememberedSize();
 
  protected:
-  static void DestroyAnonymousContent(nsPresContext* aPresContext,
-                                      already_AddRefed<nsIContent>&& aContent);
-
   /**
    * Reparent this frame's view if it has one.
    */

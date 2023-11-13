@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "mozilla/BasicEvents.h"
+#include "mozilla/EventForwards.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/dom/DataTransfer.h"
 #include "mozilla/ipc/IPCForwards.h"
@@ -166,6 +167,59 @@ class WidgetMouseEventBase : public WidgetInputEvent {
   bool IsLeftClickEvent() const {
     return mMessage == eMouseClick && mButton == MouseButton::ePrimary;
   }
+
+  /**
+   * Returns true if this event changes a button state to "pressed".
+   */
+  [[nodiscard]] bool IsPressingButton() const {
+    MOZ_ASSERT(IsTrusted());
+    if (mClass == eMouseEventClass) {
+      return mMessage == eMouseDown;
+    }
+    if (mButton == MouseButton::eNotPressed) {
+      return false;
+    }
+    // If this is an ePointerDown event whose mButton is not "not pressed", this
+    // is a button pressing event.
+    if (mMessage == ePointerDown) {
+      return true;
+    }
+    // If 2 or more buttons are pressed at same time, they are sent with
+    // pointermove rather than pointerdown.  Therefore, let's check whether
+    // mButtons contains the proper flag for the pressing button.
+    const bool buttonsContainButton = !!(
+        mButtons & MouseButtonsFlagToChange(static_cast<MouseButton>(mButton)));
+    return mMessage == ePointerMove && buttonsContainButton;
+  }
+
+  /**
+   * Returns true if this event changes a button state to "released".
+   */
+  [[nodiscard]] bool IsReleasingButton() const {
+    MOZ_ASSERT(IsTrusted());
+    if (mClass == eMouseEventClass) {
+      return mMessage == eMouseUp;
+    }
+    if (mButton == MouseButton::eNotPressed) {
+      return false;
+    }
+    // If this is an ePointerUp event whose mButton is not "not pressed", this
+    // is a button release event.
+    if (mMessage == ePointerUp) {
+      return true;
+    }
+    // If the releasing button is not the last button of pressing buttons, web
+    // apps notified by pointermove rather than pointerup.  Therefore, let's
+    // check whether mButtons loses the proper flag for the releasing button.
+    const bool buttonsLoseTheButton = !(
+        mButtons & MouseButtonsFlagToChange(static_cast<MouseButton>(mButton)));
+    return mMessage == ePointerMove && buttonsLoseTheButton;
+  }
+
+  /**
+   * Returns true if the input source supports hover state like a mouse.
+   */
+  [[nodiscard]] bool InputSourceSupportsHover() const;
 };
 
 /******************************************************************************
@@ -205,7 +259,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
         mContextMenuTrigger(eNormal),
         mClickCount(0),
         mIgnoreRootScrollFrame(false),
-        mUseLegacyNonPrimaryDispatch(false),
         mClickEventPrevented(false) {}
 
   WidgetMouseEvent(bool aIsTrusted, EventMessage aMessage, nsIWidget* aWidget,
@@ -217,7 +270,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
         mContextMenuTrigger(eNormal),
         mClickCount(0),
         mIgnoreRootScrollFrame(false),
-        mUseLegacyNonPrimaryDispatch(false),
         mClickEventPrevented(false) {}
 
 #ifdef DEBUG
@@ -237,7 +289,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
         mContextMenuTrigger(aContextMenuTrigger),
         mClickCount(0),
         mIgnoreRootScrollFrame(false),
-        mUseLegacyNonPrimaryDispatch(false),
         mClickEventPrevented(false) {
     if (aMessage == eContextMenu) {
       mButton = (mContextMenuTrigger == eNormal) ? MouseButton::eSecondary
@@ -288,10 +339,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
   // Whether the event should ignore scroll frame bounds during dispatch.
   bool mIgnoreRootScrollFrame;
 
-  // Indicates whether the event should dispatch click events for non-primary
-  // mouse buttons on window and document.
-  bool mUseLegacyNonPrimaryDispatch;
-
   // Whether the event shouldn't cause click event.
   bool mClickEventPrevented;
 
@@ -302,7 +349,6 @@ class WidgetMouseEvent : public WidgetMouseEventBase,
     mExitFrom = aEvent.mExitFrom;
     mClickCount = aEvent.mClickCount;
     mIgnoreRootScrollFrame = aEvent.mIgnoreRootScrollFrame;
-    mUseLegacyNonPrimaryDispatch = aEvent.mUseLegacyNonPrimaryDispatch;
     mClickEventPrevented = aEvent.mClickEventPrevented;
   }
 

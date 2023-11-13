@@ -114,7 +114,7 @@ class FakeKind(Kind):
 
 
 class WithFakeKind(TaskGraphGenerator):
-    def _load_kinds(self, graph_config, target_kind=None):
+    def _load_kinds(self, graph_config, target_kinds=None):
         for kind_name, cfg in self.parameters["_kinds"]:
             yield FakeKind.create(kind_name, cfg, graph_config)
 
@@ -194,7 +194,6 @@ def maketgg(monkeypatch):
 
 @pytest.fixture
 def run_transform():
-
     graph_config = fake_load_graph_config("/root")
     kind = FakeKind.create("fake", {}, graph_config)
 
@@ -208,7 +207,6 @@ def run_transform():
 
 @pytest.fixture
 def run_full_config_transform():
-
     graph_config = fake_load_graph_config("/root")
     kind = FakeKind.create("fullfake", {}, graph_config)
 

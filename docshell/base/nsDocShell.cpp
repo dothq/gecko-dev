@@ -1314,6 +1314,7 @@ void nsDocShell::FirePageHideShowNonRecursive(bool aShow) {
           mScriptGlobal ? mScriptGlobal->GetCurrentInnerWindow() : nullptr;
       if (mBrowsingContext->IsTop()) {
         doc->NotifyPossibleTitleChange(false);
+        doc->SetLoadingOrRestoredFromBFCacheTimeStampToNow();
         if (inner) {
           // Now that we have found the inner window of the page restored
           // from the history, we have to make sure that
@@ -1372,29 +1373,21 @@ void nsDocShell::FirePageHideShowNonRecursive(bool aShow) {
   }
 }
 
-nsresult nsDocShell::Dispatch(TaskCategory aCategory,
-                              already_AddRefed<nsIRunnable>&& aRunnable) {
+nsresult nsDocShell::Dispatch(already_AddRefed<nsIRunnable>&& aRunnable) {
   nsCOMPtr<nsIRunnable> runnable(aRunnable);
-  nsCOMPtr<nsPIDOMWindowOuter> win = GetWindow();
-  if (NS_WARN_IF(!win)) {
+  if (NS_WARN_IF(!GetWindow())) {
     // Window should only be unavailable after destroyed.
     MOZ_ASSERT(mIsBeingDestroyed);
     return NS_ERROR_FAILURE;
   }
-
-  if (win->GetDocGroup()) {
-    return win->GetDocGroup()->Dispatch(aCategory, runnable.forget());
-  }
-
-  return SchedulerGroup::Dispatch(aCategory, runnable.forget());
+  return SchedulerGroup::Dispatch(runnable.forget());
 }
 
 NS_IMETHODIMP
 nsDocShell::DispatchLocationChangeEvent() {
-  return Dispatch(
-      TaskCategory::Other,
-      NewRunnableMethod("nsDocShell::FireDummyOnLocationChange", this,
-                        &nsDocShell::FireDummyOnLocationChange));
+  return Dispatch(NewRunnableMethod("nsDocShell::FireDummyOnLocationChange",
+                                    this,
+                                    &nsDocShell::FireDummyOnLocationChange));
 }
 
 NS_IMETHODIMP
@@ -2578,7 +2571,7 @@ void nsDocShell::MaybeCreateInitialClientSource(nsIPrincipal* aPrincipal) {
   }
 
   mInitialClientSource = ClientManager::CreateSource(
-      ClientType::Window, win->EventTargetFor(TaskCategory::Other), principal);
+      ClientType::Window, GetMainThreadSerialEventTarget(), principal);
   MOZ_DIAGNOSTIC_ASSERT(mInitialClientSource);
 
   // Mark the initial client as execution ready, but owned by the docshell.
@@ -5771,15 +5764,6 @@ nsDocShell::OnStateChange(nsIWebProgress* aProgress, nsIRequest* aRequest,
     mBusyFlags = (BusyFlags)(BUSY_FLAGS_BUSY | BUSY_FLAGS_BEFORE_PAGE_LOAD);
 
     if ((aStateFlags & STATE_RESTORING) == 0) {
-      // Show the progress cursor if the pref is set
-      if (StaticPrefs::ui_use_activity_cursor()) {
-        nsCOMPtr<nsIWidget> mainWidget;
-        GetMainWidget(getter_AddRefs(mainWidget));
-        if (mainWidget) {
-          mainWidget->SetCursor(nsIWidget::Cursor{eCursor_spinning});
-        }
-      }
-
       if (StaticPrefs::browser_sessionstore_platform_collection_AtStartup()) {
         if (IsForceReloadType(mLoadType)) {
           if (WindowContext* windowContext =
@@ -5797,15 +5781,6 @@ nsDocShell::OnStateChange(nsIWebProgress* aProgress, nsIRequest* aRequest,
   } else if ((aStateFlags & STATE_STOP) && (aStateFlags & STATE_IS_NETWORK)) {
     // Page has finished loading
     mBusyFlags = BUSY_FLAGS_NONE;
-
-    // Hide the progress cursor if the pref is set
-    if (StaticPrefs::ui_use_activity_cursor()) {
-      nsCOMPtr<nsIWidget> mainWidget;
-      GetMainWidget(getter_AddRefs(mainWidget));
-      if (mainWidget) {
-        mainWidget->SetCursor(nsIWidget::Cursor{eCursor_standard});
-      }
-    }
   }
 
   if ((~aStateFlags & (STATE_IS_DOCUMENT | STATE_STOP)) == 0) {
@@ -6072,7 +6047,8 @@ already_AddRefed<nsIURI> nsDocShell::AttemptURIFixup(
     nsIChannel* aChannel, nsresult aStatus,
     const mozilla::Maybe<nsCString>& aOriginalURIString, uint32_t aLoadType,
     bool aIsTopFrame, bool aAllowKeywordFixup, bool aUsePrivateBrowsing,
-    bool aNotifyKeywordSearchLoading, nsIInputStream** aNewPostData) {
+    bool aNotifyKeywordSearchLoading, nsIInputStream** aNewPostData,
+    bool* outWasSchemelessInput) {
   if (aStatus != NS_ERROR_UNKNOWN_HOST && aStatus != NS_ERROR_NET_RESET &&
       aStatus != NS_ERROR_CONNECTION_REFUSED &&
       aStatus !=
@@ -6166,6 +6142,7 @@ already_AddRefed<nsIURI> nsDocShell::AttemptURIFixup(
         }
         if (info) {
           info->GetPreferredURI(getter_AddRefs(newURI));
+          info->GetWasSchemelessInput(outWasSchemelessInput);
           if (newURI) {
             info->GetKeywordAsSent(keywordAsSent);
             info->GetKeywordProviderName(keywordProviderName);
@@ -6214,8 +6191,7 @@ already_AddRefed<nsIURI> nsDocShell::AttemptURIFixup(
       nsCOMPtr<nsIURIFixup> uriFixup = components::URIFixup::Service();
       if (uriFixup) {
         nsCOMPtr<nsIURIFixupInfo> fixupInfo;
-        uriFixup->GetFixupURIInfo(oldSpec,
-                                  nsIURIFixup::FIXUP_FLAGS_MAKE_ALTERNATE_URI,
+        uriFixup->GetFixupURIInfo(oldSpec, nsIURIFixup::FIXUP_FLAG_NONE,
                                   getter_AddRefs(fixupInfo));
         if (fixupInfo) {
           fixupInfo->GetPreferredURI(getter_AddRefs(newURI));
@@ -7278,7 +7254,7 @@ nsresult nsDocShell::RestorePresentation(nsISHEntry* aSHEntry,
   mRestorePresentationEvent.Revoke();
 
   RefPtr<RestorePresentationEvent> evt = new RestorePresentationEvent(this);
-  nsresult rv = Dispatch(TaskCategory::Other, do_AddRef(evt));
+  nsresult rv = Dispatch(do_AddRef(evt));
   if (NS_SUCCEEDED(rv)) {
     mRestorePresentationEvent = evt.get();
     // The rest of the restore processing will happen on our event
@@ -7913,7 +7889,7 @@ nsresult nsDocShell::CreateContentViewer(const nsACString& aContentType,
     if (failedURI) {
       errorOnLocationChangeNeeded =
           OnNewURI(failedURI, failedChannel, triggeringPrincipal, nullptr,
-                   nullptr, nullptr, false, false, false);
+                   nullptr, nullptr, false, false);
     }
 
     // Be sure to have a correct mLSHE, it may have been cleared by
@@ -7940,9 +7916,8 @@ nsresult nsDocShell::CreateContentViewer(const nsACString& aContentType,
   bool onLocationChangeNeeded = false;
   if (finalURI) {
     // Pass false for aCloneSHChildren, since we're loading a new page here.
-    onLocationChangeNeeded =
-        OnNewURI(finalURI, aOpenedChannel, nullptr, nullptr, nullptr, nullptr,
-                 false, true, false);
+    onLocationChangeNeeded = OnNewURI(finalURI, aOpenedChannel, nullptr,
+                                      nullptr, nullptr, nullptr, true, false);
   }
 
   // let's try resetting the load group if we need to...
@@ -8935,7 +8910,7 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
   // 1668126)
   bool locationChangeNeeded = OnNewURI(
       newURI, nullptr, newURITriggeringPrincipal, newURIPrincipalToInherit,
-      newURIPartitionedPrincipalToInherit, newCsp, false, true, true);
+      newURIPartitionedPrincipalToInherit, newCsp, true, true);
 
   nsCOMPtr<nsIInputStream> postData;
   uint32_t cacheKey = 0;
@@ -9366,7 +9341,7 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
 
       // Do this asynchronously
       nsCOMPtr<nsIRunnable> ev = new InternalLoadEvent(this, aLoadState);
-      return Dispatch(TaskCategory::Other, ev.forget());
+      return Dispatch(ev.forget());
     }
 
     // Just ignore this load attempt
@@ -9499,7 +9474,7 @@ nsresult nsDocShell::InternalLoad(nsDocShellLoadState* aLoadState,
     // If it isn't a reload, the request already failed to be upgraded and
     // https-first is enabled then don't ask the user again for permission to
     // unload and just unload.
-    if (!isHistoryOrReload && aLoadState->IsExemptFromHTTPSOnlyMode() &&
+    if (!isHistoryOrReload && aLoadState->IsExemptFromHTTPSFirstMode() &&
         nsHTTPSOnlyUtils::IsHttpsFirstModeEnabled(isPrivateWin)) {
       rv = mContentViewer->PermitUnload(
           nsIContentViewer::PermitUnloadAction::eDontPromptAndUnload,
@@ -10772,13 +10747,13 @@ nsresult nsDocShell::OpenInitializedChannel(nsIChannel* aChannel,
     // When using DocumentChannel, all redirect handling is done in the parent,
     // so we just need the child variant to watch for the internal redirect
     // to the final channel.
-    rv = AddClientChannelHelperInChild(
-        aChannel, win->EventTargetFor(TaskCategory::Other));
+    rv = AddClientChannelHelperInChild(aChannel,
+                                       GetMainThreadSerialEventTarget());
     docChannel->SetInitialClientInfo(GetInitialClientInfo());
   } else {
     rv = AddClientChannelHelper(aChannel, std::move(noReservedClient),
                                 GetInitialClientInfo(),
-                                win->EventTargetFor(TaskCategory::Other));
+                                GetMainThreadSerialEventTarget());
   }
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -10823,8 +10798,7 @@ nsresult nsDocShell::OpenRedirectedChannel(nsDocShellLoadState* aLoadState) {
 
   // If we did a process switch, then we should have an existing allocated
   // ClientInfo, so we just need to allocate a corresponding ClientSource.
-  CreateReservedSourceIfNeeded(channel,
-                               win->EventTargetFor(TaskCategory::Other));
+  CreateReservedSourceIfNeeded(channel, GetMainThreadSerialEventTarget());
 
   RefPtr<nsDocumentOpenInfo> loader =
       new nsDocumentOpenInfo(this, nsIURILoader::DONT_RETARGET, nullptr);
@@ -10868,6 +10842,7 @@ nsresult nsDocShell::OpenRedirectedChannel(nsDocShellLoadState* aLoadState) {
   return NS_OK;
 }
 
+// https://html.spec.whatwg.org/#scrolling-to-a-fragment
 nsresult nsDocShell::ScrollToAnchor(bool aCurHasRef, bool aNewHasRef,
                                     nsACString& aNewHash, uint32_t aLoadType) {
   if (!mCurrentURI) {
@@ -10897,87 +10872,70 @@ nsresult nsDocShell::ScrollToAnchor(bool aCurHasRef, bool aNewHasRef,
   // Both the new and current URIs refer to the same page. We can now
   // browse to the hash stored in the new URI.
 
-  if (!aNewHash.IsEmpty()) {
-    // anchor is there, but if it's a load from history,
-    // we don't have any anchor jumping to do
-    bool scroll = aLoadType != LOAD_HISTORY && aLoadType != LOAD_RELOAD_NORMAL;
+  // If it's a load from history, we don't have any anchor jumping to do.
+  // Scrollbar position will be restored by the caller based on positions stored
+  // in session history.
+  bool scroll = aLoadType != LOAD_HISTORY && aLoadType != LOAD_RELOAD_NORMAL;
 
-    // We assume that the bytes are in UTF-8, as it says in the
-    // spec:
-    // http://www.w3.org/TR/html4/appendix/notes.html#h-B.2.1
-
-    // We try the UTF-8 string first, and then try the document's
-    // charset (see below).  If the string is not UTF-8,
-    // conversion will fail and give us an empty Unicode string.
-    // In that case, we should just fall through to using the
-    // page's charset.
-    nsresult rv = NS_ERROR_FAILURE;
-    NS_ConvertUTF8toUTF16 uStr(aNewHash);
-    if (!uStr.IsEmpty()) {
-      rv = presShell->GoToAnchor(uStr, scroll, ScrollFlags::ScrollSmoothAuto);
-    }
-
-    if (NS_FAILED(rv)) {
-      char* str = ToNewCString(aNewHash, mozilla::fallible);
-      if (!str) {
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
-      nsUnescape(str);
-      NS_ConvertUTF8toUTF16 utf16Str(str);
-      if (!utf16Str.IsEmpty()) {
-        rv = presShell->GoToAnchor(utf16Str, scroll,
-                                   ScrollFlags::ScrollSmoothAuto);
-      }
-      free(str);
-    }
-
-    // Above will fail if the anchor name is not UTF-8.  Need to
-    // convert from document charset to unicode.
-    if (NS_FAILED(rv)) {
-      // Get a document charset
-      NS_ENSURE_TRUE(mContentViewer, NS_ERROR_FAILURE);
-      Document* doc = mContentViewer->GetDocument();
-      NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
-      nsAutoCString charset;
-      doc->GetDocumentCharacterSet()->Name(charset);
-
-      nsCOMPtr<nsITextToSubURI> textToSubURI =
-          do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      // Unescape and convert to unicode
-      nsAutoString uStr;
-
-      rv = textToSubURI->UnEscapeAndConvert(charset, aNewHash, uStr);
-      NS_ENSURE_SUCCESS(rv, rv);
-
-      // Ignore return value of GoToAnchor, since it will return an error
-      // if there is no such anchor in the document, which is actually a
-      // success condition for us (we want to update the session history
-      // with the new URI no matter whether we actually scrolled
-      // somewhere).
-      //
-      // When aNewHash contains "%00", unescaped string may be empty.
-      // And GoToAnchor asserts if we ask it to scroll to an empty ref.
-      presShell->GoToAnchor(uStr, scroll && !uStr.IsEmpty(),
-                            ScrollFlags::ScrollSmoothAuto);
-    }
-  } else {
-    // Tell the shell it's at an anchor, without scrolling.
+  if (aNewHash.IsEmpty()) {
+    // 2. If fragment is the empty string, then return the special value top of
+    // the document.
+    //
+    // Tell the shell it's at an anchor without scrolling.
     presShell->GoToAnchor(u""_ns, false);
 
-    // An empty anchor was found, but if it's a load from history,
-    // we don't have to jump to the top of the page. Scrollbar
-    // position will be restored by the caller, based on positions
-    // stored in session history.
-    if (aLoadType == LOAD_HISTORY || aLoadType == LOAD_RELOAD_NORMAL) {
-      return NS_OK;
+    if (scroll) {
+      // Scroll to the top of the page. Ignore the return value; failure to
+      // scroll here (e.g. if there is no root scrollframe) is not grounds for
+      // canceling the load!
+      SetCurScrollPosEx(0, 0);
     }
-    // An empty anchor. Scroll to the top of the page.  Ignore the
-    // return value; failure to scroll here (e.g. if there is no
-    // root scrollframe) is not grounds for canceling the load!
-    SetCurScrollPosEx(0, 0);
+
+    return NS_OK;
   }
+
+  // 3. Let potentialIndicatedElement be the result of finding a potential
+  // indicated element given document and fragment.
+  NS_ConvertUTF8toUTF16 uStr(aNewHash);
+  auto rv = presShell->GoToAnchor(uStr, scroll, ScrollFlags::ScrollSmoothAuto);
+
+  // 4. If potentialIndicatedElement is not null, then return
+  // potentialIndicatedElement.
+  if (NS_SUCCEEDED(rv)) {
+    return NS_OK;
+  }
+
+  // 5. Let fragmentBytes be the result of percent-decoding fragment.
+  nsAutoCString fragmentBytes;
+  const bool unescaped = NS_UnescapeURL(aNewHash.Data(), aNewHash.Length(),
+                                        /* aFlags = */ 0, fragmentBytes);
+
+  if (!unescaped) {
+    // Another attempt is only necessary if characters were unescaped.
+    return NS_OK;
+  }
+
+  if (fragmentBytes.IsEmpty()) {
+    // When aNewHash contains "%00", the unescaped string may be empty, and
+    // GoToAnchor asserts if we ask it to scroll to an empty ref.
+    presShell->GoToAnchor(u""_ns, false);
+    return NS_OK;
+  }
+
+  // 6. Let decodedFragment be the result of running UTF-8 decode without BOM on
+  // fragmentBytes.
+  nsAutoString decodedFragment;
+  rv = UTF_8_ENCODING->DecodeWithoutBOMHandling(fragmentBytes, decodedFragment);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // 7. Set potentialIndicatedElement to the result of finding a potential
+  // indicated element given document and decodedFragment.
+  //
+  // Ignore the return value of GoToAnchor, since it will return an error if
+  // there is no such anchor in the document, which is actually a success
+  // condition for us (we want to update the session history with the new URI no
+  // matter whether we actually scrolled somewhere).
+  presShell->GoToAnchor(decodedFragment, scroll, ScrollFlags::ScrollSmoothAuto);
 
   return NS_OK;
 }
@@ -10987,8 +10945,7 @@ bool nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel,
                           nsIPrincipal* aPrincipalToInherit,
                           nsIPrincipal* aPartitionedPrincipalToInherit,
                           nsIContentSecurityPolicy* aCsp,
-                          bool aFireOnLocationChange, bool aAddToGlobalHistory,
-                          bool aCloneSHChildren) {
+                          bool aAddToGlobalHistory, bool aCloneSHChildren) {
   MOZ_ASSERT(aURI, "uri is null");
   MOZ_ASSERT(!aChannel || !aTriggeringPrincipal, "Shouldn't have both set");
 
@@ -11203,7 +11160,7 @@ bool nsDocShell::OnNewURI(nsIURI* aURI, nsIChannel* aChannel,
       aCloneSHChildren ? uint32_t(LOCATION_CHANGE_SAME_DOCUMENT) : 0;
 
   bool onLocationChangeNeeded =
-      SetCurrentURI(aURI, aChannel, aFireOnLocationChange,
+      SetCurrentURI(aURI, aChannel, false,
                     /* aIsInitialAboutBlank */ false, locationFlags);
   // Make sure to store the referrer from the channel, if any
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(aChannel));
@@ -12945,7 +12902,7 @@ nsresult nsDocShell::OnLinkClick(
   nsCOMPtr<nsIRunnable> ev =
       new OnLinkClickEvent(this, aContent, loadState, noOpenerImplied,
                            aIsTrusted, aTriggeringPrincipal);
-  return Dispatch(TaskCategory::UI, ev.forget());
+  return Dispatch(ev.forget());
 }
 
 bool nsDocShell::ShouldOpenInBlankTarget(const nsAString& aOriginalTarget,

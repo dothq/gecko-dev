@@ -44,6 +44,8 @@ policy-Cookies = Allow or deny websites to set cookies.
 # Containers in this context is referring to container tabs in Firefox.
 policy-Containers = Set policies related to containers.
 
+policy-DisableAccounts = Disable account-based services, including sync.
+
 policy-DisabledCiphers = Disable ciphers.
 
 policy-DefaultDownloadDirectory = Set the default download directory.
@@ -152,6 +154,8 @@ policy-ManagedBookmarks = Configures a list of bookmarks managed by an administr
 policy-ManualAppUpdateOnly = Allow manual updates only and do not notify the user about updates.
 
 policy-PrimaryPassword = Require or prevent using a Primary Password.
+
+policy-PrintingEnabled = Enable or disable printing.
 
 policy-NetworkPrediction = Enable or disable network prediction (DNS prefetching).
 

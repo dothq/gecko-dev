@@ -23,6 +23,7 @@ add_setup(async function () {
 
 add_task(async function url() {
   await BrowserTestUtils.withNewTab("http://example.com/", async () => {
+    await PlacesFrecencyRecalculator.recalculateAnyOutdatedFrecencies();
     gURLBar.focus();
     gURLBar.selectionEnd = gURLBar.untrimmedValue.length;
     gURLBar.selectionStart = gURLBar.untrimmedValue.length;
@@ -32,7 +33,7 @@ add_task(async function url() {
     let details = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
     Assert.ok(details.autofill);
     Assert.equal(details.url, "http://example.com/");
-    Assert.equal(gURLBar.value, "example.com/");
+    Assert.equal(gURLBar.value, UrlbarTestUtils.trimURL("http://example.com/"));
     await UrlbarTestUtils.promisePopupClose(window);
   });
 });

@@ -383,8 +383,6 @@ Each key in the object is the name of a preference. A key's value depends on the
 
 The following is a partial list of `collected preferences <https://searchfox.org/mozilla-central/search?q=const+DEFAULT_ENVIRONMENT_PREFS&path=>`_.
 
-- ``browser.fixup.alternate.enabled``: Whether the browser should try to modify unknown hosts by adding a prefix (e.g. www) and a suffix (.com). Defaults to false.
-
 - ``browser.migrate.interactions.bookmarks``: True if the user has imported bookmarks from another browser before. This preference gets transferred during profile resets.
 
 - ``browser.migrate.interactions.csvpasswords``: True if the user has imported passwords through the migration wizard from a CSV file. This preference gets transferred during profile resets.
@@ -408,8 +406,6 @@ The following is a partial list of `collected preferences <https://searchfox.org
 - ``browser.urlbar.quicksuggest.dataCollection.enabled``: Whether the user has opted in to data collection for Firefox Suggest. This pref is set to true when the user opts in to the Firefox Suggest onboarding dialog modal. The user can also toggle the pref using a toggle switch in the Firefox Suggest preferences UI.
 
 - ``browser.urlbar.showSearchTerms.enabled``: True if to show the search term in the urlbar while on a default search engine results page.
-
-- ``browser.urlbar.suggest.bestmatch``: True if to show best match result is enabled in the urlbar.
 
 - ``browser.urlbar.suggest.quicksuggest.nonsponsored``: True if non-sponsored Firefox Suggest suggestions are enabled in the urlbar.
 
@@ -472,6 +468,8 @@ The following is a partial list of `collected preferences <https://searchfox.org
 - ``nimbus.qa.pref-2``: Used to monitor the results of pref-setting test experiments.
 
 - ``signon.firefoxRelay.feature``: User choice regarding Firefox Relay integration with Firefox Password Manager. Can be one of undefined, "available", "offered", "enabled" or "disabled".
+
+- ``dom.popup_allowed_events``: Which events should allow popups. Only exposed with about:config.
 
 attribution
 ~~~~~~~~~~~

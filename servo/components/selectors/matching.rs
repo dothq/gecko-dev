@@ -40,6 +40,9 @@ bitflags! {
         /// :first-of-type, or :nth-of-type.
         const HAS_SLOW_SELECTOR_LATER_SIBLINGS = 1 << 1;
 
+        /// HAS_SLOW_SELECTOR* was set by the presence of :nth (But not of).
+        const HAS_SLOW_SELECTOR_NTH = 1 << 2;
+
         /// When a DOM mutation occurs on a child that might be matched by
         /// :nth-last-child(.. of <selector list>), earlier children must be
         /// restyled, and HAS_SLOW_SELECTOR will be set (which normally
@@ -48,29 +51,52 @@ bitflags! {
         /// Similarly, when a DOM mutation occurs on a child that might be
         /// matched by :nth-child(.. of <selector list>), later children must be
         /// restyled, and HAS_SLOW_SELECTOR_LATER_SIBLINGS will be set.
-        const HAS_SLOW_SELECTOR_NTH_OF = 1 << 2;
+        const HAS_SLOW_SELECTOR_NTH_OF = 1 << 3;
 
         /// When a child is added or removed from the parent, the first and
         /// last children must be restyled, because they may match :first-child,
         /// :last-child, or :only-child.
-        const HAS_EDGE_CHILD_SELECTOR = 1 << 3;
+        const HAS_EDGE_CHILD_SELECTOR = 1 << 4;
 
         /// The element has an empty selector, so when a child is appended we
         /// might need to restyle the parent completely.
-        const HAS_EMPTY_SELECTOR = 1 << 4;
+        const HAS_EMPTY_SELECTOR = 1 << 5;
+
+        /// The element may anchor a relative selector.
+        const ANCHORS_RELATIVE_SELECTOR = 1 << 6;
+
+        /// The element may anchor a relative selector that is not the subject
+        /// of the whole selector.
+        const ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT = 1 << 7;
+
+        /// The element is reached by a relative selector search in the sibling direction.
+        const RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING = 1 << 8;
+
+        /// The element is reached by a relative selector search in the ancestor direction.
+        const RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR = 1 << 9;
+
+        // The element is reached by a relative selector search in both sibling and ancestor directions.
+        const RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING =
+            Self::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING.bits() |
+            Self::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR.bits();
     }
 }
 
 impl ElementSelectorFlags {
     /// Returns the subset of flags that apply to the element.
     pub fn for_self(self) -> ElementSelectorFlags {
-        self & ElementSelectorFlags::HAS_EMPTY_SELECTOR
+        self & (ElementSelectorFlags::HAS_EMPTY_SELECTOR |
+            ElementSelectorFlags::ANCHORS_RELATIVE_SELECTOR |
+            ElementSelectorFlags::ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT |
+            ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING |
+            ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR)
     }
 
     /// Returns the subset of flags that apply to the parent.
     pub fn for_parent(self) -> ElementSelectorFlags {
         self & (ElementSelectorFlags::HAS_SLOW_SELECTOR |
             ElementSelectorFlags::HAS_SLOW_SELECTOR_LATER_SIBLINGS |
+            ElementSelectorFlags::HAS_SLOW_SELECTOR_NTH |
             ElementSelectorFlags::HAS_SLOW_SELECTOR_NTH_OF |
             ElementSelectorFlags::HAS_EDGE_CHILD_SELECTOR)
     }
@@ -94,7 +120,7 @@ where
 {
     // This is pretty much any(..) but manually inlined because the compiler
     // refuses to do so from querySelector / querySelectorAll.
-    for selector in &selector_list.0 {
+    for selector in selector_list.slice() {
         let matches = matches_selector(selector, 0, None, element, context);
         if matches {
             return true;
@@ -377,9 +403,21 @@ fn matches_relative_selector<E: Element>(
     context: &mut MatchingContext<E::Impl>,
     rightmost: Rightmost,
 ) -> bool {
+    // Overall, we want to mark the path that we've traversed so that when an element
+    // is invalidated, we early-reject unnecessary relative selector invalidations.
     if relative_selector.match_hint.is_descendant_direction() {
+        if context.needs_selector_flags() {
+            element.apply_selector_flags(
+                ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR,
+            );
+        }
         let mut next_element = element.first_element_child();
         while let Some(el) = next_element {
+            if context.needs_selector_flags() {
+                el.apply_selector_flags(
+                    ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR,
+                );
+            }
             let mut matched = matches_complex_selector(
                 relative_selector.selector.iter(),
                 &el,
@@ -410,8 +448,21 @@ fn matches_relative_selector<E: Element>(
             ),
             "Not descendant direction, but also not sibling direction?"
         );
+        if context.needs_selector_flags() {
+            element.apply_selector_flags(
+                ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING,
+            );
+        }
+        let sibling_flag = if relative_selector.match_hint.is_subtree() {
+            ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR_SIBLING
+        } else {
+            ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_SIBLING
+        };
         let mut next_element = element.next_sibling_element();
         while let Some(el) = next_element {
+            if context.needs_selector_flags() {
+                el.apply_selector_flags(sibling_flag);
+            }
             let matched = if relative_selector.match_hint.is_subtree() {
                 matches_relative_selector_subtree(
                     &relative_selector.selector,
@@ -481,13 +532,20 @@ fn matches_relative_selectors<E: Element>(
     context: &mut MatchingContext<E::Impl>,
     rightmost: Rightmost,
 ) -> bool {
-    // Relative selectors have different implications, depending on if the relative
-    // selector is in the subject position or not (See style sharing code for
-    // further information)
+    // Due to style sharing implications (See style sharing code), we mark the current styling context
+    // to mark elements considered for :has matching. Additionally, we want to mark the elements themselves,
+    // since we don't want to indiscriminately invalidate every element as a potential anchor.
     if rightmost == Rightmost::Yes {
         context.considered_relative_selector.considered_anchor();
+        if context.needs_selector_flags() {
+            element.apply_selector_flags(ElementSelectorFlags::ANCHORS_RELATIVE_SELECTOR);
+        }
     } else {
         context.considered_relative_selector.considered();
+        if context.needs_selector_flags() {
+            element
+                .apply_selector_flags(ElementSelectorFlags::ANCHORS_RELATIVE_SELECTOR_NON_SUBJECT);
+        }
     }
 
     for relative_selector in selectors.iter() {
@@ -526,6 +584,11 @@ fn matches_relative_selector_subtree<E: Element>(
     let mut current = element.first_element_child();
 
     while let Some(el) = current {
+        if context.needs_selector_flags() {
+            el.apply_selector_flags(
+                ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR,
+            );
+        }
         if matches_complex_selector(selector.iter(), &el, context, rightmost) {
             return true;
         }
@@ -587,6 +650,37 @@ enum Rightmost {
     No,
 }
 
+fn host_for_part<E>(element: &E, context: &MatchingContext<E::Impl>) -> Option<E>
+where
+    E: Element,
+{
+    let scope = context.current_host;
+    let mut curr = element.containing_shadow_host()?;
+    if scope == Some(curr.opaque()) {
+        return Some(curr);
+    }
+    loop {
+        let parent = curr.containing_shadow_host();
+        if parent.as_ref().map(|h| h.opaque()) == scope {
+            return Some(curr);
+        }
+        curr = parent?;
+    }
+}
+
+fn assigned_slot<E>(element: &E, context: &MatchingContext<E::Impl>) -> Option<E>
+where
+    E: Element,
+{
+    debug_assert!(element.assigned_slot().map_or(true, |s| s.is_html_slot_element()));
+    let scope = context.current_host?;
+    let mut current_slot = element.assigned_slot()?;
+    while current_slot.containing_shadow_host().unwrap().opaque() != scope {
+        current_slot = current_slot.assigned_slot()?;
+    }
+    Some(current_slot)
+}
+
 #[inline(always)]
 fn next_element_for_combinator<E>(
     element: &E,
@@ -631,18 +725,8 @@ where
 
             element.containing_shadow_host()
         },
-        Combinator::Part => element.containing_shadow_host(),
-        Combinator::SlotAssignment => {
-            debug_assert!(element
-                .assigned_slot()
-                .map_or(true, |s| s.is_html_slot_element()));
-            let scope = context.current_host?;
-            let mut current_slot = element.assigned_slot()?;
-            while current_slot.containing_shadow_host().unwrap().opaque() != scope {
-                current_slot = current_slot.assigned_slot()?;
-            }
-            Some(current_slot)
-        },
+        Combinator::Part => host_for_part(element, context),
+        Combinator::SlotAssignment => assigned_slot(element, context),
         Combinator::PseudoElement => element.pseudo_element_originating_element(),
     }
 }
@@ -1020,6 +1104,7 @@ where
             );
             anchor.map_or(false, |a| a == element.opaque())
         },
+        Component::Invalid(..) => false,
     }
 }
 
@@ -1113,9 +1198,11 @@ where
         } else {
             ElementSelectorFlags::HAS_SLOW_SELECTOR_LATER_SIBLINGS
         };
-        if has_selectors {
-            flags |= ElementSelectorFlags::HAS_SLOW_SELECTOR_NTH_OF;
-        }
+        flags |= if has_selectors {
+            ElementSelectorFlags::HAS_SLOW_SELECTOR_NTH_OF
+        } else {
+            ElementSelectorFlags::HAS_SLOW_SELECTOR_NTH
+        };
         element.apply_selector_flags(flags);
     }
 

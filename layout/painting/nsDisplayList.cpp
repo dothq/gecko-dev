@@ -3746,8 +3746,7 @@ bool nsDisplayThemedBackground::CreateWebRenderCommands(
 }
 
 bool nsDisplayThemedBackground::IsWindowActive() const {
-  DocumentState docState = mFrame->GetContent()->OwnerDoc()->GetDocumentState();
-  return !docState.HasState(DocumentState::WINDOW_INACTIVE);
+  return !mFrame->PresContext()->Document()->IsTopLevelWindowInactive();
 }
 
 void nsDisplayThemedBackground::ComputeInvalidationRegion(
@@ -6171,7 +6170,9 @@ nsDisplayTransform::FrameTransformProperties::FrameTransformProperties(
       mRotate(aFrame->StyleDisplay()->mRotate),
       mScale(aFrame->StyleDisplay()->mScale),
       mTransform(aFrame->StyleDisplay()->mTransform),
-      mMotion(MotionPathUtils::ResolveMotionPath(aFrame, aRefBox)),
+      mMotion(aFrame->StyleDisplay()->mOffsetPath.IsNone()
+                  ? Nothing()
+                  : MotionPathUtils::ResolveMotionPath(aFrame, aRefBox)),
       mToTransformOrigin(
           GetDeltaToTransformOrigin(aFrame, aRefBox, aAppUnitsPerPixel)) {}
 
@@ -7626,7 +7627,8 @@ void nsDisplayText::RenderToContext(gfxContext* aCtx,
       // necessary. This is done here because we want selection be
       // compressed at the same time as text.
       gfxPoint pt = nsLayoutUtils::PointToGfxPoint(framePt, A2D);
-      if (f->GetTextRun(nsTextFrame::eInflated)->IsRightToLeft()) {
+      gfxTextRun* textRun = f->GetTextRun(nsTextFrame::eInflated);
+      if (textRun && textRun->IsRightToLeft()) {
         pt.x += gfxFloat(f->GetSize().width) / A2D;
       }
       gfxMatrix mat = aCtx->CurrentMatrixDouble()
@@ -8021,7 +8023,7 @@ static Maybe<wr::WrClipChainId> CreateSimpleClipRegion(
 
   auto appUnitsPerDevPixel = frame->PresContext()->AppUnitsPerDevPixel();
   const nsRect refBox =
-      nsLayoutUtils::ComputeGeometryBox(frame, clipPath.AsShape()._1);
+      nsLayoutUtils::ComputeClipPathGeometryBox(frame, clipPath.AsShape()._1);
 
   wr::WrClipId clipId{};
 
@@ -8102,7 +8104,7 @@ static void FillPolygonDataForDisplayItem(
   const auto& clipPath = style->mClipPath;
   const auto& shape = *clipPath.AsShape()._0;
   const nsRect refBox =
-      nsLayoutUtils::ComputeGeometryBox(frame, clipPath.AsShape()._1);
+      nsLayoutUtils::ComputeClipPathGeometryBox(frame, clipPath.AsShape()._1);
 
   // We only fill polygon data for polygons that are below a complexity
   // limit.

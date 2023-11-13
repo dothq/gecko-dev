@@ -27,6 +27,7 @@
 #include "mozilla/PresShellInlines.h"
 #include "mozilla/StaticPrefs_print.h"
 #include "mozilla/Telemetry.h"
+#include "mozilla/Try.h"
 #include "nsIBrowserChild.h"
 #include "nsIOService.h"
 #include "nsIScriptGlobalObject.h"
@@ -580,6 +581,8 @@ nsresult nsPrintJob::CleanupOnFailure(nsresult aResult, bool aIsPrinting) {
   PR_PL(("****  Failed %s - rv 0x%" PRIX32,
          aIsPrinting ? "Printing" : "Print Preview",
          static_cast<uint32_t>(aResult)));
+  PROFILER_MARKER_TEXT("PrintJob", LAYOUT_Printing, MarkerStack::Capture(),
+                       "nsPrintJob::CleanupOnFailure"_ns);
 
   /* cleanup... */
   if (mPagePrintTimer) {
@@ -2100,8 +2103,7 @@ void nsPrintJob::FirePrintCompletionEvent() {
   NS_ENSURE_TRUE_VOID(cv);
   nsCOMPtr<Document> doc = cv->GetDocument();
   NS_ENSURE_TRUE_VOID(doc);
-
-  NS_ENSURE_SUCCESS_VOID(doc->Dispatch(TaskCategory::Other, event.forget()));
+  NS_ENSURE_SUCCESS_VOID(doc->Dispatch(event.forget()));
 }
 
 void nsPrintJob::DisconnectPagePrintTimer() {

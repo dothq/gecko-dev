@@ -3,16 +3,20 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import {
-  ANALYSIS_API,
   ANALYSIS_RESPONSE_SCHEMA,
   ANALYSIS_REQUEST_SCHEMA,
-  RECOMMENDATIONS_API,
+  ANALYZE_RESPONSE_SCHEMA,
+  ANALYZE_REQUEST_SCHEMA,
+  ANALYSIS_STATUS_RESPONSE_SCHEMA,
+  ANALYSIS_STATUS_REQUEST_SCHEMA,
   RECOMMENDATIONS_RESPONSE_SCHEMA,
   RECOMMENDATIONS_REQUEST_SCHEMA,
-  ATTRIBUTION_API,
   ATTRIBUTION_RESPONSE_SCHEMA,
   ATTRIBUTION_REQUEST_SCHEMA,
+  REPORTING_RESPONSE_SCHEMA,
+  REPORTING_REQUEST_SCHEMA,
   ProductConfig,
+  ShoppingEnvironment,
 } from "chrome://global/content/shopping/ProductConfig.mjs";
 
 let { XPCOMUtils } = ChromeUtils.importESModule(
@@ -28,9 +32,9 @@ ChromeUtils.defineESModuleGetters(lazy, {
 
 const API_RETRIES = 3;
 const API_RETRY_TIMEOUT = 100;
-const API_POLL_ATTEMPTS = 6;
+const API_POLL_ATTEMPTS = 240;
 const API_POLL_INITIAL_WAIT = 30000;
-const API_POLL_WAIT = 5000;
+const API_POLL_WAIT = 1000;
 
 XPCOMUtils.defineLazyServiceGetters(lazy, {
   ohttpService: [
@@ -112,8 +116,6 @@ export class ShoppingProduct {
    */
   constructor(url, options = { allowValidationFailure: true }) {
     this.allowValidationFailure = !!options.allowValidationFailure;
-    this.analysis = undefined;
-    this.recommendations = undefined;
 
     this._abortController = new AbortController();
 
@@ -229,8 +231,6 @@ export class ShoppingProduct {
   /**
    * Request analysis for a product from the API.
    *
-   * @param {boolean} force
-   *  Force always requesting from API.
    * @param {Product} product
    *  Product to request for (defaults to the instances product).
    * @param {object} options
@@ -239,20 +239,15 @@ export class ShoppingProduct {
    *  Parsed JSON API result or null.
    */
   async requestAnalysis(
-    force = false,
     product = this.product,
     options = {
-      url: ANALYSIS_API,
+      url: ShoppingEnvironment.ANALYSIS_API,
       requestSchema: ANALYSIS_REQUEST_SCHEMA,
       responseSchema: ANALYSIS_RESPONSE_SCHEMA,
     }
   ) {
     if (!product) {
       return null;
-    }
-
-    if (!force && this.analysis) {
-      return this.analysis;
     }
 
     let requestOptions = {
@@ -267,8 +262,6 @@ export class ShoppingProduct {
       responseSchema,
     });
 
-    this.analysis = result;
-
     return result;
   }
 
@@ -277,8 +270,6 @@ export class ShoppingProduct {
    * Currently only provides recommendations for Amazon products,
    * which may be paid ads.
    *
-   * @param {boolean} force
-   *  Force always requesting from API.
    * @param {Product} product
    *  Product to request for (defaults to the instances product).
    * @param {object} options
@@ -287,20 +278,15 @@ export class ShoppingProduct {
    *  Parsed JSON API result or null.
    */
   async requestRecommendations(
-    force = false,
     product = this.product,
     options = {
-      url: RECOMMENDATIONS_API,
+      url: ShoppingEnvironment.RECOMMENDATIONS_API,
       requestSchema: RECOMMENDATIONS_REQUEST_SCHEMA,
       responseSchema: RECOMMENDATIONS_RESPONSE_SCHEMA,
     }
   ) {
     if (!product) {
       return null;
-    }
-
-    if (!force && this.recommendations) {
-      return this.recommendations;
     }
 
     let requestOptions = {
@@ -316,8 +302,6 @@ export class ShoppingProduct {
     for (let ad of result) {
       ad.image_blob = await this.requestImageBlob(ad.image_url);
     }
-
-    this.recommendations = result;
 
     return result;
   }
@@ -435,8 +419,8 @@ export class ShoppingProduct {
       console.error(error);
     }
 
-    // Retry failed results and 500 errors.
-    if (!result || (!responseOk && responseStatus >= 500)) {
+    // Retry 500 errors.
+    if (!responseOk && responseStatus >= 500) {
       failCount++;
       // Make sure we still want to retry
       if (failCount > maxRetries) {
@@ -638,12 +622,76 @@ export class ShoppingProduct {
   }
 
   /**
-   * Poll Analysis API until an analysis has completed.
+   * Poll Analysis Status API until an analysis has finished.
    *
-   * After an initial wait keep checking the api for results, increasing the
-   * wait each time until we have reached a maximum of tries.
+   * After an initial wait keep checking the api for results,
+   * until we have reached a maximum of tries.
    *
-   * Passes all arguments to requestAnalysis().
+   * Passes all arguments to requestAnalysisCreationStatus().
+   *
+   * @example
+   *  let analysis;
+   *  let { status } = await product.pollForAnalysisCompleted();
+   *  // Check if analysis has finished
+   *  if(status != "pending" && status != "in_progress") {
+   *    // Get the new analysis
+   *    analysis = await product.requestAnalysis();
+   *  }
+   *
+   * @example
+   * // Check the current status
+   * let { status } = await product.requestAnalysisCreationStatus();
+   * if(status == "pending" && status == "in_progress") {
+   *    // Start polling without the initial timeout if the analysis
+   *    // is already in progress.
+   *    await product.pollForAnalysisCompleted({
+   *      pollInitialWait: analysisStatus == "in_progress" ? 0 : undefined,
+   *    });
+   * }
+   * @param {object} options
+   *  Override default API url and schema.
+   * @returns {object} result
+   *  Parsed JSON API result or null.
+   */
+  async pollForAnalysisCompleted(options) {
+    let pollCount = 0;
+    let initialWait = options?.pollInitialWait || API_POLL_INITIAL_WAIT;
+    let pollTimeout = options?.pollTimeout || API_POLL_WAIT;
+    let pollAttempts = options?.pollAttempts || API_POLL_ATTEMPTS;
+    let isFinished = false;
+    let result;
+
+    while (!isFinished && pollCount < pollAttempts) {
+      if (this._abortController.signal.aborted) {
+        return null;
+      }
+      let backOff = pollCount == 0 ? initialWait : pollTimeout;
+      if (backOff) {
+        await new Promise(resolve => lazy.setTimeout(resolve, backOff));
+      }
+      try {
+        result = await this.requestAnalysisCreationStatus(undefined, options);
+        isFinished =
+          result &&
+          result.status != "pending" &&
+          result.status != "in_progress";
+      } catch (error) {
+        console.error(error);
+        return null;
+      }
+      pollCount++;
+    }
+    return result;
+  }
+
+  /**
+   * Request that the API creates an analysis for a product.
+   *
+   * Once the processing status indicates that analyzing is complete,
+   * the new analysis data that can be requested with `requestAnalysis`.
+   *
+   * If the product is currently being analyzed, this will return a
+   * status of "in_progress" and not trigger a reanalyzing the product.
    *
    * @param {Product} product
    *  Product to request for (defaults to the instances product).
@@ -652,27 +700,60 @@ export class ShoppingProduct {
    * @returns {object} result
    *  Parsed JSON API result or null.
    */
-  async pollForAnalysisCompleted(product, options) {
-    let pollCount = 1;
-    let initialWait = options?.pollInitialWait || API_POLL_INITIAL_WAIT;
-    let pollTimeout = options?.pollTimeout || API_POLL_WAIT;
-    let pollAttempts = options?.pollAttempts || API_POLL_ATTEMPTS;
+  async requestCreateAnalysis(product = this.product, options = {}) {
+    let url = options?.url || ShoppingEnvironment.ANALYZE_API;
+    let requestSchema = options?.requestSchema || ANALYZE_REQUEST_SCHEMA;
+    let responseSchema = options?.responseSchema || ANALYZE_RESPONSE_SCHEMA;
 
-    // Initial wait while the product is analyzed
-    await new Promise(resolve => lazy.setTimeout(resolve, initialWait));
-
-    let result = await this.requestAnalysis(true, product, options);
-
-    while (result?.needs_analysis && pollCount < pollAttempts) {
-      let backOff = pollTimeout * Math.pow(2, pollCount);
-      await new Promise(resolve => lazy.setTimeout(resolve, backOff));
-      try {
-        result = await this.requestAnalysis(true, product, options);
-      } catch (error) {
-        return null;
-      }
-      pollCount++;
+    if (!product) {
+      return null;
     }
+
+    let requestOptions = {
+      product_id: product.id,
+      website: product.host,
+    };
+
+    let result = await this.request(url, requestOptions, {
+      requestSchema,
+      responseSchema,
+    });
+
+    return result;
+  }
+
+  /**
+   * Check the status of creating an analysis for a product.
+   *
+   * API returns a progress of 0-100 complete and the processing status.
+   *
+   * @param {Product} product
+   *  Product to request for (defaults to the instances product).
+   * @param {object} options
+   *  Override default API url and schema.
+   * @returns {object} result
+   *  Parsed JSON API result or null.
+   */
+  async requestAnalysisCreationStatus(product = this.product, options = {}) {
+    let url = options?.url || ShoppingEnvironment.ANALYSIS_STATUS_API;
+    let requestSchema =
+      options?.requestSchema || ANALYSIS_STATUS_REQUEST_SCHEMA;
+    let responseSchema =
+      options?.responseSchema || ANALYSIS_STATUS_RESPONSE_SCHEMA;
+
+    if (!product) {
+      return null;
+    }
+
+    let requestOptions = {
+      product_id: product.id,
+      website: product.host,
+    };
+
+    let result = await this.request(url, requestOptions, {
+      requestSchema,
+      responseSchema,
+    });
 
     return result;
   }
@@ -698,7 +779,7 @@ export class ShoppingProduct {
     aid,
     source = "firefox_sidebar",
     options = {
-      url: ATTRIBUTION_API,
+      url: ShoppingEnvironment.ATTRIBUTION_API,
       requestSchema: ATTRIBUTION_REQUEST_SCHEMA,
       responseSchema: ATTRIBUTION_RESPONSE_SCHEMA,
     }
@@ -710,24 +791,56 @@ export class ShoppingProduct {
       throw new Error("An Ad ID is required.");
     }
 
-    let requestOptions = {
+    let requestBody = {
       event_source: source,
     };
 
     switch (eventName) {
       case "impression":
-        requestOptions.event_name = "trusted_deals_impression";
-        requestOptions.aidvs = [aid];
+        requestBody.event_name = "trusted_deals_impression";
+        requestBody.aidvs = [aid];
         break;
       case "click":
-        requestOptions.event_name = "trusted_deals_link_clicked";
-        requestOptions.aid = aid;
+        requestBody.event_name = "trusted_deals_link_clicked";
+        requestBody.aid = aid;
         break;
       default:
         throw new Error(`"${eventName}" is not a valid event name`);
     }
 
     let { url, requestSchema, responseSchema } = options;
+    let result = await this.request(url, requestBody, {
+      requestSchema,
+      responseSchema,
+    });
+
+    return result;
+  }
+
+  /**
+   * Send a report that a product is back in stock.
+   *
+   * @param {Product} product
+   *  Product to request for (defaults to the instances product).
+   * @param {object} options
+   *  Override default API url and schema.
+   * @returns {object} result
+   *  Parsed JSON API result or null.
+   */
+  async sendReport(product = this.product, options = {}) {
+    if (!product) {
+      return null;
+    }
+
+    let url = options?.url || ShoppingEnvironment.REPORTING_API;
+    let requestSchema = options?.requestSchema || REPORTING_REQUEST_SCHEMA;
+    let responseSchema = options?.responseSchema || REPORTING_RESPONSE_SCHEMA;
+
+    let requestOptions = {
+      product_id: product.id,
+      website: product.host,
+    };
+
     let result = await this.request(url, requestOptions, {
       requestSchema,
       responseSchema,
@@ -738,6 +851,7 @@ export class ShoppingProduct {
 
   uninit() {
     this._abortController.abort();
+    this.product = null;
   }
 }
 

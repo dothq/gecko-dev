@@ -17,6 +17,7 @@ var readerButton = document.getElementById("reader-mode-button");
 
 ChromeUtils.defineESModuleGetters(this, {
   PlacesTestUtils: "resource://testing-common/PlacesTestUtils.sys.mjs",
+  UrlbarTestUtils: "resource://testing-common/UrlbarTestUtils.sys.mjs",
 });
 
 add_task(async function test_reader_button() {
@@ -87,7 +88,11 @@ add_task(async function test_reader_button() {
   is(iconEl.src, favicon, "Correct favicon should be loaded");
 
   is(gURLBar.untrimmedValue, url, "gURLBar value is about:reader URL");
-  is(gURLBar.value, url, "gURLBar is displaying original article URL");
+  is(
+    gURLBar.value,
+    UrlbarTestUtils.trimURL(url),
+    "gURLBar is displaying original article URL"
+  );
 
   // Check selected value for URL bar
   await new Promise((resolve, reject) => {
@@ -267,7 +272,7 @@ add_task(async function test_reader_view_element_attribute_transform() {
     "hidden",
     () => {
       let url = TEST_PATH + "readerModeArticle.html";
-      BrowserTestUtils.loadURIString(tab.linkedBrowser, url);
+      BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, url);
     },
     () => !menuitem.hidden
   );
@@ -285,7 +290,7 @@ add_task(async function test_reader_view_element_attribute_transform() {
     "hidden",
     () => {
       let url = TEST_PATH + "readerModeArticleHiddenNodes.html";
-      BrowserTestUtils.loadURIString(tab.linkedBrowser, url);
+      BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, url);
     },
     () => menuitem.hidden
   );
@@ -303,7 +308,7 @@ add_task(async function test_reader_view_element_attribute_transform() {
     "hidden",
     () => {
       let url = TEST_PATH + "readerModeArticle.html";
-      BrowserTestUtils.loadURIString(tab.linkedBrowser, url);
+      BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, url);
     },
     () => !menuitem.hidden
   );
@@ -362,7 +367,7 @@ add_task(async function test_reader_view_element_attribute_transform() {
     "hidden",
     () => {
       let url = TEST_PATH + "readerModeArticleHiddenNodes.html";
-      BrowserTestUtils.loadURIString(tab.linkedBrowser, url);
+      BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, url);
     },
     () => menuitem.hidden
   );
@@ -377,7 +382,7 @@ add_task(async function test_reader_view_element_attribute_transform() {
 add_task(async function test_reader_mode_lang() {
   let url = TEST_PATH + "readerModeArticle.html";
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser);
-  BrowserTestUtils.loadURIString(tab.linkedBrowser, url);
+  BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, url);
 
   await promiseTabLoadEvent(tab, url);
   await TestUtils.waitForCondition(() => !readerButton.hidden);

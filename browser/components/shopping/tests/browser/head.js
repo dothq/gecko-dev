@@ -58,11 +58,6 @@ const MOCK_POPULATED_DATA = {
   },
 };
 
-const MOCK_ERROR_OBJ = {
-  status: 422,
-  error: "Unprocessable entity",
-};
-
 const MOCK_INVALID_KEY_OBJ = {
   invalidHighlight: {
     negative: ["This is an invalid highlight and should not be visible"],
@@ -109,6 +104,23 @@ const MOCK_UNAVAILABLE_PRODUCT_REPORTED_RESPONSE = {
   deleted_product_reported: true,
 };
 
+const MOCK_PAGE_NOT_SUPPORTED_RESPONSE = {
+  ...MOCK_UNPOPULATED_DATA,
+  page_not_supported: true,
+};
+
+const MOCK_RECOMMENDED_ADS_RESPONSE = [
+  {
+    name: "VIVO Electric 60 x 24 inch Stand Up Desk | Black Table Top, Black Frame, Height Adjustable Standing Workstation with Memory Preset Controller (DESK-KIT-1B6B)",
+    url: "www.example.com",
+    price: "249.99",
+    currency: "USD",
+    grade: "A",
+    adjusted_rating: 4.6,
+    sponsored: true,
+  },
+];
+
 function verifyAnalysisDetailsVisible(shoppingContainer) {
   ok(
     shoppingContainer.reviewReliabilityEl,
@@ -116,10 +128,6 @@ function verifyAnalysisDetailsVisible(shoppingContainer) {
   );
   ok(shoppingContainer.adjustedRatingEl, "adjusted-rating should be visible");
   ok(shoppingContainer.highlightsEl, "review-highlights should be visible");
-  ok(
-    shoppingContainer.analysisExplainerEl,
-    "analysis-explainer should be visible"
-  );
 }
 
 function verifyAnalysisDetailsHidden(shoppingContainer) {
@@ -135,9 +143,21 @@ function verifyAnalysisDetailsHidden(shoppingContainer) {
     !shoppingContainer.highlightsEl,
     "review-highlights should not be visible"
   );
+}
+
+function verifyFooterVisible(shoppingContainer) {
+  ok(shoppingContainer.settingsEl, "Got the shopping-settings element");
+  ok(
+    shoppingContainer.analysisExplainerEl,
+    "Got the analysis-explainer element"
+  );
+}
+
+function verifyFooterHidden(shoppingContainer) {
+  ok(!shoppingContainer.settingsEl, "Do not render shopping-settings element");
   ok(
     !shoppingContainer.analysisExplainerEl,
-    "analysis-explainer should not be visible"
+    "Do not render the analysis-explainer element"
   );
 }
 
@@ -156,6 +176,7 @@ function getAnalysisDetails(browser, data) {
       "highlightsEl",
       "settingsEl",
       "shoppingMessageBarEl",
+      "loadingEl",
     ]) {
       returnState[el] =
         !!shoppingContainer[el] &&

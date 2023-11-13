@@ -498,6 +498,7 @@ rtc_library("rate_limiter") {
     ":macromagic",
     ":rate_statistics",
     "../system_wrappers",
+    "../system_wrappers:field_trial",
     "synchronization:mutex",
   ]
   absl_deps = [ "//third_party/abseil-cpp/absl/types:optional" ]
@@ -845,10 +846,6 @@ if (!build_with_mozilla) {
     deps += [ "//third_party/jsoncpp" ]
   } else {
     include_dirs = [ "$rtc_jsoncpp_root" ]
-
-    # When defined changes the include path for json.h to where it is
-    # expected to be when building json outside of the standalone build.
-    defines += [ "WEBRTC_EXTERNAL_JSON" ]
   }
   absl_deps = [ "//third_party/abseil-cpp/absl/strings" ]
 }
@@ -1082,8 +1079,6 @@ if (is_win) {
     sources = [
       "win32.cc",
       "win32.h",
-      "win32_window.cc",
-      "win32_window.h",
     ]
 
     deps = [
@@ -1495,6 +1490,7 @@ if (!build_with_mozilla) {
     "../api/task_queue:pending_task_safety_flag",
     "../api/units:time_delta",
     "../system_wrappers:field_trial",
+    "synchronization:mutex",
     "system:rtc_export",
     "task_utils:repeating_task",
     "third_party/base64",
@@ -1909,6 +1905,7 @@ if (rtc_include_tests) {
         "../api/numerics",
         "../api/units:time_delta",
         "../system_wrappers",
+        "../test:field_trial",
         "../test:fileutils",
         "../test:test_main",
         "../test:test_support",
@@ -2082,10 +2079,7 @@ if (rtc_include_tests) {
         deps += [ "synchronization:synchronization_unittests" ]
       }
       if (is_win) {
-        sources += [
-          "win32_unittest.cc",
-          "win32_window_unittest.cc",
-        ]
+        sources += [ "win32_unittest.cc" ]
         deps += [ ":win32" ]
       }
       if (is_posix || is_fuchsia) {

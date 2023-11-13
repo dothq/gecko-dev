@@ -5,11 +5,11 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 BROWSER_CHROME_MANIFESTS += [
-    "test/browser.ini",
+    "test/browser.toml",
     "test/browser_bug1717599_XDG-CONFIG-DIRS.ini",
     "test/browser_bug1717599_XDG-CONFIG-HOME.ini",
-    "test/browser_snap.ini",
-    "test/browser_xdg.ini",
+    "test/browser_snap.toml",
+    "test/browser_xdg.toml",
 ]
 
 with Files("**"):
@@ -81,10 +81,6 @@ elif CONFIG["OS_ARCH"] == "WINNT":
         "chromium/base/synchronization/lock.cc",
         "chromium/base/synchronization/lock_impl_win.cc",
         "chromium/base/third_party/cityhash/city.cc",
-        "chromium/base/third_party/double_conversion/double-conversion/bignum.cc",
-        "chromium/base/third_party/double_conversion/double-conversion/cached-powers.cc",
-        "chromium/base/third_party/double_conversion/double-conversion/string-to-double.cc",
-        "chromium/base/third_party/double_conversion/double-conversion/strtod.cc",
         "chromium/base/third_party/icu/icu_utf.cc",
         "chromium/base/third_party/superfasthash/superfasthash.c",
         "chromium/base/threading/platform_thread.cc",

@@ -36,19 +36,11 @@ urlbar-group-mdn =
 urlbar-group-pocket =
   .label = Recommended reads
 
-# Tooltip text for the block button shown in top pick rows.
-firefox-suggest-urlbar-block =
-  .title = Dismiss this suggestion
-
 # Block menu item shown in the result menu of top pick and quick suggest
 # results.
 urlbar-result-menu-dismiss-firefox-suggest =
     .label = Dismiss this suggestion
     .accesskey = D
-
-# Tooltip text for the help button shown in Firefox Suggest urlbar results.
-firefox-suggest-urlbar-learn-more =
-  .title = Learn more about { -firefox-suggest-brand-name }
 
 # Learn More menu item shown in the result menu of Firefox Suggest results.
 urlbar-result-menu-learn-more-about-firefox-suggest =
@@ -124,15 +116,6 @@ firefox-suggest-weather-command-inaccurate-location =
 
 ## These strings are used for add-on suggestions in the urlbar.
 
-# This string displays the number of reviews in the add-ons suggestion
-# Variables:
-#   $quantity (number) - The number of reviews for the add-on.
-firefox-suggest-addons-reviews =
-  { $quantity ->
-      [one] { $quantity } review
-     *[other] { $quantity } reviews
-  }
-
 # This string explaining that the add-on suggestion is a recommendation.
 firefox-suggest-addons-recommended = Recommended
 
@@ -165,12 +148,6 @@ addressbar-header-firefox-suggest = Address Bar — { -firefox-suggest-brand-nam
 # the address bar section in the preferences UI.
 addressbar-suggest-firefox-suggest = Choose the type of suggestions that appear in the address bar:
 
-# The best match checkbox label. This toggle controls best match suggestions
-# related to the user's search string.
-addressbar-firefox-suggest-best-match-option =
-  .label = Top pick
-addressbar-best-match-learn-more = Learn more
-
 # First Firefox Suggest toggle button main label and description. This toggle
 # controls non-sponsored suggestions related to the user's search string.
 # .description is transferred into a separate paragraph by the moz-toggle
@@ -186,6 +163,12 @@ addressbar-firefox-suggest-nonsponsored =
 addressbar-firefox-suggest-sponsored =
   .label = Suggestions from sponsors
   .description = Support the development of { -brand-short-name } with occasional sponsored suggestions.
+
+# An additional toggle button in the Firefox Suggest settings that controls
+# whether userdata-based suggestions like history and bookmarks should be
+# shown in private windows
+addressbar-firefox-suggest-private =
+  .label = Show suggestions in Private Windows
 
 # Third Firefox Suggest toggle button main label and description. This toggle
 # controls data collection related to the user's search string.

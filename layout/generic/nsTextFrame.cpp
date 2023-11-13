@@ -223,6 +223,7 @@ struct nsTextFrame::DrawTextRunParams {
   gfx::FontPaletteValueSet* paletteValueSet = nullptr;
   float textStrokeWidth = 0.0f;
   bool drawSoftHyphen = false;
+  bool hasTextShadow = false;
   explicit DrawTextRunParams(gfxContext* aContext) : context(aContext) {}
 };
 
@@ -3456,11 +3457,18 @@ static gfxFloat ComputeTabWidthAppUnits(const nsIFrame* aFrame) {
   const auto* styleText = cb->StyleText();
 
   // Round the space width when converting to appunits the same way textruns do.
-  RefPtr<nsFontMetrics> fm = nsLayoutUtils::GetFontMetricsForFrame(cb, 1.0f);
+  // We don't use GetFirstFontMetrics here because that may return a font that
+  // does not actually have the <space> character, yet is considered the "first
+  // available font" per CSS Fonts. Here, we want the font that would be used
+  // to render <space>, even if that means looking further down the font-family
+  // list.
+  RefPtr fm = nsLayoutUtils::GetFontMetricsForFrame(cb, 1.0f);
   bool vertical = cb->GetWritingMode().IsCentralBaseline();
-  nscoord spaceWidth = nscoord(NS_round(
-      GetFirstFontMetrics(fm->GetThebesFontGroup(), vertical).spaceWidth *
-      cb->PresContext()->AppUnitsPerDevPixel()));
+  RefPtr font = fm->GetThebesFontGroup()->GetFirstValidFont(' ');
+  auto metrics = font->GetMetrics(vertical ? nsFontMetrics::eVertical
+                                           : nsFontMetrics::eHorizontal);
+  nscoord spaceWidth = nscoord(
+      NS_round(metrics.spaceWidth * cb->PresContext()->AppUnitsPerDevPixel()));
   return spaces * (spaceWidth + styleText->mLetterSpacing.ToAppUnits() +
                    styleText->mWordSpacing.Resolve(spaceWidth));
 }
@@ -3868,8 +3876,7 @@ void nsTextFrame::ClearFrameOffsetCache() {
   }
 }
 
-void nsTextFrame::DestroyFrom(nsIFrame* aDestructRoot,
-                              PostDestroyData& aPostDestroyData) {
+void nsTextFrame::Destroy(DestroyContext& aContext) {
   ClearFrameOffsetCache();
 
   // We might want to clear NS_CREATE_FRAME_IF_NON_WHITESPACE or
@@ -3880,7 +3887,7 @@ void nsTextFrame::DestroyFrom(nsIFrame* aDestructRoot,
     mNextContinuation->SetPrevInFlow(nullptr);
   }
   // Let the base class destroy the frame
-  nsIFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
+  nsIFrame::Destroy(aContext);
 }
 
 nsTArray<nsTextFrame*>* nsTextFrame::GetContinuations() {
@@ -3922,8 +3929,7 @@ class nsContinuingTextFrame final : public nsTextFrame {
   void Init(nsIContent* aContent, nsContainerFrame* aParent,
             nsIFrame* aPrevInFlow) final;
 
-  void DestroyFrom(nsIFrame* aDestructRoot,
-                   PostDestroyData& aPostDestroyData) final;
+  void Destroy(DestroyContext&) override;
 
   nsTextFrame* GetPrevContinuation() const final { return mPrevContinuation; }
 
@@ -4089,8 +4095,7 @@ void nsContinuingTextFrame::Init(nsIContent* aContent,
   }  // prev frame is bidi
 }
 
-void nsContinuingTextFrame::DestroyFrom(nsIFrame* aDestructRoot,
-                                        PostDestroyData& aPostDestroyData) {
+void nsContinuingTextFrame::Destroy(DestroyContext& aContext) {
   ClearFrameOffsetCache();
 
   // The text associated with this frame will become associated with our
@@ -4113,7 +4118,7 @@ void nsContinuingTextFrame::DestroyFrom(nsIFrame* aDestructRoot,
   }
   nsSplittableFrame::RemoveFromFlow(this);
   // Let the base class destroy the frame
-  nsIFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
+  nsIFrame::Destroy(aContext);
 }
 
 nsIFrame* nsContinuingTextFrame::FirstInFlow() const {
@@ -6073,6 +6078,7 @@ bool nsTextFrame::PaintTextWithSelectionColors(
   params.glyphRange = aParams.glyphRange;
   params.fontPalette = StyleFont()->GetFontPaletteAtom();
   params.paletteValueSet = PresContext()->GetFontPaletteValueSet();
+  params.hasTextShadow = !StyleText()->mTextShadow.IsEmpty();
 
   PaintShadowParams shadowParams(aParams);
   shadowParams.provider = aParams.provider;
@@ -6659,6 +6665,7 @@ void nsTextFrame::PaintText(const PaintTextParams& aParams,
   params.glyphRange = range;
   params.fontPalette = StyleFont()->GetFontPaletteAtom();
   params.paletteValueSet = PresContext()->GetFontPaletteValueSet();
+  params.hasTextShadow = !StyleText()->mTextShadow.IsEmpty();
 
   DrawText(range, textBaselinePt, params);
 }
@@ -6675,6 +6682,7 @@ static void DrawTextRun(const gfxTextRun* aTextRun,
   params.fontPalette = aParams.fontPalette;
   params.paletteValueSet = aParams.paletteValueSet;
   params.callbacks = aParams.callbacks;
+  params.hasTextShadow = aParams.hasTextShadow;
   if (aParams.callbacks) {
     aParams.callbacks->NotifyBeforeText(aParams.textColor);
     params.drawMode = DrawMode::GLYPH_PATH;
@@ -7189,8 +7197,12 @@ bool nsTextFrame::CombineSelectionUnderlineRect(nsPresContext* aPresContext,
       ComputeDescentLimitForSelectionUnderline(aPresContext, metrics);
   params.vertical = verticalRun;
 
-  EnsureTextRun(nsTextFrame::eInflated);
-  params.sidewaysLeft = mTextRun ? mTextRun->IsSidewaysLeft() : false;
+  if (verticalRun) {
+    EnsureTextRun(nsTextFrame::eInflated);
+    params.sidewaysLeft = mTextRun ? mTextRun->IsSidewaysLeft() : false;
+  } else {
+    params.sidewaysLeft = false;
+  }
 
   UniquePtr<SelectionDetails> details = GetSelectionDetails();
   for (SelectionDetails* sd = details.get(); sd; sd = sd->mNext.get()) {
@@ -7821,32 +7833,8 @@ bool ClusterIterator::IsNewline() const {
 
 bool ClusterIterator::IsPunctuation() const {
   NS_ASSERTION(mCharIndex >= 0, "No cluster selected");
-  // Return true for all Punctuation categories (Unicode general category P?),
-  // and also for Symbol categories (S?) except for Modifier Symbol, which is
-  // kept together with any adjacent letter/number. (Bug 1066756)
   const char16_t ch = mFrag->CharAt(AssertedCast<uint32_t>(mCharIndex));
-  const uint8_t cat = unicode::GetGeneralCategory(ch);
-  switch (cat) {
-    case HB_UNICODE_GENERAL_CATEGORY_CONNECT_PUNCTUATION: /* Pc */
-      if (ch == '_' && !StaticPrefs::layout_word_select_stop_at_underscore()) {
-        return false;
-      }
-      [[fallthrough]];
-    case HB_UNICODE_GENERAL_CATEGORY_DASH_PUNCTUATION:    /* Pd */
-    case HB_UNICODE_GENERAL_CATEGORY_CLOSE_PUNCTUATION:   /* Pe */
-    case HB_UNICODE_GENERAL_CATEGORY_FINAL_PUNCTUATION:   /* Pf */
-    case HB_UNICODE_GENERAL_CATEGORY_INITIAL_PUNCTUATION: /* Pi */
-    case HB_UNICODE_GENERAL_CATEGORY_OTHER_PUNCTUATION:   /* Po */
-    case HB_UNICODE_GENERAL_CATEGORY_OPEN_PUNCTUATION:    /* Ps */
-    case HB_UNICODE_GENERAL_CATEGORY_CURRENCY_SYMBOL:     /* Sc */
-    // Deliberately omitted:
-    // case HB_UNICODE_GENERAL_CATEGORY_MODIFIER_SYMBOL:     /* Sk */
-    case HB_UNICODE_GENERAL_CATEGORY_MATH_SYMBOL:  /* Sm */
-    case HB_UNICODE_GENERAL_CATEGORY_OTHER_SYMBOL: /* So */
-      return true;
-    default:
-      return false;
-  }
+  return mozilla::IsPunctuationForWordSelect(ch);
 }
 
 int32_t ClusterIterator::GetAfterInternal() const {
@@ -8870,7 +8858,7 @@ static void RemoveEmptyInFlows(nsTextFrame* aFrame,
     // f is going to be destroyed soon, after it is unlinked from the
     // continuation chain. If its textrun is going to be destroyed we need to
     // do it now, before we unlink the frames to remove from the flow,
-    // because DestroyFrom calls ClearTextRuns() and that will start at the
+    // because Destroy calls ClearTextRuns() and that will start at the
     // first frame with the text run and walk the continuations.
     if (f->IsInTextRunUserData()) {
       f->ClearTextRuns();
@@ -8891,16 +8879,17 @@ static void RemoveEmptyInFlows(nsTextFrame* aFrame,
   aFrame->SetPrevInFlow(nullptr);
 
   nsContainerFrame* parent = aFrame->GetParent();
+  nsIFrame::DestroyContext context(aFrame->PresShell());
   nsBlockFrame* parentBlock = do_QueryFrame(parent);
   if (parentBlock) {
     // Manually call DoRemoveFrame so we can tell it that we're
     // removing empty frames; this will keep it from blowing away
     // text runs.
-    parentBlock->DoRemoveFrame(aFrame, nsBlockFrame::FRAMES_ARE_EMPTY);
+    parentBlock->DoRemoveFrame(context, aFrame, nsBlockFrame::FRAMES_ARE_EMPTY);
   } else {
     // Just remove it normally; use FrameChildListID::NoReflowPrincipal to avoid
     // posting new reflows.
-    parent->RemoveFrame(FrameChildListID::NoReflowPrincipal, aFrame);
+    parent->RemoveFrame(context, FrameChildListID::NoReflowPrincipal, aFrame);
   }
 }
 
@@ -10273,7 +10262,7 @@ Maybe<nscoord> nsTextFrame::GetNaturalBaselineBOffset(
   if (!aWM.IsOrthogonalTo(GetWritingMode())) {
     if (aWM.IsCentralBaseline()) {
       return Some(GetLogicalUsedBorderAndPadding(aWM).BStart(aWM) +
-                  ContentSize(aWM).BSize(aWM) / 2);
+                  ContentBSize(aWM) / 2);
     }
     return Some(mAscent);
   }

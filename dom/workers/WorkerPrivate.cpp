@@ -208,6 +208,7 @@ class ExternalRunnableWrapper final : public WorkerRunnable {
   virtual bool WorkerRun(JSContext* aCx,
                          WorkerPrivate* aWorkerPrivate) override {
     nsresult rv = mWrappedRunnable->Run();
+    mWrappedRunnable = nullptr;
     if (NS_FAILED(rv)) {
       if (!JS_IsExceptionPending(aCx)) {
         Throw(aCx, rv);
@@ -223,6 +224,7 @@ class ExternalRunnableWrapper final : public WorkerRunnable {
     if (doomed) {
       doomed->OnDiscard();
     }
+    mWrappedRunnable = nullptr;
     return NS_OK;
   }
 };
@@ -2415,42 +2417,16 @@ WorkerPrivate::WorkerPrivate(
       JS::RealmOptions& chromeRealmOptions = mJSSettings.chromeRealmOptions;
       JS::RealmOptions& contentRealmOptions = mJSSettings.contentRealmOptions;
 
-      JS::RealmBehaviors& chromeRealmBehaviors = chromeRealmOptions.behaviors();
-      JS::RealmBehaviors& contentRealmBehaviors =
-          contentRealmOptions.behaviors();
-
-      bool usesSystemPrincipal = UsesSystemPrincipal();
-
-      // Make timing imprecise in unprivileged code to blunt Spectre timing
-      // attacks.
-      bool clampAndJitterTime = !usesSystemPrincipal;
-      chromeRealmBehaviors.setClampAndJitterTime(clampAndJitterTime);
-      contentRealmBehaviors.setClampAndJitterTime(clampAndJitterTime);
-
-      JS::RealmCreationOptions& chromeCreationOptions =
-          chromeRealmOptions.creationOptions();
-      JS::RealmCreationOptions& contentCreationOptions =
-          contentRealmOptions.creationOptions();
-
-      // Expose uneval and toSource functions only if this is privileged code.
-      bool toSourceEnabled = usesSystemPrincipal;
-      chromeCreationOptions.setToSourceEnabled(toSourceEnabled);
-      contentCreationOptions.setToSourceEnabled(toSourceEnabled);
-
-      if (mIsSecureContext) {
-        chromeCreationOptions.setSecureContext(true);
-        contentCreationOptions.setSecureContext(true);
-      }
-
-      chromeCreationOptions.setForceUTC(
-          ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC));
-      contentCreationOptions.setForceUTC(
-          ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC));
-
-      chromeCreationOptions.setAlwaysUseFdlibm(
-          ShouldResistFingerprinting(RFPTarget::JSMathFdlibm));
-      contentCreationOptions.setAlwaysUseFdlibm(
-          ShouldResistFingerprinting(RFPTarget::JSMathFdlibm));
+      xpc::InitGlobalObjectOptions(
+          chromeRealmOptions, UsesSystemPrincipal(), mIsSecureContext,
+          ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
+          ShouldResistFingerprinting(RFPTarget::JSMathFdlibm),
+          ShouldResistFingerprinting(RFPTarget::JSLocale));
+      xpc::InitGlobalObjectOptions(
+          contentRealmOptions, UsesSystemPrincipal(), mIsSecureContext,
+          ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC),
+          ShouldResistFingerprinting(RFPTarget::JSMathFdlibm),
+          ShouldResistFingerprinting(RFPTarget::JSLocale));
 
       // Check if it's a privileged addon executing in order to allow access
       // to SharedArrayBuffer
@@ -2482,10 +2458,12 @@ WorkerPrivate::WorkerPrivate(
       // (because COOP/COEP support isn't enabled, or because COOP/COEP don't
       // act to isolate this worker to a separate process).
       const bool defineSharedArrayBufferConstructor = IsSharedMemoryAllowed();
-      chromeCreationOptions.setDefineSharedArrayBufferConstructor(
-          defineSharedArrayBufferConstructor);
-      contentCreationOptions.setDefineSharedArrayBufferConstructor(
-          defineSharedArrayBufferConstructor);
+      chromeRealmOptions.creationOptions()
+          .setDefineSharedArrayBufferConstructor(
+              defineSharedArrayBufferConstructor);
+      contentRealmOptions.creationOptions()
+          .setDefineSharedArrayBufferConstructor(
+              defineSharedArrayBufferConstructor);
     }
 
     mIsInAutomation = xpc::IsInAutomation();
@@ -2824,6 +2802,8 @@ nsresult WorkerPrivate::GetLoadInfo(
         aParent->IsThirdPartyContextToTopWindow();
     loadInfo.mShouldResistFingerprinting = aParent->ShouldResistFingerprinting(
         RFPTarget::IsAlwaysEnabledForPrecompute);
+    loadInfo.mOverriddenFingerprintingSettings =
+        aParent->GetOverriddenFingerprintingSettings();
     loadInfo.mParentController = aParent->GlobalScope()->GetController();
     loadInfo.mWatchedByDevTools = aParent->IsWatchedByDevTools();
   } else {
@@ -2966,6 +2946,8 @@ nsresult WorkerPrivate::GetLoadInfo(
       loadInfo.mShouldResistFingerprinting =
           document->ShouldResistFingerprinting(
               RFPTarget::IsAlwaysEnabledForPrecompute);
+      loadInfo.mOverriddenFingerprintingSettings =
+          document->GetOverriddenFingerprintingSettings();
 
       // This is an hack to deny the storage-access-permission for workers of
       // sub-iframes.
@@ -4905,7 +4887,8 @@ bool WorkerPrivate::NotifyInternal(WorkerStatus aStatus) {
       return true;
     }
 
-    MOZ_ASSERT_IF(aStatus == Killing, mStatus == Canceling);
+    MOZ_ASSERT_IF(aStatus == Killing,
+                  mStatus == Canceling && mParentStatus == Canceling);
 
     if (aStatus >= Canceling) {
       MutexAutoUnlock unlock(mMutex);
@@ -4924,6 +4907,12 @@ bool WorkerPrivate::NotifyInternal(WorkerStatus aStatus) {
     // dispatched after we clear the queue below.
     if (aStatus == Closing) {
       Close();
+    }
+
+    // Synchronize the mParentStatus with mStatus, such that event dispatching
+    // will fail in proper after WorkerPrivate gets into Killing status.
+    if (aStatus == Killing) {
+      mParentStatus = Killing;
     }
   }
 
@@ -5120,8 +5109,7 @@ int32_t WorkerPrivate::SetTimeout(JSContext* aCx, TimeoutHandler* aHandler,
   if (insertedInfo == data->mTimeouts.Elements() &&
       !data->mRunningExpiredTimeouts) {
     if (!data->mTimer) {
-      data->mTimer =
-          NS_NewTimer(GlobalScope()->EventTargetFor(TaskCategory::Timer));
+      data->mTimer = NS_NewTimer(GlobalScope()->SerialEventTarget());
       if (!data->mTimer) {
         aRv.Throw(NS_ERROR_UNEXPECTED);
         return 0;
@@ -5805,7 +5793,8 @@ PerformanceStorage* WorkerPrivate::GetPerformanceStorage() {
 
 bool WorkerPrivate::ShouldResistFingerprinting(RFPTarget aTarget) const {
   return mLoadInfo.mShouldResistFingerprinting &&
-         nsRFPService::IsRFPEnabledFor(aTarget);
+         nsRFPService::IsRFPEnabledFor(
+             aTarget, mLoadInfo.mOverriddenFingerprintingSettings);
 }
 
 void WorkerPrivate::SetRemoteWorkerController(RemoteWorkerChild* aController) {

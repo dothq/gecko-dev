@@ -4,33 +4,24 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "base/basictypes.h"
-
 #include "BrowserChild.h"
 
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/DocAccessibleChild.h"
 #endif
-#include <algorithm>
 #include <utility>
 
 #include "BrowserParent.h"
 #include "ContentChild.h"
-#include "DocumentInlines.h"
 #include "EventStateManager.h"
 #include "MMPrinter.h"
-#include "PermissionMessageUtils.h"
 #include "PuppetWidget.h"
 #include "StructuredCloneData.h"
 #include "UnitTransforms.h"
 #include "Units.h"
 #include "VRManagerChild.h"
-#include "ipc/nsGUIEventIPC.h"
-#include "js/JSON.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/BasePrincipal.h"
-#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/EventListenerManager.h"
 #include "mozilla/HoldDropJSObjects.h"
@@ -39,36 +30,29 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/NativeKeyBindingsType.h"
 #include "mozilla/NullPrincipal.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ProcessHangMonitor.h"
 #include "mozilla/ProfilerLabels.h"
-#include "mozilla/ResultExtensions.h"
+#include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_dom.h"
-#include "mozilla/StaticPrefs_fission.h"
-#include "mozilla/StaticPtr.h"
-#include "mozilla/Telemetry.h"
 #include "mozilla/TextEvents.h"
-#include "mozilla/TouchEvents.h"
 #include "mozilla/ToString.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/AutoPrintEventDispatcher.h"
 #include "mozilla/dom/BrowserBridgeChild.h"
 #include "mozilla/dom/DataTransfer.h"
-#include "mozilla/dom/DocGroup.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/JSWindowActorChild.h"
 #include "mozilla/dom/ImageDocument.h"
 #include "mozilla/dom/LoadURIOptionsBinding.h"
-#include "mozilla/dom/MediaDocument.h"
 #include "mozilla/dom/MessageManagerBinding.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/Nullable.h"
-#include "mozilla/dom/PBrowser.h"
 #include "mozilla/dom/PaymentRequestChild.h"
+#include "mozilla/dom/PBrowser.h"
 #include "mozilla/dom/PointerEventHandler.h"
 #include "mozilla/dom/SessionStoreUtils.h"
 #include "mozilla/dom/SessionStoreChild.h"
@@ -76,11 +60,9 @@
 #include "mozilla/dom/WindowProxyHolder.h"
 #include "mozilla/gfx/CrossProcessPaint.h"
 #include "mozilla/gfx/Matrix.h"
-#include "mozilla/gfx/gfxVars.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/PBackgroundChild.h"
-#include "mozilla/ipc/URIUtils.h"
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/TouchActionHelper.h"
 #include "mozilla/layers/APZCTreeManagerChild.h"
@@ -94,14 +76,12 @@
 #include "mozilla/layers/InputAPZContext.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "nsBrowserStatusFilter.h"
-#include "nsColorPickerProxy.h"
 #include "nsCommandParams.h"
 #include "nsContentPermissionHelper.h"
 #include "nsContentUtils.h"
 #include "nsDeviceContext.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
-#include "nsEmbedCID.h"
 #include "nsExceptionHandler.h"
 #include "nsFilePickerProxy.h"
 #include "nsFocusManager.h"
@@ -116,7 +96,6 @@
 #include "nsISHistory.h"
 #include "nsIScreenManager.h"
 #include "nsIScriptError.h"
-#include "nsISecureBrowserUI.h"
 #include "nsIURI.h"
 #include "nsIURIMutator.h"
 #include "nsIWeakReferenceUtils.h"
@@ -127,18 +106,11 @@
 #include "nsIOpenWindowInfo.h"
 #include "nsPIDOMWindow.h"
 #include "nsPIWindowRoot.h"
-#include "nsPointerHashKeys.h"
 #include "nsPrintfCString.h"
-#include "nsQueryActor.h"
-#include "nsQueryObject.h"
 #include "nsRefreshDriver.h"
-#include "nsSandboxFlags.h"
-#include "nsString.h"
-#include "nsTHashtable.h"
 #include "nsThreadManager.h"
 #include "nsThreadUtils.h"
 #include "nsViewManager.h"
-#include "nsViewportInfo.h"
 #include "nsWebBrowser.h"
 #include "nsWindowWatcher.h"
 #include "nsIXULRuntime.h"
@@ -317,7 +289,6 @@ BrowserChild::BrowserChild(ContentChild* aManager, const TabId& aTabId,
       mShouldSendWebProgressEventsToParent(false),
       mRenderLayers(true),
       mIsPreservingLayers(false),
-      mLayersObserverEpoch{1},
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
       mNativeWindowHandle(0),
 #endif
@@ -773,6 +744,11 @@ void BrowserChild::DestroyWindow() {
       sBrowserChildren = nullptr;
     }
     mLayersId = layers::LayersId{0};
+  }
+
+  if (mAPZEventState) {
+    mAPZEventState->Destroy();
+    mAPZEventState = nullptr;
   }
 }
 
@@ -1321,10 +1297,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
   // event loop, which may release this, so we hold a strong reference here.
   RefPtr<BrowserChild> kungFuDeathGrip(this);
   RefPtr<PresShell> presShell = GetTopLevelPresShell();
-  if (!presShell) {
-    return IPC_OK();
-  }
-  if (!presShell->GetPresContext()) {
+  if (!presShell || !presShell->GetPresContext() || !mAPZEventState) {
     return IPC_OK();
   }
   CSSToLayoutDeviceScale scale(
@@ -1340,8 +1313,9 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
   switch (aType) {
     case GeckoContentController::TapType::eSingleTap:
       if (mBrowserChildMessageManager) {
-        mAPZEventState->ProcessSingleTap(point, scale, aModifiers, 1,
-                                         aInputBlockId);
+        RefPtr<APZEventState> eventState(mAPZEventState);
+        eventState->ProcessSingleTap(point, scale, aModifiers, 1,
+                                     aInputBlockId);
       }
       break;
     case GeckoContentController::TapType::eDoubleTap:
@@ -1349,8 +1323,9 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
       break;
     case GeckoContentController::TapType::eSecondTap:
       if (mBrowserChildMessageManager) {
-        mAPZEventState->ProcessSingleTap(point, scale, aModifiers, 2,
-                                         aInputBlockId);
+        RefPtr<APZEventState> eventState(mAPZEventState);
+        eventState->ProcessSingleTap(point, scale, aModifiers, 2,
+                                     aInputBlockId);
       }
       break;
     case GeckoContentController::TapType::eLongTap:
@@ -1381,11 +1356,14 @@ mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityHandleTap(
   return RecvHandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId);
 }
 
-bool BrowserChild::NotifyAPZStateChange(
+void BrowserChild::NotifyAPZStateChange(
     const ViewID& aViewId,
     const layers::GeckoContentController::APZStateChange& aChange,
     const int& aArg, Maybe<uint64_t> aInputBlockId) {
-  mAPZEventState->ProcessAPZStateChange(aViewId, aChange, aArg, aInputBlockId);
+  if (mAPZEventState) {
+    mAPZEventState->ProcessAPZStateChange(aViewId, aChange, aArg,
+                                          aInputBlockId);
+  }
   nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();
   if (aChange ==
@@ -1400,7 +1378,6 @@ bool BrowserChild::NotifyAPZStateChange(
     observerService->NotifyObservers(nullptr, "PanZoom:StateChange",
                                      u"PANNING");
   }
-  return true;
 }
 
 void BrowserChild::StartScrollbarDrag(
@@ -1658,7 +1635,7 @@ void BrowserChild::HandleRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
 
   DispatchWidgetEventViaAPZ(localEvent);
 
-  if (aInputBlockId && localEvent.mFlags.mHandledByAPZ) {
+  if (aInputBlockId && localEvent.mFlags.mHandledByAPZ && mAPZEventState) {
     mAPZEventState->ProcessMouseEvent(localEvent, aInputBlockId);
   }
 
@@ -1732,7 +1709,7 @@ void BrowserChild::DispatchWheelEvent(const WidgetWheelEvent& aEvent,
     SendRespondStartSwipeEvent(aInputBlockId, localEvent.TriggersSwipe());
   }
 
-  if (aInputBlockId && aEvent.mFlags.mHandledByAPZ) {
+  if (aInputBlockId && aEvent.mFlags.mHandledByAPZ && mAPZEventState) {
     mAPZEventState->ProcessWheelEvent(localEvent, aInputBlockId);
   }
 }
@@ -1832,9 +1809,11 @@ mozilla::ipc::IPCResult BrowserChild::RecvRealTouchEvent(
     return IPC_OK();
   }
 
-  mAPZEventState->ProcessTouchEvent(localEvent, aGuid, aInputBlockId,
-                                    aApzResponse, status,
-                                    std::move(allowedTouchBehaviors));
+  if (mAPZEventState) {
+    mAPZEventState->ProcessTouchEvent(localEvent, aGuid, aInputBlockId,
+                                      aApzResponse, status,
+                                      std::move(allowedTouchBehaviors));
+  }
   return IPC_OK();
 }
 
@@ -2470,17 +2449,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvDestroy() {
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult BrowserChild::RecvRenderLayers(
-    const bool& aEnabled, const layers::LayersObserverEpoch& aEpoch) {
-  // Since requests to change the rendering state come in from both the hang
-  // monitor channel and the PContent channel, we have an ordering problem. This
-  // code ensures that we respect the order in which the requests were made and
-  // ignore stale requests.
-  if (mLayersObserverEpoch >= aEpoch) {
-    return IPC_OK();
-  }
-  mLayersObserverEpoch = aEpoch;
-
+mozilla::ipc::IPCResult BrowserChild::RecvRenderLayers(const bool& aEnabled) {
   auto clearPaintWhileInterruptingJS = MakeScopeExit([&] {
     // We might force a paint, or we might already have painted and this is a
     // no-op. In either case, once we exit this scope, we need to alert the
@@ -2488,7 +2457,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvRenderLayers(
     // been a request to force paint. This is so that the BackgroundHangMonitor
     // for force painting can be made to wait again.
     if (aEnabled) {
-      ProcessHangMonitor::ClearPaintWhileInterruptingJS(mLayersObserverEpoch);
+      ProcessHangMonitor::ClearPaintWhileInterruptingJS();
     }
   });
 
@@ -2496,36 +2465,14 @@ mozilla::ipc::IPCResult BrowserChild::RecvRenderLayers(
     ProcessHangMonitor::MaybeStartPaintWhileInterruptingJS();
   }
 
-  if (mCompositorOptions) {
-    MOZ_ASSERT(mPuppetWidget);
-    RefPtr<WebRenderLayerManager> lm =
-        mPuppetWidget->GetWindowRenderer()->AsWebRender();
-    if (lm) {
-      // We send the current layer observer epoch to the compositor so that
-      // BrowserParent knows whether a layer update notification corresponds to
-      // the latest RecvRenderLayers request that was made.
-      lm->SetLayersObserverEpoch(mLayersObserverEpoch);
-    }
-  }
-
   mRenderLayers = aEnabled;
+  const bool wasVisible = IsVisible();
 
-  if (aEnabled && IsVisible()) {
-    // This request is a no-op.
-    // In this case, we still want a MozLayerTreeReady notification to fire
-    // in the parent (so that it knows that the child has updated its epoch).
-    // PaintWhileInterruptingJSNoOp does that.
-    if (IPCOpen()) {
-      Unused << SendPaintWhileInterruptingJSNoOp(mLayersObserverEpoch);
-    }
-    return IPC_OK();
-  }
-
-  // FIXME(emilio): Probably / maybe this shouldn't be needed? See the comment
-  // in MakeVisible(), having the two separate states is not great.
   UpdateVisibility();
 
-  if (!aEnabled) {
+  // If we just became visible, try to trigger a paint as soon as possible.
+  const bool becameVisible = !wasVisible && IsVisible();
+  if (!becameVisible) {
     return IPC_OK();
   }
 
@@ -2679,11 +2626,6 @@ void BrowserChild::InitRenderingState(
     ImageBridgeChild::IdentifyCompositorTextureHost(mTextureFactoryIdentifier);
     gfx::VRManagerChild::IdentifyTextureHost(mTextureFactoryIdentifier);
     InitAPZState();
-    RefPtr<WebRenderLayerManager> lm =
-        mPuppetWidget->GetWindowRenderer()->AsWebRender();
-    if (lm) {
-      lm->SetLayersObserverEpoch(mLayersObserverEpoch);
-    }
   } else {
     NS_WARNING("Fallback to FallbackRenderer");
     mLayersConnected = Some(false);
@@ -2774,15 +2716,38 @@ bool BrowserChild::IsVisible() {
 }
 
 void BrowserChild::UpdateVisibility() {
-  bool shouldBeVisible = mIsTopLevel ? mRenderLayers : mEffectsInfo.IsVisible();
-  bool isVisible = IsVisible();
-
-  if (shouldBeVisible != isVisible) {
-    if (shouldBeVisible) {
-      MakeVisible();
-    } else {
-      MakeHidden();
+  const bool shouldBeVisible = [&] {
+    // If we're known to be visibility: hidden / display: none, just return
+    // false here, we're pretty sure we don't want to be considered visible
+    // here.
+    if (mBrowsingContext && mBrowsingContext->IsUnderHiddenEmbedderElement()) {
+      return false;
     }
+    // For OOP iframes, include viewport visibility. For top-level <browser>
+    // elements we don't use this, because the front-end relies on using
+    // `mRenderLayers` when invisible for tab warming purposes.
+    //
+    // An alternative, maybe more consistent approach would be to add an opt-in
+    // into this behavior for top-level tabs managed by the tab-switcher
+    // instead...
+    if (!mIsTopLevel && !mEffectsInfo.IsVisible()) {
+      return false;
+    }
+    // If we're explicitly told not to render layers, we're also invisible.
+    if (!mRenderLayers) {
+      return false;
+    }
+    return true;
+  }();
+
+  const bool isVisible = IsVisible();
+  if (shouldBeVisible == isVisible) {
+    return;
+  }
+  if (shouldBeVisible) {
+    MakeVisible();
+  } else {
+    MakeHidden();
   }
 }
 
@@ -3046,12 +3011,6 @@ void BrowserChild::ReinitRendering() {
   gfx::VRManagerChild::IdentifyTextureHost(mTextureFactoryIdentifier);
 
   InitAPZState();
-  RefPtr<WebRenderLayerManager> lm =
-      mPuppetWidget->GetWindowRenderer()->AsWebRender();
-  if (lm) {
-    lm->SetLayersObserverEpoch(mLayersObserverEpoch);
-  }
-
   if (nsCOMPtr<Document> doc = GetTopLevelDocument()) {
     doc->NotifyLayerManagerRecreated();
   }
@@ -3246,8 +3205,7 @@ ScreenIntRect BrowserChild::GetOuterRect() {
       outerRect, PixelCastJustification::LayoutDeviceIsScreenForTabDims);
 }
 
-void BrowserChild::PaintWhileInterruptingJS(
-    const layers::LayersObserverEpoch& aEpoch) {
+void BrowserChild::PaintWhileInterruptingJS() {
   if (!IPCOpen() || !mPuppetWidget || !mPuppetWidget->HasWindowRenderer()) {
     // Don't bother doing anything now. Better to wait until we receive the
     // message on the PContent channel.
@@ -3256,11 +3214,10 @@ void BrowserChild::PaintWhileInterruptingJS(
 
   MOZ_DIAGNOSTIC_ASSERT(nsContentUtils::IsSafeToRunScript());
   nsAutoScriptBlocker scriptBlocker;
-  RecvRenderLayers(true /* aEnabled */, aEpoch);
+  RecvRenderLayers(/* aEnabled = */ true);
 }
 
-void BrowserChild::UnloadLayersWhileInterruptingJS(
-    const layers::LayersObserverEpoch& aEpoch) {
+void BrowserChild::UnloadLayersWhileInterruptingJS() {
   if (!IPCOpen() || !mPuppetWidget || !mPuppetWidget->HasWindowRenderer()) {
     // Don't bother doing anything now. Better to wait until we receive the
     // message on the PContent channel.
@@ -3269,7 +3226,7 @@ void BrowserChild::UnloadLayersWhileInterruptingJS(
 
   MOZ_DIAGNOSTIC_ASSERT(nsContentUtils::IsSafeToRunScript());
   nsAutoScriptBlocker scriptBlocker;
-  RecvRenderLayers(false /* aEnabled */, aEpoch);
+  RecvRenderLayers(/* aEnabled = */ false);
 }
 
 nsresult BrowserChild::CanCancelContentJS(
@@ -3823,21 +3780,10 @@ already_AddRefed<nsIDocShell> BrowserChildMessageManager::GetDocShell(
 
 already_AddRefed<nsIEventTarget>
 BrowserChildMessageManager::GetTabEventTarget() {
-  nsCOMPtr<nsIEventTarget> target = EventTargetFor(TaskCategory::Other);
-  return target.forget();
+  return do_AddRef(GetMainThreadSerialEventTarget());
 }
 
 nsresult BrowserChildMessageManager::Dispatch(
-    TaskCategory aCategory, already_AddRefed<nsIRunnable>&& aRunnable) {
-  return DispatcherTrait::Dispatch(aCategory, std::move(aRunnable));
-}
-
-nsISerialEventTarget* BrowserChildMessageManager::EventTargetFor(
-    TaskCategory aCategory) const {
-  return DispatcherTrait::EventTargetFor(aCategory);
-}
-
-AbstractThread* BrowserChildMessageManager::AbstractMainThreadFor(
-    TaskCategory aCategory) {
-  return DispatcherTrait::AbstractMainThreadFor(aCategory);
+    already_AddRefed<nsIRunnable>&& aRunnable) const {
+  return SchedulerGroup::Dispatch(std::move(aRunnable));
 }

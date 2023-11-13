@@ -26,6 +26,7 @@
 #include "mozilla/AnimationTarget.h"
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/CORSMode.h"
+#include "mozilla/Components.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/ContentEvents.h"
 #include "mozilla/DebugOnly.h"
@@ -61,6 +62,7 @@
 #include "mozilla/StaticPrefs_full_screen_api.h"
 #include "mozilla/TextControlElement.h"
 #include "mozilla/TextEvents.h"
+#include "mozilla/Try.h"
 #include "mozilla/TypedEnumBits.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/AnimatableBinding.h"
@@ -355,40 +357,11 @@ Element::QueryInterface(REFNSIID aIID, void** aInstancePtr) {
   return NS_NOINTERFACE;
 }
 
-ElementState Element::IntrinsicState() const {
-  return IsEditable() ? ElementState::READWRITE : ElementState::READONLY;
-}
-
 void Element::NotifyStateChange(ElementState aStates) {
-  if (aStates.IsEmpty()) {
-    return;
-  }
-
+  MOZ_ASSERT(!aStates.IsEmpty());
   if (Document* doc = GetComposedDoc()) {
     nsAutoScriptBlocker scriptBlocker;
     doc->ElementStateChanged(this, aStates);
-  }
-}
-
-void Element::UpdateLinkState(ElementState aState) {
-  MOZ_ASSERT(!aState.HasAtLeastOneOfStates(~ElementState::VISITED_OR_UNVISITED),
-             "Unexpected link state bits");
-  mState = (mState & ~ElementState::VISITED_OR_UNVISITED) | aState;
-}
-
-void Element::UpdateState(bool aNotify) {
-  ElementState oldState = mState;
-  mState =
-      IntrinsicState() | (oldState & ElementState::EXTERNALLY_MANAGED_STATES);
-  if (aNotify) {
-    ElementState changedStates = oldState ^ mState;
-    if (!changedStates.IsEmpty()) {
-      Document* doc = GetComposedDoc();
-      if (doc) {
-        nsAutoScriptBlocker scriptBlocker;
-        doc->ElementStateChanged(this, changedStates);
-      }
-    }
   }
 }
 
@@ -421,20 +394,26 @@ namespace mozilla::dom {
 
 void Element::UpdateEditableState(bool aNotify) {
   nsIContent::UpdateEditableState(aNotify);
-  if (aNotify) {
-    UpdateState(aNotify);
+  UpdateReadOnlyState(aNotify);
+}
+
+bool Element::IsReadOnlyInternal() const { return !IsEditable(); }
+
+void Element::UpdateReadOnlyState(bool aNotify) {
+  auto oldState = State();
+  if (IsReadOnlyInternal()) {
+    RemoveStatesSilently(ElementState::READWRITE);
+    AddStatesSilently(ElementState::READONLY);
   } else {
-    // Avoid calling UpdateState in this very common case, because
-    // this gets called for pretty much every single element on
-    // insertion into the document and UpdateState can be slow for
-    // some kinds of elements even when not notifying.
-    if (IsEditable()) {
-      RemoveStatesSilently(ElementState::READONLY);
-      AddStatesSilently(ElementState::READWRITE);
-    } else {
-      RemoveStatesSilently(ElementState::READWRITE);
-      AddStatesSilently(ElementState::READONLY);
-    }
+    RemoveStatesSilently(ElementState::READONLY);
+    AddStatesSilently(ElementState::READWRITE);
+  }
+  if (!aNotify) {
+    return;
+  }
+  const auto newState = State();
+  if (newState != oldState) {
+    NotifyStateChange(newState ^ oldState);
   }
 }
 
@@ -1122,6 +1101,30 @@ already_AddRefed<DOMRectList> Element::GetClientRects() {
       frame, nsLayoutUtils::GetContainingBlockForClientRect(frame), &builder,
       nsLayoutUtils::RECTS_ACCOUNT_FOR_TRANSFORMS);
   return rectList.forget();
+}
+
+// https://html.spec.whatwg.org/multipage/urls-and-fetching.html#lazy-loading-attribute
+static constexpr nsAttrValue::EnumTable kLoadingTable[] = {
+    {"eager", Element::Loading::Eager},
+    {"lazy", Element::Loading::Lazy},
+    {nullptr, 0}};
+
+void Element::GetLoading(nsAString& aValue) const {
+  GetEnumAttr(nsGkAtoms::loading, kLoadingTable[0].tag, aValue);
+}
+
+bool Element::ParseLoadingAttribute(const nsAString& aValue,
+                                    nsAttrValue& aResult) {
+  return aResult.ParseEnumValue(aValue, kLoadingTable,
+                                /* aCaseSensitive = */ false, kLoadingTable);
+}
+
+Element::Loading Element::LoadingState() const {
+  const nsAttrValue* val = mAttrs.GetAttr(nsGkAtoms::loading);
+  if (!val) {
+    return Loading::Eager;
+  }
+  return static_cast<Loading>(val->GetEnumValue());
 }
 
 //----------------------------------------------------------------------
@@ -2643,7 +2646,7 @@ nsresult Element::SetAttrAndNotify(
       nsNameSpaceManager::GetInstance()->GetNameSpaceURI(aNamespaceID, ns);
 
       LifecycleCallbackArgs args;
-      aName->ToString(args.mName);
+      args.mName = aName;
       if (aModType == MutationEvent_Binding::ADDITION) {
         args.mOldValue = VoidString();
       } else {
@@ -2672,8 +2675,6 @@ nsresult Element::SetAttrAndNotify(
                    aNotify);
     }
   }
-
-  UpdateState(aNotify);
 
   if (aNotify) {
     // Don't pass aOldValue to AttributeChanged since it may not be reliable.
@@ -2709,6 +2710,10 @@ nsresult Element::SetAttrAndNotify(
   }
 
   return NS_OK;
+}
+
+void Element::TryReserveAttributeCount(uint32_t aAttributeCount) {
+  (void)mAttrs.GrowTo(aAttributeCount);
 }
 
 bool Element::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
@@ -2827,7 +2832,7 @@ void Element::OnAttrSetButNotChanged(int32_t aNamespaceID, nsAtom* aName,
 
       nsAutoString value(aValue.String());
       LifecycleCallbackArgs args;
-      aName->ToString(args.mName);
+      args.mName = aName;
       args.mOldValue = value;
       args.mNewValue = value;
       args.mNamespaceURI = ns.IsEmpty() ? VoidString() : ns;
@@ -2942,7 +2947,7 @@ nsresult Element::UnsetAttr(int32_t aNameSpaceID, nsAtom* aName, bool aNotify) {
       nsAutoString ns;
       nsNameSpaceManager::GetInstance()->GetNameSpaceURI(aNameSpaceID, ns);
       LifecycleCallbackArgs args;
-      aName->ToString(args.mName);
+      args.mName = aName;
       oldValue.ToString(args.mOldValue);
       args.mNewValue = VoidString();
       args.mNamespaceURI = ns.IsEmpty() ? VoidString() : ns;
@@ -2952,8 +2957,6 @@ nsresult Element::UnsetAttr(int32_t aNameSpaceID, nsAtom* aName, bool aNotify) {
   }
 
   AfterSetAttr(aNameSpaceID, aName, nullptr, &oldValue, nullptr, aNotify);
-
-  UpdateState(aNotify);
 
   if (aNotify) {
     // We can always pass oldValue here since there is no new value which could
@@ -3286,10 +3289,11 @@ nsresult Element::PostHandleEventForLinks(EventChainPostVisitor& aVisitor) {
         // connection to be sure we have one ready when we open the channel.
         if (nsIDocShell* shell = OwnerDoc()->GetDocShell()) {
           if (nsCOMPtr<nsIURI> absURI = GetHrefURI()) {
-            nsCOMPtr<nsISpeculativeConnect> sc =
-                do_QueryInterface(nsContentUtils::GetIOService());
-            nsCOMPtr<nsIInterfaceRequestor> ir = do_QueryInterface(shell);
-            sc->SpeculativeConnect(absURI, NodePrincipal(), ir, false);
+            if (nsCOMPtr<nsISpeculativeConnect> sc =
+                    mozilla::components::IO::Service()) {
+              nsCOMPtr<nsIInterfaceRequestor> ir = do_QueryInterface(shell);
+              sc->SpeculativeConnect(absURI, NodePrincipal(), ir, false);
+            }
           }
         }
       }

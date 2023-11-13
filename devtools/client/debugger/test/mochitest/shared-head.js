@@ -1160,8 +1160,8 @@ async function invokeWithBreakpoint(
 }
 
 function prettyPrint(dbg) {
-  const sourceId = dbg.selectors.getSelectedSourceId();
-  return dbg.actions.togglePrettyPrint(sourceId);
+  const source = dbg.selectors.getSelectedSource();
+  return dbg.actions.prettyPrintAndSelectSource(source);
 }
 
 async function expandAllScopes(dbg) {
@@ -1183,18 +1183,18 @@ async function assertScopes(dbg, items) {
 
   for (const [i, val] of items.entries()) {
     if (Array.isArray(val)) {
-      is(getScopeLabel(dbg, i + 1), val[0]);
+      is(getScopeNodeLabel(dbg, i + 1), val[0]);
       is(
-        getScopeValue(dbg, i + 1),
+        getScopeNodeValue(dbg, i + 1),
         val[1],
         `"${val[0]}" has the expected "${val[1]}" value`
       );
     } else {
-      is(getScopeLabel(dbg, i + 1), val);
+      is(getScopeNodeLabel(dbg, i + 1), val);
     }
   }
 
-  is(getScopeLabel(dbg, items.length + 1), "Window");
+  is(getScopeNodeLabel(dbg, items.length + 1), "Window");
 }
 
 function findSourceTreeThreadByName(dbg, name) {
@@ -1666,9 +1666,9 @@ async function assertLogBreakpoint(dbg, line) {
   ok(hasLogClass, `Log breakpoint on line ${line}`);
 }
 
-function assertBreakpointSnippet(dbg, index, snippet) {
+function assertBreakpointSnippet(dbg, index, expectedSnippet) {
   const actualSnippet = findElement(dbg, "breakpointLabel", 2).innerText;
-  is(snippet, actualSnippet, `Breakpoint ${index} snippet`);
+  is(actualSnippet, expectedSnippet, `Breakpoint ${index} snippet`);
 }
 
 const selectors = {
@@ -1780,9 +1780,10 @@ const selectors = {
     ".project-text-search button.regex-match-btn",
   projectSearchModifiersWholeWordMatch:
     ".project-text-search button.whole-word-btn",
+  projectSearchRefreshButton: ".project-text-search button.refresh-btn",
   threadsPaneItems: ".threads-pane .thread",
   threadsPaneItem: i => `.threads-pane .thread:nth-child(${i})`,
-  threadsPaneItemPause: i => `${selectors.threadsPaneItem(i)} .pause-badge`,
+  threadsPaneItemPause: i => `${selectors.threadsPaneItem(i)}.paused`,
   CodeMirrorLines: ".CodeMirror-lines",
   inlinePreviewLabels: ".inline-preview .inline-preview-label",
   inlinePreviewValues: ".inline-preview .inline-preview-value",
@@ -2026,11 +2027,11 @@ function rightClickScopeNode(dbg, index) {
   rightClickObjectInspectorNode(dbg, findElement(dbg, "scopeNode", index));
 }
 
-function getScopeLabel(dbg, index) {
+function getScopeNodeLabel(dbg, index) {
   return findElement(dbg, "scopeNode", index).innerText;
 }
 
-function getScopeValue(dbg, index) {
+function getScopeNodeValue(dbg, index) {
   return findElement(dbg, "scopeValue", index).innerText;
 }
 
@@ -2171,11 +2172,25 @@ async function hoverAtPos(dbg, pos) {
 }
 
 function hoverToken(tokenEl) {
-  info(`Hovering on token "${tokenEl.innerText}"`);
+  info(`Hovering on token <${tokenEl.innerText}>`);
 
-  // This first event helps utils/editor/token-events.js to receive the right mouseover event
-  EventUtils.synthesizeMouseAtCenter(
-    tokenEl,
+  // We can't use synthesizeMouse(AtCenter) as it's using the element bounding client rect.
+  // But here, we might have a token that wraps on multiple line and the center of the
+  // bounding client rect won't actually hover the token.
+  // +───────────────────────+
+  // │      myLongVariableNa│
+  // │me         +          │
+  // +───────────────────────+
+
+  // Instead, we need to get the first quad.
+  const { p1, p2, p3 } = tokenEl.getBoxQuads()[0];
+  const x = p1.x + (p2.x - p1.x) / 2;
+  const y = p1.y + (p3.y - p1.y) / 2;
+
+  // This first event helps utils/editor/tokens.js to receive the right mouseover event
+  EventUtils.synthesizeMouseAtPoint(
+    x,
+    y,
     {
       type: "mouseover",
     },
@@ -2183,8 +2198,9 @@ function hoverToken(tokenEl) {
   );
 
   // This second event helps Popover to have :hover pseudoclass set on the token element
-  EventUtils.synthesizeMouseAtCenter(
-    tokenEl,
+  EventUtils.synthesizeMouseAtPoint(
+    x,
+    y,
     {
       type: "mousemove",
     },
@@ -2214,10 +2230,24 @@ async function closePreviewForToken(
 
   // Force "mousing out" from all elements.
   //
-  // This helps utils/editor/token-events.js to receive the right mouseleave event.
+  // This helps utils/editor/tokens.js to receive the right mouseleave event.
   // This is super important as it will then allow re-emitting a tokenenter event if you try to re-preview the same token!
-  EventUtils.synthesizeMouseAtCenter(
+  // We can't use synthesizeMouse(AtCenter) as it's using the element bounding client rect.
+  // But here, we might have a token that wraps on multiple line and the center of the
+  // bounding client rect won't actually hover the token.
+  // +───────────────────────+
+  // │      myLongVariableNa│
+  // │me         +          │
+  // +───────────────────────+
+
+  // Instead, we need to get the first quad.
+  const { p1, p2, p3 } = tokenEl.getBoxQuads()[0];
+  const x = p1.x + (p2.x - p1.x) / 2;
+  const y = p1.y + (p3.y - p1.y) / 2;
+  EventUtils.synthesizeMouseAtPoint(
     tokenEl,
+    x,
+    y,
     {
       type: "mouseout",
     },
@@ -2245,9 +2275,20 @@ async function closePreviewForToken(
   info("Preview closed");
 }
 
-// tryHovering will hover at a position every second until we
-// see a preview element (popup, tooltip) appear. Once it appears,
-// it considers it a success.
+/**
+ * Hover at a position until we see a preview element (popup, tooltip) appear.
+ * ⚠️ Note that this is using CodeMirror method to retrieve the token element
+ * and that could be subject to CodeMirror bugs / outdated internal state
+ *
+ * @param {Debugger} dbg
+ * @param {Integer} line: The line we want to hover over
+ * @param {Integer} column: The column we want to hover over
+ * @param {String} elementName: "Selector" string that will be passed to waitForElement,
+ *                              describing the element that should be displayed on hover.
+ * @returns Promise<{element, tokenEl}>
+ *          element is the DOM element matching the passed elementName
+ *          tokenEl is the DOM element for the token we hovered
+ */
 async function tryHovering(dbg, line, column, elementName) {
   ok(
     !findElement(dbg, elementName),
@@ -2255,13 +2296,87 @@ async function tryHovering(dbg, line, column, elementName) {
   );
 
   const tokenEl = await getTokenFromPosition(dbg, { line, column });
+  return tryHoverToken(dbg, tokenEl, elementName);
+}
+
+/**
+ * Retrieve the token element matching `expression` at line `line` and hover it.
+ * This is retrieving the token from the DOM, contrary to `tryHovering`, which calls
+ * CodeMirror internal method for this (and which might suffer from bugs / outdated internal state)
+ *
+ * @param {Debugger} dbg
+ * @param {String} expression: The text of the token we want to hover
+ * @param {Integer} line: The line the token should be at
+ * @param {Integer} column: The column the token should be at
+ * @param {String} elementName: "Selector" string that will be passed to waitForElement,
+ *                              describing the element that should be displayed on hover.
+ * @returns Promise<{element, tokenEl}>
+ *          element is the DOM element matching the passed elementName
+ *          tokenEl is the DOM element for the token we hovered
+ */
+async function tryHoverTokenAtLine(dbg, expression, line, column, elementName) {
+  info("Scroll codeMirror to make the token visible");
+  const cm = getCM(dbg);
+  const onScrolled = waitForScrolling(cm);
+  cm.scrollIntoView({ line: line - 1, ch: 0 }, 0);
+  await onScrolled;
+
+  // Lookup for the token matching the passed expression
+  const tokenEl = getTokenElAtLine(dbg, expression, line, column);
+  if (!tokenEl) {
+    throw new Error(
+      `Couldn't find token <${expression}> on ${line}:${column}\n`
+    );
+  }
+
+  ok(true, `Found token <${expression}> on ${line}:${column}`);
+
+  return tryHoverToken(dbg, tokenEl, elementName);
+}
+
+async function tryHoverToken(dbg, tokenEl, elementName) {
   hoverToken(tokenEl);
 
   // Wait for the preview element to be created
   const element = await waitForElement(dbg, elementName);
-
   return { element, tokenEl };
 }
+
+/**
+ * Retrieve the token element matching `expression` at line `line`, from the DOM.
+ *
+ * @param {Debugger} dbg
+ * @param {String} expression: The text of the token we want to hover
+ * @param {Integer} line: The line the token should be at
+ * @param {Integer} column: The column the token should be at
+ * @returns {Element} the token element, or null if not found
+ */
+function getTokenElAtLine(dbg, expression, line, column = 0) {
+  info(`Search for <${expression}> token on ${line}:${column}`);
+  // Get the line gutter element matching the passed line
+  const lineGutterEl = [
+    ...dbg.win.document.querySelectorAll(".CodeMirror-linenumber"),
+  ].find(el => el.textContent === `${line}`);
+
+  // Get the related editor line
+  const editorLineEl = lineGutterEl
+    .closest(".CodeMirror-gutter-wrapper")
+    .parentElement.querySelector(".CodeMirror-line");
+
+  // Lookup for the token matching the passed expression
+  let currentColumn = 1;
+  return Array.from(editorLineEl.childNodes[0].childNodes).find(child => {
+    const childText = child.textContent;
+    currentColumn += childText.length;
+
+    // Only consider elements that are after the passed column
+    if (currentColumn < column) {
+      return false;
+    }
+    return childText === expression;
+  });
+}
+
 /**
  * Hovers and asserts tooltip previews with simple text expressions (i.e numbers and strings)
  * @param {*} dbg
@@ -2278,19 +2393,15 @@ async function assertPreviewTextValue(
   column,
   { result, expression, doNotClose = false }
 ) {
-  const { element: previewEl, tokenEl } = await tryHovering(
+  // CodeMirror refreshes after inline previews are displayed, so wait until they're rendered.
+  await waitForInlinePreviews(dbg);
+
+  const { element: previewEl, tokenEl } = await tryHoverTokenAtLine(
     dbg,
+    expression,
     line,
     column,
     "previewPopup"
-  );
-
-  ok(
-    tokenEl.innerText.includes(expression),
-    "Popup preview hovered expression is correct. Got: " +
-      tokenEl.innerText +
-      " Expected: " +
-      expression
   );
 
   ok(
@@ -2312,6 +2423,20 @@ async function assertPreviewTextValue(
  * @param {Array} previews
  */
 async function assertPreviews(dbg, previews) {
+  // Move the cursor to the top left corner to have a clean state
+  EventUtils.synthesizeMouse(
+    findElement(dbg, "codeMirror"),
+    0,
+    0,
+    {
+      type: "mousemove",
+    },
+    dbg.win
+  );
+
+  // CodeMirror refreshes after inline previews are displayed, so wait until they're rendered.
+  await waitForInlinePreviews(dbg);
+
   for (const { line, column, expression, result, header, fields } of previews) {
     info(" # Assert preview on " + line + ":" + column);
 
@@ -2323,12 +2448,9 @@ async function assertPreviews(dbg, previews) {
     }
 
     if (fields) {
-      const { element: popupEl, tokenEl } = await tryHovering(
-        dbg,
-        line,
-        column,
-        "popup"
-      );
+      const { element: popupEl, tokenEl } = expression
+        ? await tryHoverTokenAtLine(dbg, expression, line, column, "popup")
+        : await tryHovering(dbg, line, column, "popup");
 
       info("Wait for child nodes to load");
       await waitUntil(
@@ -2781,13 +2903,16 @@ function openProjectSearch(dbg) {
  *
  * @param {Object} dbg
  * @param {String} searchTerm - The test to search for
+ * @param {Number} expectedResults - The expected no of results to wait for.
+ *                                   This is the number of file results and not the numer of matches in all files.
+ *                                   When falsy value is passed, expects no match.
  * @return {Array} List of search results element nodes
  */
-async function doProjectSearch(dbg, searchTerm) {
+async function doProjectSearch(dbg, searchTerm, expectedResults) {
   await clearElement(dbg, "projectSearchSearchInput");
   type(dbg, searchTerm);
   pressKey(dbg, "Enter");
-  return waitForSearchResults(dbg);
+  return waitForSearchResults(dbg, expectedResults);
 }
 
 /**
@@ -2795,16 +2920,30 @@ async function doProjectSearch(dbg, searchTerm) {
  *
  * @param {Object} dbg
  * @param {Number} expectedResults - The expected no of results to wait for
+ *                                   This is the number of file results and not the numer of matches in all files.
  * @return (Array) List of search result element nodes
  */
 async function waitForSearchResults(dbg, expectedResults) {
-  await waitForState(dbg, state => state.projectTextSearch.status === "DONE");
   if (expectedResults) {
+    info(`Wait for ${expectedResults} project search results`);
     await waitUntil(
       () =>
         findAllElements(dbg, "projectSearchFileResults").length ==
         expectedResults
     );
+  } else {
+    // If no results are expected, wait for the "no results" message to be displayed.
+    info("Wait for project search to complete with no results");
+    await waitUntil(() => {
+      const projectSearchResult = findElementWithSelector(
+        dbg,
+        ".no-result-msg"
+      );
+      return projectSearchResult
+        ? projectSearchResult.textContent ==
+            DEBUGGER_L10N.getStr("projectTextSearch.noResults")
+        : false;
+    });
   }
   return findAllElements(dbg, "projectSearchFileResults");
 }
@@ -2862,4 +3001,21 @@ async function selectBlackBoxContextMenuItem(dbg, itemName) {
   info(`Select the ${itemName} context menu item`);
   selectContextMenuItem(dbg, `#node-menu-${itemName}`);
   return wait;
+}
+
+// Test empty panel when source has not function or class symbols
+// Test that anonymous functions do not show in the outline panel
+
+function assertOutlineItems(dbg, expectedItems) {
+  const outlineItems = Array.from(
+    findAllElementsWithSelector(
+      dbg,
+      ".outline-list h2, .outline-list .outline-list__element"
+    )
+  );
+  SimpleTest.isDeeply(
+    outlineItems.map(i => i.innerText.trim()),
+    expectedItems,
+    "The expected items are displayed in the outline panel"
+  );
 }

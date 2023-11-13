@@ -153,11 +153,13 @@ static auto CreateDocumentLoadInfo(CanonicalBrowsingContext* aBrowsingContext,
         sandboxFlags);
   }
 
-  if (aLoadState->IsExemptFromHTTPSOnlyMode()) {
+  if (aLoadState->IsExemptFromHTTPSFirstMode()) {
     uint32_t httpsOnlyStatus = loadInfo->GetHttpsOnlyStatus();
-    httpsOnlyStatus |= nsILoadInfo::HTTPS_ONLY_EXEMPT_NEXT_LOAD;
+    httpsOnlyStatus |= nsILoadInfo::HTTPS_FIRST_EXEMPT_NEXT_LOAD;
     loadInfo->SetHttpsOnlyStatus(httpsOnlyStatus);
   }
+
+  loadInfo->SetWasSchemelessInput(aLoadState->GetWasSchemelessInput());
 
   loadInfo->SetTriggeringSandboxFlags(aLoadState->TriggeringSandboxFlags());
   loadInfo->SetTriggeringWindowId(aLoadState->TriggeringWindowId());
@@ -1542,6 +1544,17 @@ void DocumentLoadListener::SerializeRedirectData(
 
   aArgs.registrarId() = mRedirectChannelId;
 
+#ifdef DEBUG
+  // We only set the granularFingerprintingProtection field when opening http
+  // channels. So, we mark the field as set here if the channel is not a
+  // nsHTTPChannel to pass the assertion check for getting this field in below
+  // LoadInfoToLoadInfoArgs() call.
+  if (!baseChannel) {
+    static_cast<mozilla::net::LoadInfo*>(redirectLoadInfo.get())
+        ->MarkOverriddenFingerprintingSettingsAsSet();
+  }
+#endif
+
   MOZ_ALWAYS_SUCCEEDS(
       ipc::LoadInfoToLoadInfoArgs(redirectLoadInfo, &aArgs.loadInfo()));
 
@@ -2343,11 +2356,13 @@ bool DocumentLoadListener::MaybeHandleLoadErrorWithURIFixup(nsresult aStatus) {
   }
 
   nsCOMPtr<nsIInputStream> newPostData;
+  bool wasSchemelessInput = false;
   nsCOMPtr<nsIURI> newURI = nsDocShell::AttemptURIFixup(
       mChannel, aStatus, mOriginalUriString, mLoadStateLoadType, bc->IsTop(),
       mLoadStateInternalLoadFlags &
           nsDocShell::INTERNAL_LOAD_FLAGS_ALLOW_THIRD_PARTY_FIXUP,
-      bc->UsePrivateBrowsing(), true, getter_AddRefs(newPostData));
+      bc->UsePrivateBrowsing(), true, getter_AddRefs(newPostData),
+      &wasSchemelessInput);
 
   // Since aStatus will be NS_OK for 4xx and 5xx error codes we
   // have to check each request which was upgraded by https-first.
@@ -2380,10 +2395,13 @@ bool DocumentLoadListener::MaybeHandleLoadErrorWithURIFixup(nsresult aStatus) {
 
   loadState->SetPostDataStream(newPostData);
 
+  // Record whether the protocol was added through a fixup.
+  loadState->SetWasSchemelessInput(wasSchemelessInput);
+
   if (isHTTPSFirstFixup) {
     // We have to exempt the load from HTTPS-First to prevent a
     // upgrade-downgrade loop.
-    loadState->SetIsExemptFromHTTPSOnlyMode(true);
+    loadState->SetIsExemptFromHTTPSFirstMode(true);
   }
 
   // Ensure to set referrer information in the fallback channel equally to the

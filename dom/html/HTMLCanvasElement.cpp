@@ -34,6 +34,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/webgpu/CanvasContext.h"
@@ -645,10 +646,12 @@ nsresult HTMLCanvasElement::DispatchPrintCallback(nsITimerCallback* aCallback) {
   RefPtr<nsRunnableMethod<HTMLCanvasElement>> renderEvent =
       NewRunnableMethod("dom::HTMLCanvasElement::CallPrintCallback", this,
                         &HTMLCanvasElement::CallPrintCallback);
-  return OwnerDoc()->Dispatch(TaskCategory::Other, renderEvent.forget());
+  return OwnerDoc()->Dispatch(renderEvent.forget());
 }
 
 void HTMLCanvasElement::CallPrintCallback() {
+  AUTO_PROFILER_MARKER_TEXT("HTMLCanvasElement Printing", LAYOUT_Printing, {},
+                            "HTMLCanvasElement::CallPrintCallback"_ns);
   if (!mPrintState) {
     // `mPrintState` might have been destroyed by cancelling the previous
     // printing (especially the canvas frame destruction) during processing
@@ -892,7 +895,7 @@ nsresult HTMLCanvasElement::ExtractData(JSContext* aCx,
   bool usePlaceholder = !CanvasUtils::IsImageExtractionAllowed(
       OwnerDoc(), aCx, aSubjectPrincipal);
   return ImageEncoder::ExtractData(aType, aOptions, GetSize(), usePlaceholder,
-                                   mCurrentContext, mCanvasRenderer, aStream);
+                                   mCurrentContext, mOffscreenDisplay, aStream);
 }
 
 nsresult HTMLCanvasElement::ToDataURLImpl(JSContext* aCx,
@@ -942,6 +945,17 @@ nsresult HTMLCanvasElement::ToDataURLImpl(JSContext* aCx,
                                  aDataURL.Length());
 }
 
+UniquePtr<uint8_t[]> HTMLCanvasElement::GetImageBuffer(
+    int32_t* aOutFormat, gfx::IntSize* aOutImageSize) {
+  if (mCurrentContext) {
+    return mCurrentContext->GetImageBuffer(aOutFormat, aOutImageSize);
+  }
+  if (mOffscreenDisplay) {
+    return mOffscreenDisplay->GetImageBuffer(aOutFormat, aOutImageSize);
+  }
+  return nullptr;
+}
+
 void HTMLCanvasElement::ToBlob(JSContext* aCx, BlobCallback& aCallback,
                                const nsAString& aType,
                                JS::Handle<JS::Value> aParams,
@@ -961,13 +975,11 @@ void HTMLCanvasElement::ToBlob(JSContext* aCx, BlobCallback& aCallback,
     // According to spec, blob should return null if either its horizontal
     // dimension or its vertical dimension is zero. See link below.
     // https://html.spec.whatwg.org/multipage/scripting.html#dom-canvas-toblob
-    OwnerDoc()->Dispatch(
-        TaskCategory::Other,
-        NewRunnableMethod<Blob*, const char*>(
-            "dom::HTMLCanvasElement::ToBlob", &aCallback,
-            static_cast<void (BlobCallback::*)(Blob*, const char*)>(
-                &BlobCallback::Call),
-            nullptr, nullptr));
+    OwnerDoc()->Dispatch(NewRunnableMethod<Blob*, const char*>(
+        "dom::HTMLCanvasElement::ToBlob", &aCallback,
+        static_cast<void (BlobCallback::*)(Blob*, const char*)>(
+            &BlobCallback::Call),
+        nullptr, nullptr));
     return;
   }
 
@@ -1093,6 +1105,26 @@ void HTMLCanvasElement::SetHeight(uint32_t aHeight, ErrorResult& aRv) {
   }
 
   SetUnsignedIntAttr(nsGkAtoms::height, aHeight, DEFAULT_CANVAS_HEIGHT, aRv);
+}
+
+void HTMLCanvasElement::SetSize(const nsIntSize& aSize, ErrorResult& aRv) {
+  if (mOffscreenCanvas) {
+    aRv.ThrowInvalidStateError(
+        "Cannot set width of placeholder canvas transferred to "
+        "OffscreenCanvas.");
+    return;
+  }
+
+  if (NS_WARN_IF(aSize.IsEmpty())) {
+    aRv.ThrowRangeError("Canvas size is empty, must be non-empty.");
+    return;
+  }
+
+  SetUnsignedIntAttr(nsGkAtoms::width, aSize.width, DEFAULT_CANVAS_WIDTH, aRv);
+  MOZ_ASSERT(!aRv.Failed());
+  SetUnsignedIntAttr(nsGkAtoms::height, aSize.height, DEFAULT_CANVAS_HEIGHT,
+                     aRv);
+  MOZ_ASSERT(!aRv.Failed());
 }
 
 void HTMLCanvasElement::FlushOffscreenCanvas() {

@@ -90,12 +90,7 @@ static T* CreateEnvironmentObject(JSContext* cx, Handle<SharedShape*> shape,
   MOZ_ASSERT(CanChangeToBackgroundAllocKind(allocKind, &T::class_));
   allocKind = gc::ForegroundToBackgroundAllocKind(allocKind);
 
-  JSObject* obj = NativeObject::create(cx, allocKind, heap, shape);
-  if (!obj) {
-    return nullptr;
-  }
-
-  return &obj->as<T>();
+  return NativeObject::create<T>(cx, allocKind, heap, shape);
 }
 
 // Helper function for simple environment objects that don't need the overloads
@@ -1705,15 +1700,18 @@ class DebugEnvironmentProxyHandler : public BaseProxyHandler {
         AbstractFramePtr frame = maybeLiveEnv->frame();
         uint32_t local = loc.slot();
         MOZ_ASSERT(local < frame.script()->nfixed());
+        Value& localVal = frame.unaliasedLocal(local);
         if (action == GET) {
-          vp.set(frame.unaliasedLocal(local));
+          vp.set(localVal);
         } else {
-          if (frame.unaliasedLocal(local).isMagic(JS_UNINITIALIZED_LEXICAL)) {
+          // Note: localVal could also be JS_OPTIMIZED_OUT.
+          if (localVal.isMagic() &&
+              localVal.whyMagic() == JS_UNINITIALIZED_LEXICAL) {
             ReportRuntimeLexicalError(cx, JSMSG_UNINITIALIZED_LEXICAL, id);
             return false;
           }
 
-          frame.unaliasedLocal(local) = vp;
+          localVal = vp;
         }
       } else if (AbstractGeneratorObject* genObj =
                      GetGeneratorObjectForEnvironment(cx, debugEnv);
@@ -4160,7 +4158,7 @@ static bool AnalyzeEntrainedVariablesInScript(JSContext* cx,
     buf.printf("Script ");
 
     if (JSAtom* name = script->function()->displayAtom()) {
-      buf.putString(name);
+      buf.putString(cx, name);
       buf.printf(" ");
     }
 
@@ -4168,7 +4166,7 @@ static bool AnalyzeEntrainedVariablesInScript(JSContext* cx,
                script->lineno());
 
     if (JSAtom* name = innerScript->function()->displayAtom()) {
-      buf.putString(name);
+      buf.putString(cx, name);
       buf.printf(" ");
     }
 
@@ -4177,10 +4175,14 @@ static bool AnalyzeEntrainedVariablesInScript(JSContext* cx,
     for (PropertyNameSet::Range r = remainingNames.all(); !r.empty();
          r.popFront()) {
       buf.printf(" ");
-      buf.putString(r.front());
+      buf.putString(cx, r.front());
     }
 
-    printf("%s\n", buf.string());
+    JS::UniqueChars str = buf.release();
+    if (!str) {
+      return false;
+    }
+    printf("%s\n", str.get());
   }
 
   RootedFunction fun(cx);

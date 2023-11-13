@@ -1584,6 +1584,10 @@ JSFunction* js::NewFunctionWithProto(
   }
   fun->initAtom(atom);
 
+#ifdef DEBUG
+  fun->assertFunctionKindIntegrity();
+#endif
+
   return fun;
 }
 
@@ -1682,6 +1686,10 @@ static inline JSFunction* NewFunctionClone(JSContext* cx, HandleFunction fun,
   // Note: |clone| and |fun| are same-zone so we don't need to call markAtom.
   clone->initAtom(fun->displayAtom());
 
+#ifdef DEBUG
+  clone->assertFunctionKindIntegrity();
+#endif
+
   return clone;
 }
 
@@ -1691,23 +1699,17 @@ JSFunction* js::CloneFunctionReuseScript(JSContext* cx, HandleFunction fun,
   MOZ_ASSERT(cx->realm() == fun->realm());
   MOZ_ASSERT(NewFunctionEnvironmentIsWellFormed(cx, enclosingEnv));
   MOZ_ASSERT(fun->isInterpreted());
+  MOZ_ASSERT(fun->hasBaseScript());
   MOZ_ASSERT(CanReuseScriptForClone(cx->realm(), fun, enclosingEnv));
 
-  RootedFunction clone(cx, NewFunctionClone(cx, fun, proto));
+  JSFunction* clone = NewFunctionClone(cx, fun, proto);
   if (!clone) {
     return nullptr;
   }
 
-  if (fun->hasBaseScript()) {
-    BaseScript* base = fun->baseScript();
-    clone->initScript(base);
-    clone->initEnvironment(enclosingEnv);
-  } else {
-    MOZ_ASSERT(fun->hasSelfHostedLazyScript());
-    SelfHostedLazyScript* lazy = fun->selfHostedLazyScript();
-    clone->initSelfHostedLazyScript(lazy);
-    clone->initEnvironment(enclosingEnv);
-  }
+  BaseScript* base = fun->baseScript();
+  clone->initScript(base);
+  clone->initEnvironment(enclosingEnv);
 
 #ifdef DEBUG
   // Assert extended slots don't need to be copied.

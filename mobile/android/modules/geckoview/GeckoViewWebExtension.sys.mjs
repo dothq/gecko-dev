@@ -15,6 +15,8 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
+  AddonRepository: "resource://gre/modules/addons/AddonRepository.sys.mjs",
+  AddonSettings: "resource://gre/modules/addons/AddonSettings.sys.mjs",
   EventDispatcher: "resource://gre/modules/Messaging.sys.mjs",
   Extension: "resource://gre/modules/Extension.sys.mjs",
   ExtensionData: "resource://gre/modules/Extension.sys.mjs",
@@ -296,23 +298,30 @@ async function exportExtension(aAddon, aPermissions, aSourceURI) {
     policy = await policy.readyPromise;
   }
   const {
+    amoListingURL,
+    averageRating,
+    blocklistState,
     creator,
     description,
-    homepageURL,
-    signedState,
-    name,
-    icons,
-    version,
-    optionsURL,
-    optionsType,
-    isRecommended,
-    blocklistState,
-    userDisabled,
     embedderDisabled,
-    temporarilyInstalled,
+    fullDescription,
+    homepageURL,
+    icons,
+    id,
     isActive,
     isBuiltin,
-    id,
+    isCorrectlySigned,
+    isRecommended,
+    name,
+    optionsType,
+    optionsURL,
+    reviewCount,
+    reviewURL,
+    signedState,
+    sourceURI,
+    temporarilyInstalled,
+    userDisabled,
+    version,
   } = aAddon;
   let creatorName = null;
   let creatorURL = null;
@@ -333,36 +342,63 @@ async function exportExtension(aAddon, aPermissions, aSourceURI) {
   if (embedderDisabled) {
     disabledFlags.push("appDisabled");
   }
+  // Add-ons without an `isCorrectlySigned` property are correctly signed as
+  // they aren't the correct type for signing.
+  if (lazy.AddonSettings.REQUIRE_SIGNING && isCorrectlySigned === false) {
+    disabledFlags.push("signatureDisabled");
+  }
+  if (lazy.AddonManager.checkCompatibility && !aAddon.isCompatible) {
+    disabledFlags.push("appVersionDisabled");
+  }
   const baseURL = policy ? policy.getURL() : "";
   const privateBrowsingAllowed = policy ? policy.privateBrowsingAllowed : false;
   const promptPermissions = aPermissions
     ? await filterPromptPermissions(aPermissions.permissions)
     : [];
+
+  let updateDate;
+  try {
+    updateDate = aAddon.updateDate?.toISOString();
+  } catch {
+    // `installDate` is used as a fallback for `updateDate` but only when the
+    // add-on is installed. Before that, `installDate` might be undefined,
+    // which would cause `updateDate` (and `installDate`) to be an "invalid
+    // date".
+    updateDate = null;
+  }
+
   return {
     webExtensionId: id,
     locationURI: aSourceURI != null ? aSourceURI.spec : "",
     isBuiltIn: isBuiltin,
     webExtensionFlags: exportFlags(policy),
     metaData: {
-      origins: aPermissions ? aPermissions.origins : [],
-      promptPermissions,
-      description,
-      enabled: isActive,
-      temporary: temporarilyInstalled,
-      disabledFlags,
-      version,
+      amoListingURL,
+      averageRating,
+      baseURL,
+      blocklistState,
       creatorName,
       creatorURL,
+      description,
+      disabledFlags,
+      downloadUrl: sourceURI?.displaySpec,
+      enabled: isActive,
+      fullDescription,
       homepageURL,
-      name,
-      optionsPageURL: optionsURL,
-      openOptionsPageInTab,
-      isRecommended,
-      blocklistState,
-      signedState,
       icons,
-      baseURL,
+      isRecommended,
+      name,
+      openOptionsPageInTab,
+      optionsPageURL: optionsURL,
+      origins: aPermissions ? aPermissions.origins : [],
       privateBrowsingAllowed,
+      promptPermissions,
+      reviewCount,
+      reviewURL,
+      signedState,
+      temporary: temporarilyInstalled,
+      updateDate,
+      version,
     },
   };
 }
@@ -537,8 +573,9 @@ class AddonInstallObserver {
 
   async onInstallationFailed(aAddon, aAddonName, aError) {
     // aAddon could be null if we have a network error where we can't download the xpi file.
+    // aAddon could also be a valid object without an ID when the xpi file is corrupt.
     let extension = null;
-    if (aAddon !== null) {
+    if (aAddon?.id) {
       extension = await exportExtension(
         aAddon,
         aAddon.userPermissions,
@@ -698,6 +735,7 @@ class ExtensionProcessListener {
 
     lazy.EventDispatcher.instance.registerListener(this, [
       "GeckoView:WebExtension:EnableProcessSpawning",
+      "GeckoView:WebExtension:DisableProcessSpawning",
     ]);
   }
 
@@ -1028,6 +1066,20 @@ export var GeckoViewWebExtension = {
   },
 
   async updateWebExtension(aId) {
+    // Refresh the cached metadata when necessary. This allows us to always
+    // export relatively recent metadata to the embedder.
+    if (lazy.AddonRepository.isMetadataStale()) {
+      // We use a promise to avoid more than one call to `backgroundUpdateCheck()`
+      // when `updateWebExtension()` is called for multiple add-ons in parallel.
+      if (!this._promiseAddonRepositoryUpdate) {
+        this._promiseAddonRepositoryUpdate =
+          lazy.AddonRepository.backgroundUpdateCheck().finally(() => {
+            this._promiseAddonRepositoryUpdate = null;
+          });
+      }
+      await this._promiseAddonRepositoryUpdate;
+    }
+
     const extension = await this.extensionById(aId);
 
     const install = await this.checkForUpdate(extension);

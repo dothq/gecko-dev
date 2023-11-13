@@ -108,13 +108,13 @@ function delayed(aIsSelectedTab) {
   );
   is(
     gURLBar.value,
-    currentURI,
+    UrlbarTestUtils.trimURL(currentURI),
     "The URL bar shows the content URI. aIsSelectedTab:" + aIsSelectedTab
   );
 
   if (!aIsSelectedTab) {
     // If this was a background request, go on a foreground request.
-    BrowserTestUtils.loadURIString(
+    BrowserTestUtils.startLoadingURIString(
       gBrowser.selectedBrowser,
       REDIRECT_FROM + "#FG"
     );

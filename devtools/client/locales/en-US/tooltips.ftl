@@ -33,6 +33,10 @@ inactive-css-not-inline-or-tablecell = <strong>{ $property }</strong> has no eff
 
 inactive-css-first-line-pseudo-element-not-supported = <strong>{ $property }</strong> is not supported on ::first-line pseudo-elements.
 
+inactive-css-first-letter-pseudo-element-not-supported = <strong>{ $property }</strong> is not supported on ::first-letter pseudo-elements.
+
+inactive-css-placeholder-pseudo-element-not-supported = <strong>{ $property }</strong> is not supported on ::placeholder pseudo-elements.
+
 inactive-css-property-because-of-display = <strong>{ $property }</strong> has no effect on this element since it has a display of <strong>{ $display }</strong>.
 
 inactive-css-not-display-block-on-floated = The <strong>display</strong> value has been changed by the engine to <strong>block</strong> because the element is <strong>floated</strong>.
@@ -58,6 +62,18 @@ inactive-css-border-image = <strong>{ $property }</strong> has no effect on this
 inactive-css-ruby-element = <strong>{ $property }</strong> has no effect on this element since it is a ruby element. Its size is determined by the font size of the ruby text.
 
 inactive-css-highlight-pseudo-elements-not-supported = <strong>{ $property }</strong> is not supported on highlight pseudo-elements.
+
+inactive-css-cue-pseudo-element-not-supported = <strong>{ $property }</strong> is not supported on ::cue pseudo-elements.
+
+# Variables:
+#   $lineCount (integer) - The number of lines the element has.
+inactive-css-text-wrap-balance-lines-exceeded =
+    { $lineCount ->
+         [one] <strong>{ $property }</strong> has no effect on this element because it has more than { $lineCount } line.
+        *[other] <strong>{ $property }</strong> has no effect on this element because it has more than { $lineCount } lines.
+     }
+
+inactive-css-text-wrap-balance-fragmented = <strong>{ $property }</strong> has no effect on this element because it is fragmented, i.e. its content is split across multiple columns or pages.
 
 ## In the Rule View when a CSS property cannot be successfully applied we display
 ## an icon. When this icon is hovered this message is displayed to explain how
@@ -104,6 +120,10 @@ inactive-scroll-padding-when-not-scroll-container-fix = Try adding <strong>overf
 inactive-css-border-image-fix = On the parent table element, remove the property or change the value of <strong>border-collapse</strong> to a value other than <strong>collapse</strong>. { learn-more }
 
 inactive-css-ruby-element-fix = Try changing the <strong>font-size</strong> of the ruby text. { learn-more }
+
+inactive-css-text-wrap-balance-lines-exceeded-fix = Try to reduce the number of lines. { learn-more }
+
+inactive-css-text-wrap-balance-fragmented-fix = Avoid splitting the element’s content e.g. by removing the columns or by using <strong>page-break-inside:avoid</strong>. { learn-more }
 
 ## In the Rule View when a CSS property may have compatibility issues with other browsers
 ## we display an icon. When this icon is hovered this message is displayed to explain why

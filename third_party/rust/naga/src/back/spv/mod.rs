@@ -85,7 +85,7 @@ impl IdGenerator {
 #[derive(Debug, Clone)]
 pub struct DebugInfo<'a> {
     pub source_code: &'a str,
-    pub file_name: &'a str,
+    pub file_name: &'a std::path::Path,
 }
 
 /// A SPIR-V block to which we are still adding instructions.
@@ -466,6 +466,7 @@ enum CachedConstant {
         ty: LookupType,
         constituent_ids: Vec<Word>,
     },
+    ZeroValue(Word),
 }
 
 #[derive(Clone)]

@@ -24,6 +24,7 @@
 #include "mozilla/TextUtils.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <math.h>
 #include <string.h>
@@ -156,7 +157,8 @@ class DateTimeHelper {
   static double UTC(DateTimeInfo::ForceUTC forceUTC, double t);
   static JSString* timeZoneComment(JSContext* cx,
                                    DateTimeInfo::ForceUTC forceUTC,
-                                   double utcTime, double localTime);
+                                   const char* locale, double utcTime,
+                                   double localTime);
 #if !JS_HAS_INTL_API
   static size_t formatTime(DateTimeInfo::ForceUTC forceUTC, char* buf,
                            size_t buflen, const char* fmt, double utcTime,
@@ -860,11 +862,15 @@ static int DaysInMonth(int year, int month) {
 }
 
 /*
- * Parse a string according to the formats specified in section 20.3.1.16
- * of the ECMAScript standard. These formats are based upon a simplification
- * of the ISO 8601 Extended Format. As per the spec omitted month and day
- * values are defaulted to '01', omitted HH:mm:ss values are defaulted to '00'
- * and an omitted sss field is defaulted to '000'.
+ * Parse a string according to the formats specified in the standard:
+ *
+ * https://tc39.es/ecma262/#sec-date-time-string-format
+ * https://tc39.es/ecma262/#sec-expanded-years
+ *
+ * These formats are based upon a simplification of the ISO 8601 Extended
+ * Format. As per the spec omitted month and day values are defaulted to '01',
+ * omitted HH:mm:ss values are defaulted to '00' and an omitted sss field is
+ * defaulted to '000'.
  *
  * For cross compatibility we allow the following extensions.
  *
@@ -1129,14 +1135,16 @@ static constexpr const char* const months_names[] = {
     "july",    "august",   "september", "october", "november", "december",
 };
 
-// Try to parse the following date format:
-//   dd-MMM-yyyy
-//   dd-MMM-yy
-//   yyyy-MMM-dd
-//   yy-MMM-dd
-//
-// Returns true and fills all out parameters when successfully parsed
-// dashed-date.  Otherwise returns false and leaves out parameters untouched.
+/*
+ * Try to parse the following date formats:
+ *   dd-MMM-yyyy
+ *   dd-MMM-yy
+ *   yyyy-MMM-dd
+ *   yy-MMM-dd
+ *
+ * Returns true and fills all out parameters when successfully parsed
+ * dashed-date.  Otherwise returns false and leaves out parameters untouched.
+ */
 template <typename CharT>
 static bool TryParseDashedDatePrefix(const CharT* s, size_t length,
                                      size_t* indexOut, int* yearOut,
@@ -1218,6 +1226,96 @@ static bool TryParseDashedDatePrefix(const CharT* s, size_t length,
   return true;
 }
 
+/*
+ * Try to parse dates in the style of YYYY-MM-DD which do not conform to
+ * the formal standard from ParseISOStyleDate. This includes cases such as
+ *
+ *  - Year does not have 4 digits
+ *  - Month or mday has 1 digit
+ *  - Space in between date and time, rather than a 'T'
+ *
+ * Regarding the last case, this function only parses out the date, returning
+ * to ParseDate to finish parsing the time and timezone, if present.
+ *
+ * Returns true and fills all out parameters when successfully parsed
+ * dashed-date.  Otherwise returns false and leaves out parameters untouched.
+ */
+template <typename CharT>
+static bool TryParseDashedNumericDatePrefix(const CharT* s, size_t length,
+                                            size_t* indexOut, int* yearOut,
+                                            int* monOut, int* mdayOut) {
+  size_t i = 0;
+
+  size_t first;
+  if (!ParseDigitsNOrLess(6, &first, s, &i, length)) {
+    return false;
+  }
+
+  if (i >= length || s[i] != '-') {
+    return false;
+  }
+  ++i;
+
+  size_t second;
+  if (!ParseDigitsNOrLess(2, &second, s, &i, length)) {
+    return false;
+  }
+
+  if (i >= length || s[i] != '-') {
+    return false;
+  }
+  ++i;
+
+  size_t third;
+  if (!ParseDigitsNOrLess(6, &third, s, &i, length)) {
+    return false;
+  }
+
+  int year;
+  int mon = -1;
+  int mday = -1;
+
+  // 1 or 2 digits for the first number is tricky; 1-12 means it's a month, 0 or
+  // >31 means it's a year, and 13-31 is invalid due to ambiguity.
+  if (first >= 1 && first <= 12) {
+    mon = first;
+  } else if (first == 0 || first > 31) {
+    year = first;
+  } else {
+    return false;
+  }
+
+  if (mon < 0) {
+    // If month hasn't been set yet, it's definitely the 2nd number
+    mon = second;
+  } else {
+    // If it has, the next number is the mday
+    mday = second;
+  }
+
+  if (mday < 0) {
+    // The third number is probably the mday...
+    mday = third;
+  } else {
+    // But otherwise, it's the year
+    year = third;
+  }
+
+  if (mon > 12 || mday > 31) {
+    return false;
+  }
+
+  if (year < 100) {
+    year = FixupNonFullYear(year);
+  }
+
+  *indexOut = i;
+  *yearOut = year;
+  *monOut = mon;
+  *mdayOut = mday;
+  return true;
+}
+
 struct CharsAndAction {
   const char* chars;
   int action;
@@ -1251,6 +1349,7 @@ static constexpr CharsAndAction keywords[] = {
   { "december", 12 },
   // Time zone abbreviations.
   { "gmt", 10000 + 0 },
+  { "z", 10000 + 0 },
   { "ut", 10000 + 0 },
   { "utc", 10000 + 0 },
   { "est", 10000 + 5 * 60 },
@@ -1310,7 +1409,15 @@ static bool ParseDate(DateTimeInfo::ForceUTC forceUTC, const CharT* s,
   //
   // Otherwise, this is no-op.
   bool isDashedDate =
-      TryParseDashedDatePrefix(s, length, &index, &year, &mon, &mday);
+      TryParseDashedDatePrefix(s, length, &index, &year, &mon, &mday) ||
+      TryParseDashedNumericDatePrefix(s, length, &index, &year, &mon, &mday);
+
+  // If we don't check this here, the keywords check later will think that the
+  // 'T' in e.g. "1-20-2012T10:00:00" is an abbreviation for "Thursday" and
+  // allow it when it should be rejected.
+  if (isDashedDate && index < length && s[index] == 'T') {
+    return false;
+  }
 
   while (index < length) {
     int c = s[index];
@@ -1451,7 +1558,16 @@ static bool ParseDate(DateTimeInfo::ForceUTC forceUTC, const CharT* s,
           return false;
         }
       } else if (index < length && c != ',' && c > ' ' && c != '-' &&
-                 c != '(') {
+                 c != '(' &&
+                 // Allow zulu time e.g. "09/26/1995 16:00Z"
+                 !(hour != -1 && strchr("Zz", c)) &&
+                 // Allow '.' after day of month i.e. DD.Mon.YYYY/Mon.DD.YYYY,
+                 // or after year/month in YYYY/MM/DD
+                 (c != '.' || mday != -1) &&
+                 // Allow month or AM/PM directly after a number
+                 (!IsAsciiAlpha(c) ||
+                  (mon != -1 && !(strchr("AaPp", c) && index < length - 1 &&
+                                  strchr("Mm", s[index + 1]))))) {
         return false;
       } else if (seenPlusMinus && n < 60) { /* handle GMT-3:30 */
         if (tzOffset < 0) {
@@ -2944,8 +3060,8 @@ static bool date_toJSON(JSContext* cx, unsigned argc, Value* vp) {
 #if JS_HAS_INTL_API
 JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
                                           DateTimeInfo::ForceUTC forceUTC,
-                                          double utcTime, double localTime) {
-  const char* locale = cx->runtime()->getDefaultLocale();
+                                          const char* locale, double utcTime,
+                                          double localTime) {
   if (!locale) {
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_DEFAULT_LOCALE_ERROR);
@@ -3018,7 +3134,8 @@ size_t DateTimeHelper::formatTime(DateTimeInfo::ForceUTC forceUTC, char* buf,
 
 JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
                                           DateTimeInfo::ForceUTC forceUTC,
-                                          double utcTime, double localTime) {
+                                          const char* locale, double utcTime,
+                                          double localTime) {
   char tzbuf[100];
 
   size_t tzlen =
@@ -3055,7 +3172,7 @@ JSString* DateTimeHelper::timeZoneComment(JSContext* cx,
 enum class FormatSpec { DateTime, Date, Time };
 
 static bool FormatDate(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
-                       double utcTime, FormatSpec format,
+                       const char* locale, double utcTime, FormatSpec format,
                        MutableHandleValue rval) {
   if (!std::isfinite(utcTime)) {
     rval.setString(cx->names().Invalid_Date_);
@@ -3091,8 +3208,8 @@ static bool FormatDate(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
     // also means the time zone string may not fit into Latin-1.
 
     // Get a time zone string from the OS or ICU to include as a comment.
-    timeZoneComment =
-        DateTimeHelper::timeZoneComment(cx, forceUTC, utcTime, localTime);
+    timeZoneComment = DateTimeHelper::timeZoneComment(cx, forceUTC, locale,
+                                                      utcTime, localTime);
     if (!timeZoneComment) {
       return false;
     }
@@ -3142,9 +3259,12 @@ static bool FormatDate(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
 }
 
 #if !JS_HAS_INTL_API
-static bool ToLocaleFormatHelper(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
-                                 double utcTime, const char* format,
-                                 MutableHandleValue rval) {
+static bool ToLocaleFormatHelper(JSContext* cx, DateObject* unwrapped,
+                                 const char* format, MutableHandleValue rval) {
+  DateTimeInfo::ForceUTC forceUTC = unwrapped->forceUTC();
+  const char* locale = unwrapped->realm()->getLocale();
+  double utcTime = unwrapped->UTCTime().toNumber();
+
   char buf[100];
   if (!std::isfinite(utcTime)) {
     strcpy(buf, "InvalidDate");
@@ -3157,7 +3277,8 @@ static bool ToLocaleFormatHelper(JSContext* cx, DateTimeInfo::ForceUTC forceUTC,
 
     /* If it failed, default to toString. */
     if (result_len == 0) {
-      return FormatDate(cx, forceUTC, utcTime, FormatSpec::DateTime, rval);
+      return FormatDate(cx, forceUTC, locale, utcTime, FormatSpec::DateTime,
+                        rval);
     }
 
     /* Hacked check against undesired 2-digit year 00/00/00 form. */
@@ -3212,9 +3333,7 @@ static bool date_toLocaleString(JSContext* cx, unsigned argc, Value* vp) {
 #  endif
       ;
 
-  return ToLocaleFormatHelper(cx, unwrapped->forceUTC(),
-                              unwrapped->UTCTime().toNumber(), format,
-                              args.rval());
+  return ToLocaleFormatHelper(cx, unwrapped, format, args.rval());
 }
 
 static bool date_toLocaleDateString(JSContext* cx, unsigned argc, Value* vp) {
@@ -3240,9 +3359,7 @@ static bool date_toLocaleDateString(JSContext* cx, unsigned argc, Value* vp) {
 #  endif
       ;
 
-  return ToLocaleFormatHelper(cx, unwrapped->forceUTC(),
-                              unwrapped->UTCTime().toNumber(), format,
-                              args.rval());
+  return ToLocaleFormatHelper(cx, unwrapped, format, args.rval());
 }
 
 static bool date_toLocaleTimeString(JSContext* cx, unsigned argc, Value* vp) {
@@ -3256,9 +3373,7 @@ static bool date_toLocaleTimeString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return ToLocaleFormatHelper(cx, unwrapped->forceUTC(),
-                              unwrapped->UTCTime().toNumber(), "%X",
-                              args.rval());
+  return ToLocaleFormatHelper(cx, unwrapped, "%X", args.rval());
 }
 #endif /* !JS_HAS_INTL_API */
 
@@ -3272,8 +3387,9 @@ static bool date_toTimeString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->UTCTime().toNumber(),
-                    FormatSpec::Time, args.rval());
+  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->realm()->getLocale(),
+                    unwrapped->UTCTime().toNumber(), FormatSpec::Time,
+                    args.rval());
 }
 
 static bool date_toDateString(JSContext* cx, unsigned argc, Value* vp) {
@@ -3286,8 +3402,9 @@ static bool date_toDateString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->UTCTime().toNumber(),
-                    FormatSpec::Date, args.rval());
+  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->realm()->getLocale(),
+                    unwrapped->UTCTime().toNumber(), FormatSpec::Date,
+                    args.rval());
 }
 
 static bool date_toSource(JSContext* cx, unsigned argc, Value* vp) {
@@ -3323,8 +3440,9 @@ bool date_toString(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->UTCTime().toNumber(),
-                    FormatSpec::DateTime, args.rval());
+  return FormatDate(cx, unwrapped->forceUTC(), unwrapped->realm()->getLocale(),
+                    unwrapped->UTCTime().toNumber(), FormatSpec::DateTime,
+                    args.rval());
 }
 
 bool js::date_valueOf(JSContext* cx, unsigned argc, Value* vp) {
@@ -3480,8 +3598,8 @@ static bool NewDateObject(JSContext* cx, const CallArgs& args, ClippedTime t) {
 }
 
 static bool ToDateString(JSContext* cx, const CallArgs& args, ClippedTime t) {
-  return FormatDate(cx, ForceUTC(cx->realm()), t.toDouble(),
-                    FormatSpec::DateTime, args.rval());
+  return FormatDate(cx, ForceUTC(cx->realm()), cx->realm()->getLocale(),
+                    t.toDouble(), FormatSpec::DateTime, args.rval());
 }
 
 static bool DateNoArguments(JSContext* cx, const CallArgs& args) {

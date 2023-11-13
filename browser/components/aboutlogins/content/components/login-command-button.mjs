@@ -2,6 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/*
+ * Note: For now, to display the tooltip for a <login-command-button> you need to
+ * use data-l10n-id attribute instead of the l10nId attribute in the tag.
+ * Bug 1844869 will make an attempt to fix this.
+ */
+
 import {
   html,
   ifDefined,
@@ -23,16 +29,12 @@ export default class LoginCommandButton extends MozLitElement {
 
   constructor() {
     super();
-    this.l10nId = "";
+    this.l10nId = undefined;
     this.icon = "";
     this.variant = "";
     this.disabled = false;
     this.tooltip = "";
   }
-
-  static stylesheetUrl = window.IS_STORYBOOK
-    ? "./login-command-button.css"
-    : "chrome://browser/content/aboutlogins/components/login-command-button.css";
 
   render() {
     return html`
@@ -40,7 +42,10 @@ export default class LoginCommandButton extends MozLitElement {
         rel="stylesheet"
         href="chrome://global/skin/in-content/common.css"
       />
-      <link rel="stylesheet" href=${this.constructor.stylesheetUrl} />
+      <link
+        rel="stylesheet"
+        href="chrome://browser/content/aboutlogins/components/login-command-button.css"
+      />
 
       <!-- Keeping the data-l10n-id in a separate span tag for the correct formatting of 
       img before the l10nid. Keeping it within the button will cause a different format and
@@ -49,7 +54,6 @@ export default class LoginCommandButton extends MozLitElement {
 
       <button
         class=${this.variant}
-        title=${ifDefined(this.tooltip)}
         ?disabled=${this.disabled}
         @click=${ifDefined(this.onClick)}
       >
@@ -63,14 +67,7 @@ export default class LoginCommandButton extends MozLitElement {
         so that when it is clicked, the text changes to the corresponding successfully 'copied-text'
         used in the css file. This change is made in login-item in Bug 1832680. -->
 
-        <span
-          class=${this.class}
-          data-l10n-id=${when(
-            this.variant.includes("icon"),
-            () => "",
-            () => this.l10nId
-          )}
-        ></span>
+        <span class=${this.class} data-l10n-id=${ifDefined(this.l10nId)}></span>
       </button>
     `;
   }

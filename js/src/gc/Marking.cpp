@@ -499,16 +499,17 @@ template void js::TraceManuallyBarrieredCrossCompartmentEdge<BaseScript*>(
 
 template <typename T>
 void js::TraceSameZoneCrossCompartmentEdge(JSTracer* trc,
-                                           const WriteBarriered<T>* dst,
+                                           const BarrieredBase<T>* dst,
                                            const char* name) {
 #ifdef DEBUG
   if (trc->isMarkingTracer()) {
-    MOZ_ASSERT((*dst)->maybeCompartment(),
+    T thing = *dst->unbarrieredAddress();
+    MOZ_ASSERT(thing->maybeCompartment(),
                "Use TraceEdge for GC things without a compartment");
 
     GCMarker* gcMarker = GCMarker::fromTracer(trc);
     MOZ_ASSERT_IF(gcMarker->tracingZone,
-                  (*dst)->zone() == gcMarker->tracingZone);
+                  thing->zone() == gcMarker->tracingZone);
   }
 
   // Skip compartment checks for this edge.
@@ -522,7 +523,7 @@ void js::TraceSameZoneCrossCompartmentEdge(JSTracer* trc,
   TraceEdgeInternal(trc, ConvertToBase(dst->unbarrieredAddress()), name);
 }
 template void js::TraceSameZoneCrossCompartmentEdge(
-    JSTracer*, const WriteBarriered<Shape*>*, const char*);
+    JSTracer*, const BarrieredBase<Shape*>*, const char*);
 
 template <typename T>
 void js::TraceWeakMapKeyEdgeInternal(JSTracer* trc, Zone* weakMapZone,
@@ -1268,6 +1269,24 @@ void GCMarker::moveWork(GCMarker* dst, GCMarker* src) {
   MarkStack::moveWork(dst->stack, src->stack);
 }
 
+bool GCMarker::initStack() {
+  MOZ_ASSERT(!isActive());
+  MOZ_ASSERT(markColor_ == gc::MarkColor::Black);
+  return stack.init();
+}
+
+void GCMarker::resetStackCapacity() {
+  MOZ_ASSERT(!isActive());
+  MOZ_ASSERT(markColor_ == gc::MarkColor::Black);
+  (void)stack.resetStackCapacity();
+}
+
+void GCMarker::freeStack() {
+  MOZ_ASSERT(!isActive());
+  MOZ_ASSERT(markColor_ == gc::MarkColor::Black);
+  stack.clearAndFreeStack();
+}
+
 bool GCMarker::markUntilBudgetExhausted(SliceBudget& budget,
                                         ShouldReportMarkTime reportTime) {
 #ifdef DEBUG
@@ -2001,13 +2020,14 @@ void GCMarker::stop() {
   }
   state = NotActive;
 
-  (void)stack.resetStackCapacity();
   otherStack.clearAndFreeStack();
   ClearEphemeronEdges(runtime());
   unmarkGrayStack.clearAndFree();
 }
 
 void GCMarker::reset() {
+  state = NotActive;
+
   stack.clearAndResetCapacity();
   otherStack.clearAndFreeStack();
   ClearEphemeronEdges(runtime());

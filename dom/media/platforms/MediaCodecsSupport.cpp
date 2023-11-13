@@ -5,8 +5,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include <array>
 
+#ifdef MOZ_AV1
+#  include "AOMDecoder.h"
+#endif
 #include "MediaCodecsSupport.h"
+#include "MP4Decoder.h"
+#include "OpusDecoder.h"
 #include "PlatformDecoderModule.h"
+#include "TheoraDecoder.h"
+#include "VPXDecoder.h"
+#include "VorbisDecoder.h"
+#include "WAVDecoder.h"
 #include "mozilla/AppShutdown.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "nsTHashMap.h"
@@ -78,6 +87,18 @@ MediaCodecsSupported MCSInfo::GetDecodeMediaCodecsSupported(
   return support;
 }
 
+bool MCSInfo::SupportsSoftwareDecode(
+    const MediaCodecsSupported& aSupportedCodecs, const MediaCodec& aCodec) {
+  return (
+      aSupportedCodecs.contains(GetCodecDefinition(aCodec).swDecodeSupport));
+}
+
+bool MCSInfo::SupportsHardwareDecode(
+    const MediaCodecsSupported& aSupportedCodecs, const MediaCodec& aCodec) {
+  return (
+      aSupportedCodecs.contains(GetCodecDefinition(aCodec).hwDecodeSupport));
+}
+
 void MCSInfo::GetMediaCodecsSupportedString(
     nsCString& aSupportString, const MediaCodecsSupported& aSupportedCodecs) {
   CodecDefinition supportInfo;
@@ -87,20 +108,27 @@ void MCSInfo::GetMediaCodecsSupportedString(
     CODEC_SUPPORT_LOG("Can't get codec support string w/o a MCSInfo instance!");
     return;
   }
-  for (const auto& it : aSupportedCodecs) {
-    if (!instance->mHashTableMCS->Get(it, &supportInfo)) {
-      CODEC_SUPPORT_LOG("Can't find string for MediaCodecsSupported enum: %d",
-                        static_cast<int>(it));
-      aSupportString.Append("Unknown codec entry found!\n"_ns);
+  for (const auto& it : GetAllCodecDefinitions()) {
+    if (it.codec == MediaCodec::SENTINEL) {
+      break;
+    }
+    if (!instance->mHashTableCodec->Get(it.codec, &supportInfo)) {
+      CODEC_SUPPORT_LOG("Can't find codec for MediaCodecsSupported enum: %d",
+                        static_cast<int>(it.codec));
       continue;
     }
-    // Get codec name string and append SW/HW support info
     aSupportString.Append(supportInfo.commonName);
-    if (it == supportInfo.swDecodeSupport) {
+    bool foundSupport = false;
+    if (aSupportedCodecs.contains(it.swDecodeSupport)) {
       aSupportString.Append(" SW"_ns);
+      foundSupport = true;
     }
-    if (it == supportInfo.hwDecodeSupport) {
+    if (aSupportedCodecs.contains(it.hwDecodeSupport)) {
       aSupportString.Append(" HW"_ns);
+      foundSupport = true;
+    }
+    if (!foundSupport) {
+      aSupportString.Append(" NONE"_ns);
     }
     aSupportString.Append("\n"_ns);
   }
@@ -161,8 +189,96 @@ CodecDefinition MCSInfo::GetCodecDefinition(const MediaCodec& aCodec) {
   return info;
 }
 
-std::array<CodecDefinition, 12> MCSInfo::GetAllCodecDefinitions() {
-  static constexpr std::array<CodecDefinition, 12> codecDefinitions = {
+MediaCodecsSupport MCSInfo::GetMediaCodecsSupportEnum(
+    const MediaCodec& aCodec, const DecodeSupportSet& aSupport) {
+  if (aSupport.isEmpty()) {
+    return MediaCodecsSupport{};
+  }
+  const CodecDefinition cd = GetCodecDefinition(aCodec);
+  if (aSupport.contains(DecodeSupport::SoftwareDecode)) {
+    return cd.swDecodeSupport;
+  }
+  if (aSupport.contains(DecodeSupport::HardwareDecode)) {
+    return cd.hwDecodeSupport;
+  }
+  return MediaCodecsSupport::SENTINEL;
+}
+
+MediaCodecSet MCSInfo::GetMediaCodecSetFromMimeTypes(
+    const nsTArray<nsCString>& aCodecStrings) {
+  MediaCodecSet support;
+  for (const auto& ms : aCodecStrings) {
+    const MediaCodec codec = MCSInfo::GetMediaCodecFromMimeType(ms);
+    if (codec == MediaCodec::SENTINEL) {
+      continue;
+    }
+    MOZ_ASSERT(codec < MediaCodec::SENTINEL);
+    support += codec;
+  }
+  return support;
+}
+
+MediaCodec MCSInfo::GetMediaCodecFromMimeType(const nsACString& aMimeType) {
+  // Video codecs
+  if (MP4Decoder::IsH264(aMimeType)) {
+    return MediaCodec::H264;
+  }
+  if (VPXDecoder::IsVP8(aMimeType)) {
+    return MediaCodec::VP8;
+  }
+  if (VPXDecoder::IsVP9(aMimeType)) {
+    return MediaCodec::VP9;
+  }
+  if (TheoraDecoder::IsTheora(aMimeType)) {
+    return MediaCodec::Theora;
+  }
+  if (MP4Decoder::IsHEVC(aMimeType)) {
+    return MediaCodec::HEVC;
+  }
+#ifdef MOZ_AV1
+  if (AOMDecoder::IsAV1(aMimeType)) {
+    return MediaCodec::AV1;
+  }
+  if (aMimeType.EqualsLiteral("video/av01")) {
+    return MediaCodec::AV1;
+  }
+#endif
+  // TODO: Should this be Android only?
+#ifdef ANDROID
+  if (aMimeType.EqualsLiteral("video/x-vnd.on2.vp8")) {
+    return MediaCodec::VP8;
+  }
+  if (aMimeType.EqualsLiteral("video/x-vnd.on2.vp9")) {
+    return MediaCodec::VP9;
+  }
+#endif
+  // Audio codecs
+  if (MP4Decoder::IsAAC(aMimeType)) {
+    return MediaCodec::AAC;
+  }
+  if (VorbisDataDecoder::IsVorbis(aMimeType)) {
+    return MediaCodec::Vorbis;
+  }
+  if (aMimeType.EqualsLiteral("audio/flac")) {
+    return MediaCodec::FLAC;
+  }
+  if (WaveDataDecoder::IsWave(aMimeType)) {
+    return MediaCodec::Wave;
+  }
+  if (OpusDataDecoder::IsOpus(aMimeType)) {
+    return MediaCodec::Opus;
+  }
+  if (aMimeType.EqualsLiteral("audio/mpeg")) {
+    return MediaCodec::MP3;
+  }
+
+  CODEC_SUPPORT_LOG("No specific codec enum for MIME type string: %s",
+                    nsCString(aMimeType).get());
+  return MediaCodec::SENTINEL;
+}
+
+std::array<CodecDefinition, 13> MCSInfo::GetAllCodecDefinitions() {
+  static constexpr std::array<CodecDefinition, 13> codecDefinitions = {
       {{MediaCodec::H264, "H264", "video/avc",
         MediaCodecsSupport::H264SoftwareDecode,
         MediaCodecsSupport::H264HardwareDecode},
@@ -175,6 +291,9 @@ std::array<CodecDefinition, 12> MCSInfo::GetAllCodecDefinitions() {
        {MediaCodec::AV1, "AV1", "video/av1",
         MediaCodecsSupport::AV1SoftwareDecode,
         MediaCodecsSupport::AV1HardwareDecode},
+       {MediaCodec::HEVC, "HEVC", "video/hevc",
+        MediaCodecsSupport::HEVCSoftwareDecode,
+        MediaCodecsSupport::HEVCHardwareDecode},
        {MediaCodec::Theora, "Theora", "video/theora",
         MediaCodecsSupport::TheoraSoftwareDecode,
         MediaCodecsSupport::TheoraHardwareDecode},

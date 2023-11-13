@@ -11,6 +11,7 @@
 /* eslint-enable jsdoc/valid-types */
 
 ChromeUtils.defineESModuleGetters(this, {
+  PageActions: "resource:///modules/PageActions.sys.mjs",
   TranslationsTelemetry:
     "chrome://browser/content/translations/TranslationsTelemetry.sys.mjs",
 });
@@ -304,13 +305,22 @@ var TranslationsPanel = new (class {
       getter("fromLabel", "translations-panel-from-label");
       getter("header", "translations-panel-header");
       getter("intro", "translations-panel-intro");
+      getter("introLearnMoreLink", "translations-panel-intro-learn-more-link");
       getter("langSelection", "translations-panel-lang-selection");
       getter("multiview", "translations-panel-multiview");
       getter("restoreButton", "translations-panel-restore-button");
       getter("toLabel", "translations-panel-to-label");
       getter("toMenuList", "translations-panel-to");
       getter("translateButton", "translations-panel-translate");
+      getter(
+        "unsupportedHeader",
+        "translations-panel-unsupported-language-header"
+      );
       getter("unsupportedHint", "translations-panel-error-unsupported-hint");
+      getter(
+        "unsupportedLearnMoreLink",
+        "translations-panel-unsupported-learn-more-link"
+      );
 
       // Getters by class
       getter(
@@ -1105,6 +1115,8 @@ var TranslationsPanel = new (class {
       isFirstUserInteraction = null,
     }
   ) {
+    await window.ensureCustomElements("moz-button-group");
+
     const { panel, appMenuButton } = this.elements;
     const openedFromAppMenu = target.id === appMenuButton.id;
     const { docLangTag } = await this.#getCachedDetectedLanguages();
@@ -1547,6 +1559,10 @@ var TranslationsPanel = new (class {
                 "urlbar-translations-button-intro"
               );
             }
+          }
+
+          if (!button.hidden) {
+            PageActions.sendPlacedInUrlbarTrigger(button);
           }
         } else {
           if (handleEventId !== this.handleEventId) {

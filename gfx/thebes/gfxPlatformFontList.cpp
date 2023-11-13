@@ -343,10 +343,9 @@ gfxPlatformFontList::gfxPlatformFontList(bool aNeedFullnamePostscriptNames)
 }
 
 gfxPlatformFontList::~gfxPlatformFontList() {
-  // We take the lock here because it's possible the InitFontList thread is
-  // still running, in which case we need to wait for it to finish; this will
-  // block until the lock becomes available, ensuring we don't destroy things
-  // the initialization thread is using.
+  // Note that gfxPlatformFontList::Shutdown() ensures that the init-font-list
+  // thread is finished before we come here.
+
   AutoLock lock(mLock);
 
   // We can't just do mSharedCmaps.Clear() here because removing each item from
@@ -1310,6 +1309,7 @@ class StartCmapLoadingRunnable : public mozilla::Runnable {
 };
 
 void gfxPlatformFontList::StartCmapLoadingFromFamily(uint32_t aStartIndex) {
+  AutoLock lock(mLock);
   if (aStartIndex > mStartedLoadingCmapsFrom) {
     // We already initiated cmap-loading from somewhere earlier in the list;
     // no need to do it again here.
@@ -1496,6 +1496,31 @@ gfxFontFamily* gfxPlatformFontList::CheckFamily(gfxFontFamily* aFamily) {
   }
 
   return aFamily;
+}
+
+bool gfxPlatformFontList::FindAndAddFamilies(
+    nsPresContext* aPresContext, StyleGenericFontFamily aGeneric,
+    const nsACString& aFamily, nsTArray<FamilyAndGeneric>* aOutput,
+    FindFamiliesFlags aFlags, gfxFontStyle* aStyle, nsAtom* aLanguage,
+    gfxFloat aDevToCssSize) {
+  AutoLock lock(mLock);
+
+#ifdef DEBUG
+  auto initialLength = aOutput->Length();
+#endif
+
+  bool didFind =
+      FindAndAddFamiliesLocked(aPresContext, aGeneric, aFamily, aOutput, aFlags,
+                               aStyle, aLanguage, aDevToCssSize);
+#ifdef DEBUG
+  auto finalLength = aOutput->Length();
+  // Validate the expectation that the output-array grows if we return true,
+  // or remains the same (probably empty) if we return false.
+  MOZ_ASSERT_IF(didFind, finalLength > initialLength);
+  MOZ_ASSERT_IF(!didFind, finalLength == initialLength);
+#endif
+
+  return didFind;
 }
 
 bool gfxPlatformFontList::FindAndAddFamiliesLocked(
@@ -1893,7 +1918,6 @@ FamilyAndGeneric gfxPlatformFontList::GetDefaultFontFamily(
 
 ShmemCharMapHashEntry::ShmemCharMapHashEntry(const gfxSparseBitSet* aCharMap)
     : mList(gfxPlatformFontList::PlatformFontList()->SharedFontList()),
-      mCharMap(),
       mHash(aCharMap->GetChecksum()) {
   size_t len = SharedBitSet::RequiredSize(*aCharMap);
   mCharMap = mList->Alloc(len);

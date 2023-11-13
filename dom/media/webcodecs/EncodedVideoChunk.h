@@ -9,9 +9,9 @@
 
 #include "js/TypeDecls.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/Buffer.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsWrapperCache.h"
@@ -45,7 +45,7 @@ class EncodedVideoChunkData {
   EncodedVideoChunkData(const EncodedVideoChunkData& aData) = default;
   ~EncodedVideoChunkData() = default;
 
-  UniquePtr<EncodedVideoChunkData> Clone();
+  UniquePtr<EncodedVideoChunkData> Clone() const;
   already_AddRefed<MediaRawData> TakeData();
 
  protected:

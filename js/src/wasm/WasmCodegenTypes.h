@@ -134,20 +134,137 @@ class BytecodeOffset {
 
 WASM_DECLARE_CACHEABLE_POD(BytecodeOffset);
 
+// A TrapMachineInsn describes roughly what kind of machine instruction has
+// caused a trap.  This is used only for validation of trap placement in debug
+// builds, in ModuleGenerator::finishMetadataTier, and is not necessary for
+// execution of wasm code.
+enum class TrapMachineInsn {
+  // The "official" undefined insn for the target, or something equivalent
+  // that we use for that purpose.  The key property is that it always raises
+  // SIGILL when executed.  For example, UD2 on Intel.
+  OfficialUD,
+  // Loads and stores that move 8, 16, 32, 64 or 128 bits of data, regardless
+  // of their type and how they are subsequently used (widened or duplicated).
+  Load8,
+  Load16,
+  Load32,
+  Load64,
+  Load128,
+  Store8,
+  Store16,
+  Store32,
+  Store64,
+  Store128,
+  // Any kind of atomic r-m-w or CAS memory transaction, but not including
+  // Load-Linked or Store-Checked style insns -- those count as plain LoadX
+  // and StoreX.
+  Atomic
+};
+
+static inline TrapMachineInsn TrapMachineInsnForLoad(int byteSize) {
+  switch (byteSize) {
+    case 1:
+      return TrapMachineInsn::Load8;
+    case 2:
+      return TrapMachineInsn::Load16;
+    case 4:
+      return TrapMachineInsn::Load32;
+    case 8:
+      return TrapMachineInsn::Load64;
+    case 16:
+      return TrapMachineInsn::Load128;
+    default:
+      MOZ_CRASH("TrapMachineInsnForLoad");
+  }
+}
+static inline TrapMachineInsn TrapMachineInsnForLoadWord() {
+  return TrapMachineInsnForLoad(sizeof(void*));
+}
+
+static inline TrapMachineInsn TrapMachineInsnForStore(int byteSize) {
+  switch (byteSize) {
+    case 1:
+      return TrapMachineInsn::Store8;
+    case 2:
+      return TrapMachineInsn::Store16;
+    case 4:
+      return TrapMachineInsn::Store32;
+    case 8:
+      return TrapMachineInsn::Store64;
+    case 16:
+      return TrapMachineInsn::Store128;
+    default:
+      MOZ_CRASH("TrapMachineInsnForStore");
+  }
+}
+static inline TrapMachineInsn TrapMachineInsnForStoreWord() {
+  return TrapMachineInsnForStore(sizeof(void*));
+}
+
+#ifdef DEBUG
+const char* NameOfTrap(Trap trap);
+const char* NameOfTrapMachineInsn(TrapMachineInsn tmi);
+#endif  // DEBUG
+
+// This holds an assembler buffer offset, which indicates the offset of a
+// faulting instruction, and is used for the construction of TrapSites below.
+// It is wrapped up as a new type only to avoid getting it confused with any
+// other uint32_t or with CodeOffset.
+
+class FaultingCodeOffset {
+  static constexpr uint32_t INVALID = UINT32_MAX;
+  uint32_t offset_;
+
+ public:
+  FaultingCodeOffset() : offset_(INVALID) {}
+  explicit FaultingCodeOffset(uint32_t offset) : offset_(offset) {
+    MOZ_ASSERT(offset != INVALID);
+  }
+  bool isValid() const { return offset_ != INVALID; }
+  uint32_t get() const {
+    MOZ_ASSERT(isValid());
+    return offset_;
+  }
+};
+static_assert(sizeof(FaultingCodeOffset) == 4);
+
+// And this holds two such offsets.  Needed for 64-bit integer transactions on
+// 32-bit targets.
+using FaultingCodeOffsetPair =
+    std::pair<FaultingCodeOffset, FaultingCodeOffset>;
+static_assert(sizeof(FaultingCodeOffsetPair) == 8);
+
 // A TrapSite (in the TrapSiteVector for a given Trap code) represents a wasm
-// instruction at a given bytecode offset that can fault at the given pc offset.
-// When such a fault occurs, a signal/exception handler looks up the TrapSite to
-// confirm the fault is intended/safe and redirects pc to the trap stub.
+// instruction at a given bytecode offset that can fault at the given pc
+// offset.  When such a fault occurs, a signal/exception handler looks up the
+// TrapSite to confirm the fault is intended/safe and redirects pc to the trap
+// stub.
 
 struct TrapSite {
+#ifdef DEBUG
+  TrapMachineInsn insn;
+#endif
   uint32_t pcOffset;
   BytecodeOffset bytecode;
 
   WASM_CHECK_CACHEABLE_POD(pcOffset, bytecode);
 
-  TrapSite() : pcOffset(-1), bytecode() {}
-  TrapSite(uint32_t pcOffset, BytecodeOffset bytecode)
-      : pcOffset(pcOffset), bytecode(bytecode) {}
+  TrapSite()
+      :
+#ifdef DEBUG
+        insn(TrapMachineInsn::OfficialUD),
+#endif
+        pcOffset(-1) {
+  }
+  TrapSite(TrapMachineInsn insn, FaultingCodeOffset fco,
+           BytecodeOffset bytecode)
+      :
+#ifdef DEBUG
+        insn(insn),
+#endif
+        pcOffset(fco.get()),
+        bytecode(bytecode) {
+  }
 
   void offsetBy(uint32_t offset) { pcOffset += offset; }
 };
@@ -162,6 +279,7 @@ struct TrapSiteVectorArray
   void swap(TrapSiteVectorArray& rhs);
   void shrinkStorageToFit();
 
+  size_t sumOfLengths() const;
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 };
 
@@ -200,7 +318,7 @@ struct Offsets {
 WASM_DECLARE_CACHEABLE_POD(Offsets);
 
 struct CallableOffsets : Offsets {
-  MOZ_IMPLICIT CallableOffsets(uint32_t ret = 0) : Offsets(), ret(ret) {}
+  MOZ_IMPLICIT CallableOffsets(uint32_t ret = 0) : ret(ret) {}
 
   // The offset of the return instruction precedes 'end' by a variable number
   // of instructions due to out-of-line codegen.
@@ -212,8 +330,7 @@ struct CallableOffsets : Offsets {
 WASM_DECLARE_CACHEABLE_POD(CallableOffsets);
 
 struct FuncOffsets : CallableOffsets {
-  MOZ_IMPLICIT FuncOffsets()
-      : CallableOffsets(), uncheckedCallEntry(0), tierEntry(0) {}
+  MOZ_IMPLICIT FuncOffsets() : uncheckedCallEntry(0), tierEntry(0) {}
 
   // Function CodeRanges have a checked call entry which takes an extra
   // signature argument which is checked against the callee's signature before
@@ -271,6 +388,7 @@ class CodeRange {
           uint32_t lineOrBytecode_;
           uint16_t beginToUncheckedCallEntry_;
           uint16_t beginToTierEntry_;
+          bool hasUnwindInfo_;
         } func;
       };
     };
@@ -281,7 +399,8 @@ class CodeRange {
   WASM_CHECK_CACHEABLE_POD(begin_, ret_, end_, u.funcIndex_,
                            u.func.lineOrBytecode_,
                            u.func.beginToUncheckedCallEntry_,
-                           u.func.beginToTierEntry_, u.trap_, kind_);
+                           u.func.beginToTierEntry_, u.func.hasUnwindInfo_,
+                           u.trap_, kind_);
 
  public:
   CodeRange() = default;
@@ -289,7 +408,8 @@ class CodeRange {
   CodeRange(Kind kind, uint32_t funcIndex, Offsets offsets);
   CodeRange(Kind kind, CallableOffsets offsets);
   CodeRange(Kind kind, uint32_t funcIndex, CallableOffsets);
-  CodeRange(uint32_t funcIndex, uint32_t lineOrBytecode, FuncOffsets offsets);
+  CodeRange(uint32_t funcIndex, uint32_t lineOrBytecode, FuncOffsets offsets,
+            bool hasUnwindInfo);
 
   void offsetBy(uint32_t offset) {
     begin_ += offset;
@@ -374,6 +494,10 @@ class CodeRange {
   uint32_t funcLineOrBytecode() const {
     MOZ_ASSERT(isFunction());
     return u.func.lineOrBytecode_;
+  }
+  bool funcHasUnwindInfo() const {
+    MOZ_ASSERT(isFunction());
+    return u.func.hasUnwindInfo_;
   }
 
   // A sorted array of CodeRanges can be looked up via BinarySearch and
@@ -625,20 +749,69 @@ struct TryNote {
 WASM_DECLARE_CACHEABLE_POD(TryNote);
 WASM_DECLARE_POD_VECTOR(TryNote, TryNoteVector)
 
+class CodeRangeUnwindInfo {
+ public:
+  enum UnwindHow {
+    Normal,
+    RestoreFpRa,
+    RestoreFp,
+    UseFpLr,
+    UseFp,
+  };
+
+ private:
+  uint32_t offset_;
+  UnwindHow unwindHow_;
+
+  WASM_CHECK_CACHEABLE_POD(offset_, unwindHow_);
+
+ public:
+  CodeRangeUnwindInfo(uint32_t offset, UnwindHow unwindHow)
+      : offset_(offset), unwindHow_(unwindHow) {}
+
+  uint32_t offset() const { return offset_; }
+  UnwindHow unwindHow() const { return unwindHow_; }
+
+  // Adjust all code offsets in this info by a delta.
+  void offsetBy(uint32_t offset) { offset_ += offset; }
+};
+
+WASM_DECLARE_CACHEABLE_POD(CodeRangeUnwindInfo);
+WASM_DECLARE_POD_VECTOR(CodeRangeUnwindInfo, CodeRangeUnwindInfoVector)
+
+enum class CallIndirectIdKind {
+  // Generate a no-op signature check prologue, asm.js function tables are
+  // homogenous.
+  AsmJS,
+  // Use a machine code immediate for the signature check, only works on simple
+  // function types, without super types, and without siblings in their
+  // recursion group.
+  Immediate,
+  // Use the full type definition and subtyping machinery when performing the
+  // signature check.
+  Global,
+  // Don't generate any signature check prologue, for functions that cannot be
+  // stored in tables.
+  None
+};
+
 // CallIndirectId describes how to compile a call_indirect and matching
 // signature check in the function prologue for a given function type.
 
-enum class CallIndirectIdKind { AsmJS, Immediate, Global, None };
-
 class CallIndirectId {
   CallIndirectIdKind kind_;
-  size_t bits_;
+  union {
+    size_t immediate_;
+    struct {
+      size_t instanceDataOffset_;
+      bool hasSuperType_;
+    } global_;
+  };
 
-  CallIndirectId(CallIndirectIdKind kind, size_t bits)
-      : kind_(kind), bits_(bits) {}
+  explicit CallIndirectId(CallIndirectIdKind kind) : kind_(kind) {}
 
  public:
-  CallIndirectId() : kind_(CallIndirectIdKind::None), bits_(0) {}
+  CallIndirectId() : kind_(CallIndirectIdKind::None) {}
 
   // Get a CallIndirectId for an asm.js function which will generate a no-op
   // checked call prologue.
@@ -655,13 +828,23 @@ class CallIndirectId {
   CallIndirectIdKind kind() const { return kind_; }
   bool isGlobal() const { return kind_ == CallIndirectIdKind::Global; }
 
+  // The bit-packed representation of simple function types. See FuncType in
+  // WasmTypeDef.h for more information.
   uint32_t immediate() const {
     MOZ_ASSERT(kind_ == CallIndirectIdKind::Immediate);
-    return bits_;
+    return immediate_;
   }
+
+  // The offset of the TypeDefInstanceData for the function type.
   uint32_t instanceDataOffset() const {
     MOZ_ASSERT(kind_ == CallIndirectIdKind::Global);
-    return bits_;
+    return global_.instanceDataOffset_;
+  }
+
+  // Whether the TypeDef has any super types.
+  bool hasSuperType() const {
+    MOZ_ASSERT(kind_ == CallIndirectIdKind::Global);
+    return global_.hasSuperType_;
   }
 };
 

@@ -61,7 +61,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   PluginManager: "resource:///actors/PluginParent.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
   ProcessHangMonitor: "resource:///modules/ProcessHangMonitor.sys.mjs",
-  ProvenanceData: "resource:///modules/ProvenanceData.sys.mjs",
   PublicSuffixList:
     "resource://gre/modules/netwerk-dns/PublicSuffixList.sys.mjs",
   QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
@@ -69,10 +68,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
   RemoteSecuritySettings:
     "resource://gre/modules/psm/RemoteSecuritySettings.sys.mjs",
   RemoteSettings: "resource://services-settings/remote-settings.sys.mjs",
+  ResetPBMPanel: "resource:///modules/ResetPBMPanel.sys.mjs",
   SafeBrowsing: "resource://gre/modules/SafeBrowsing.sys.mjs",
   Sanitizer: "resource:///modules/Sanitizer.sys.mjs",
   SaveToPocket: "chrome://pocket/content/SaveToPocket.sys.mjs",
   ScreenshotsUtils: "resource:///modules/ScreenshotsUtils.sys.mjs",
+  SearchSERPDomainToCategoriesMap:
+    "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchSERPTelemetry: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SessionStartup: "resource:///modules/sessionstore/SessionStartup.sys.mjs",
   SessionStore: "resource:///modules/sessionstore/SessionStore.sys.mjs",
@@ -88,6 +90,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   UIState: "resource://services-sync/UIState.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   WebChannel: "resource://gre/modules/WebChannel.sys.mjs",
+  WindowsLaunchOnLogin: "resource://gre/modules/WindowsLaunchOnLogin.sys.mjs",
   WindowsRegistry: "resource://gre/modules/WindowsRegistry.sys.mjs",
   WindowsGPOParser: "resource://gre/modules/policies/WindowsGPOParser.sys.mjs",
   clearTimeout: "resource://gre/modules/Timer.sys.mjs",
@@ -156,6 +159,9 @@ const PRIVATE_BROWSING_BINARY = "private_browsing.exe";
 const PRIVATE_BROWSING_EXE_ICON_INDEX = 1;
 const PREF_PRIVATE_BROWSING_SHORTCUT_CREATED =
   "browser.privacySegmentation.createdShortcut";
+// Whether this launch was initiated by the OS.  A launch-on-login will contain
+// the "os-autostart" flag in the initial launch command line.
+let gThisInstanceIsLaunchOnLogin = false;
 
 /**
  * Fission-compatible JSProcess implementations.
@@ -384,14 +390,12 @@ let JSWINDOWACTORS = {
 
   AboutWelcomeShopping: {
     parent: {
-      moduleURI: "resource:///actors/AboutWelcomeParent.jsm",
+      esModuleURI: "resource:///actors/AboutWelcomeParent.sys.mjs",
     },
     child: {
-      moduleURI: "resource:///actors/AboutWelcomeChild.jsm",
+      esModuleURI: "resource:///actors/AboutWelcomeChild.sys.mjs",
       events: {
-        // This is added so the actor instantiates immediately and makes
-        // methods available to the page js on load.
-        DOMDocElementInserted: {},
+        Update: {},
       },
     },
     matches: ["about:shoppingsidebar"],
@@ -400,10 +404,10 @@ let JSWINDOWACTORS = {
 
   AboutWelcome: {
     parent: {
-      moduleURI: "resource:///actors/AboutWelcomeParent.jsm",
+      esModuleURI: "resource:///actors/AboutWelcomeParent.sys.mjs",
     },
     child: {
-      moduleURI: "resource:///actors/AboutWelcomeChild.jsm",
+      esModuleURI: "resource:///actors/AboutWelcomeChild.sys.mjs",
       events: {
         // This is added so the actor instantiates immediately and makes
         // methods available to the page js on load.
@@ -714,8 +718,9 @@ let JSWINDOWACTORS = {
         "Screenshots:Copy": { wantUntrusted: true },
         "Screenshots:Download": { wantUntrusted: true },
         "Screenshots:HidePanel": { wantUntrusted: true },
-        "Screenshots:ShowPanel": { wantUntrusted: true },
+        "Screenshots:OverlaySelection": { wantUntrusted: true },
         "Screenshots:RecordEvent": { wantUntrusted: true },
+        "Screenshots:ShowPanel": { wantUntrusted: true },
       },
     },
     enablePreference: "screenshots.browser.component.enabled",
@@ -766,7 +771,9 @@ let JSWINDOWACTORS = {
         // This is added so the actor instantiates immediately and makes
         // methods available to the page js on load.
         DOMDocElementInserted: {},
-        ShoppingTelemetryEvent: { wantUntrusted: true },
+        ReportProductAvailable: { wantUntrusted: true },
+        AdClicked: { wantUntrusted: true },
+        AdImpression: { wantUntrusted: true },
       },
     },
     matches: ["about:shoppingsidebar"],
@@ -1230,6 +1237,30 @@ BrowserGlue.prototype = {
         break;
       case "app-startup":
         this._earlyBlankFirstPaint(subject);
+        gThisInstanceIsLaunchOnLogin = subject.handleFlag(
+          "os-autostart",
+          false
+        );
+        let launchOnLoginPref = "browser.startup.windowsLaunchOnLogin.enabled";
+        let profileSvc = Cc[
+          "@mozilla.org/toolkit/profile-service;1"
+        ].getService(Ci.nsIToolkitProfileService);
+        if (
+          AppConstants.platform == "win" &&
+          Services.prefs.getBoolPref(launchOnLoginPref) &&
+          !profileSvc.startWithLastProfile
+        ) {
+          // If we don't start with last profile, the user
+          // likely sees the profile selector on launch.
+          Services.prefs.setBoolPref(launchOnLoginPref, false);
+          Services.telemetry.setEventRecordingEnabled("launch_on_login", true);
+          Services.telemetry.recordEvent(
+            "launch_on_login",
+            "last_profile_disable:",
+            "startup"
+          );
+          await lazy.WindowsLaunchOnLogin.removeLaunchOnLoginRegistryKey();
+        }
         break;
     }
   },
@@ -1333,6 +1364,14 @@ BrowserGlue.prototype = {
       this._matchCBCategory
     );
     Services.prefs.removeObserver(
+      "privacy.fingerprintingProtection",
+      this._matchCBCategory
+    );
+    Services.prefs.removeObserver(
+      "privacy.fingerprintingProtection.pbmode",
+      this._matchCBCategory
+    );
+    Services.prefs.removeObserver(
       ContentBlockingCategoriesPrefs.PREF_CB_CATEGORY,
       this._updateCBCategory
     );
@@ -1383,6 +1422,8 @@ BrowserGlue.prototype = {
     }
 
     lazy.SaveToPocket.init();
+
+    lazy.ResetPBMPanel.init();
 
     AboutHomeStartupCache.init();
 
@@ -1845,6 +1886,14 @@ BrowserGlue.prototype = {
       this._matchCBCategory
     );
     Services.prefs.addObserver(
+      "privacy.fingerprintingProtection",
+      this._matchCBCategory
+    );
+    Services.prefs.addObserver(
+      "privacy.fingerprintingProtection.pbmode",
+      this._matchCBCategory
+    );
+    Services.prefs.addObserver(
       ContentBlockingCategoriesPrefs.PREF_CB_CATEGORY,
       this._updateCBCategory
     );
@@ -2049,11 +2098,7 @@ BrowserGlue.prototype = {
       () => lazy.NewTabUtils.uninit(),
       () => lazy.Normandy.uninit(),
       () => lazy.RFPHelper.uninit(),
-      () => {
-        if (AppConstants.NIGHTLY_BUILD) {
-          lazy.ShoppingUtils.uninit();
-        }
-      },
+      () => lazy.ShoppingUtils.uninit(),
       () => lazy.ASRouterNewTabHook.destroy(),
       () => {
         if (AppConstants.MOZ_UPDATER) {
@@ -2562,7 +2607,9 @@ BrowserGlue.prototype = {
           }
 
           if (!classification) {
-            if (shortcut) {
+            if (gThisInstanceIsLaunchOnLogin) {
+              classification = "Autostart";
+            } else if (shortcut) {
               classification = "OtherShortcut";
             } else {
               classification = "Other";
@@ -2966,7 +3013,6 @@ BrowserGlue.prototype = {
 
       {
         name: "ShoppingUtils.init",
-        condition: AppConstants.NIGHTLY_BUILD,
         task: () => {
           lazy.ShoppingUtils.init();
         },
@@ -2981,10 +3027,9 @@ BrowserGlue.prototype = {
       },
 
       {
-        name: "report-attribution-provenance-telemetry",
-        condition: lazy.TelemetryUtils.isTelemetryEnabled,
-        task: async () => {
-          await lazy.ProvenanceData.submitProvenanceTelemetry();
+        name: "SearchSERPDomainToCategoriesMap.init",
+        task: () => {
+          lazy.SearchSERPDomainToCategoriesMap.init().catch(console.error);
         },
       },
 
@@ -3106,6 +3151,8 @@ BrowserGlue.prototype = {
       function reportInstallationTelemetry() {
         lazy.BrowserUsageTelemetry.reportInstallationTelemetry();
       },
+
+      RunOSKeyStoreSelfTest,
     ];
 
     for (let task of idleTasks) {
@@ -3469,7 +3516,19 @@ BrowserGlue.prototype = {
         if (bookmarksUrl) {
           // Import from bookmarks.html file.
           try {
-            if (Services.policies.isAllowed("defaultBookmarks")) {
+            if (
+              Services.policies.isAllowed("defaultBookmarks") &&
+              // Default bookmarks are imported after startup, and they may
+              // influence the outcome of tests, thus it's possible to use
+              // this test-only pref to skip the import.
+              !(
+                Cu.isInAutomation &&
+                Services.prefs.getBoolPref(
+                  "browser.bookmarks.testing.skipDefaultBookmarksImport",
+                  false
+                )
+              )
+            ) {
               await lazy.BookmarkHTMLUtils.importFromURL(bookmarksUrl, {
                 replace: true,
                 source: lazy.PlacesUtils.bookmarks.SOURCES.RESTORE_ON_STARTUP,
@@ -3620,7 +3679,7 @@ BrowserGlue.prototype = {
   _migrateUI() {
     // Use an increasing number to keep track of the current migration state.
     // Completely unrelated to the current Firefox release number.
-    const UI_VERSION = 139;
+    const UI_VERSION = 142;
     const BROWSER_DOCURL = AppConstants.BROWSER_CHROME_URL;
 
     if (!Services.prefs.prefHasUserValue("browser.migration.version")) {
@@ -4164,15 +4223,11 @@ BrowserGlue.prototype = {
       // originInfo in the format [origin, type]
       [
         ["https://www.mozilla.org", "uitour"],
-        ["https://monitor.firefox.com", "uitour"],
-        ["https://screenshots.firefox.com", "uitour"],
         ["https://support.mozilla.org", "uitour"],
-        ["https://truecolors.firefox.com", "uitour"],
         ["about:home", "uitour"],
         ["about:newtab", "uitour"],
         ["https://addons.mozilla.org", "install"],
         ["https://support.mozilla.org", "remote-troubleshooting"],
-        ["https://fpn.firefox.com", "install"],
         ["about:welcome", "autoplay-media"],
       ].forEach(originInfo => {
         // Reset permission on the condition that it is set to
@@ -4199,6 +4254,35 @@ BrowserGlue.prototype = {
           );
         }
       });
+    }
+
+    if (currentUIVersion < 140) {
+      // Remove browser.fixup.alternate.enabled pref in Bug 1850902.
+      Services.prefs.clearUserPref("browser.fixup.alternate.enabled");
+    }
+
+    if (currentUIVersion < 141) {
+      for (const filename of ["signons.sqlite", "signons.sqlite.corrupt"]) {
+        const filePath = PathUtils.join(PathUtils.profileDir, filename);
+        IOUtils.remove(filePath, { ignoreAbsent: true }).catch(console.error);
+      }
+    }
+
+    if (currentUIVersion < 142) {
+      // Bug 1860392 - Remove incorrectly persisted theming values from sidebar style.
+      try {
+        let value = xulStore.getValue(BROWSER_DOCURL, "sidebar-box", "style");
+        if (value) {
+          // Remove custom properties.
+          value = value
+            .split(";")
+            .filter(v => !v.trim().startsWith("--"))
+            .join(";");
+          xulStore.setValue(BROWSER_DOCURL, "sidebar-box", "style", value);
+        }
+      } catch (ex) {
+        console.error(ex);
+      }
     }
 
     // Update the migration version.
@@ -4750,6 +4834,8 @@ var ContentBlockingCategoriesPrefs = {
         "privacy.partition.network_state.ocsp_cache": null,
         "privacy.query_stripping.enabled": null,
         "privacy.query_stripping.enabled.pbmode": null,
+        "privacy.fingerprintingProtection": null,
+        "privacy.fingerprintingProtection.pbmode": null,
       },
       standard: {
         "network.cookie.cookieBehavior": null,
@@ -4768,6 +4854,8 @@ var ContentBlockingCategoriesPrefs = {
         "privacy.partition.network_state.ocsp_cache": null,
         "privacy.query_stripping.enabled": null,
         "privacy.query_stripping.enabled.pbmode": null,
+        "privacy.fingerprintingProtection": null,
+        "privacy.fingerprintingProtection.pbmode": null,
       },
     };
     let type = "strict";
@@ -4900,6 +4988,22 @@ var ContentBlockingCategoriesPrefs = {
         case "-qpsPBM":
           this.CATEGORY_PREFS[type][
             "privacy.query_stripping.enabled.pbmode"
+          ] = false;
+          break;
+        case "fpp":
+          this.CATEGORY_PREFS[type]["privacy.fingerprintingProtection"] = true;
+          break;
+        case "-fpp":
+          this.CATEGORY_PREFS[type]["privacy.fingerprintingProtection"] = false;
+          break;
+        case "fppPrivate":
+          this.CATEGORY_PREFS[type][
+            "privacy.fingerprintingProtection.pbmode"
+          ] = true;
+          break;
+        case "-fppPrivate":
+          this.CATEGORY_PREFS[type][
+            "privacy.fingerprintingProtection.pbmode"
           ] = false;
           break;
         case "cookieBehavior0":
@@ -6292,3 +6396,70 @@ export var AboutHomeStartupCache = {
     this._cacheEntryResolver(this._cacheEntry);
   },
 };
+
+async function RunOSKeyStoreSelfTest() {
+  // The linux implementation always causes an OS dialog, in contrast to
+  // Windows and macOS (the latter of which causes an OS dialog to appear on
+  // local developer builds), so only run on Windows and macOS and only if this
+  // has been built and signed by Mozilla's infrastructure. Similarly, don't
+  // run this code in automation.
+  if (
+    (AppConstants.platform != "win" && AppConstants.platform != "macosx") ||
+    !AppConstants.MOZILLA_OFFICIAL ||
+    Services.env.get("MOZ_AUTOMATION")
+  ) {
+    return;
+  }
+  let osKeyStore = Cc["@mozilla.org/security/oskeystore;1"].getService(
+    Ci.nsIOSKeyStore
+  );
+  let label = Services.prefs.getCharPref("security.oskeystore.test.label", "");
+  if (!label) {
+    label = Services.uuid.generateUUID().toString().slice(1, -1);
+    Services.prefs.setCharPref("security.oskeystore.test.label", label);
+    try {
+      await osKeyStore.asyncGenerateSecret(label);
+      Glean.oskeystore.selfTest.generate.set(true);
+    } catch (_) {
+      Glean.oskeystore.selfTest.generate.set(false);
+      return;
+    }
+  }
+  let secretAvailable = await osKeyStore.asyncSecretAvailable(label);
+  Glean.oskeystore.selfTest.available.set(secretAvailable);
+  if (!secretAvailable) {
+    return;
+  }
+  let encrypted = Services.prefs.getCharPref(
+    "security.oskeystore.test.encrypted",
+    ""
+  );
+  if (!encrypted) {
+    try {
+      encrypted = await osKeyStore.asyncEncryptBytes(label, [1, 1, 3, 8]);
+      Services.prefs.setCharPref(
+        "security.oskeystore.test.encrypted",
+        encrypted
+      );
+      Glean.oskeystore.selfTest.encrypt.set(true);
+    } catch (_) {
+      Glean.oskeystore.selfTest.encrypt.set(false);
+      return;
+    }
+  }
+  try {
+    let decrypted = await osKeyStore.asyncDecryptBytes(label, encrypted);
+    if (
+      decrypted.length != 4 ||
+      decrypted[0] != 1 ||
+      decrypted[1] != 1 ||
+      decrypted[2] != 3 ||
+      decrypted[3] != 8
+    ) {
+      throw new Error("decrypted value not as expected?");
+    }
+    Glean.oskeystore.selfTest.decrypt.set(true);
+  } catch (_) {
+    Glean.oskeystore.selfTest.decrypt.set(false);
+  }
+}

@@ -3022,7 +3022,8 @@ void BrowsingContext::DidSet(FieldIndex<IDX_IsActiveBrowserWindowInternal>,
           // the context is the top of a sub-tree of in-process
           // contexts.
           nsContentUtils::DispatchEventOnlyToChrome(
-              doc, win, isActivateEvent ? u"activate"_ns : u"deactivate"_ns,
+              doc, nsGlobalWindowInner::Cast(win),
+              isActivateEvent ? u"activate"_ns : u"deactivate"_ns,
               CanBubble::eYes, Cancelable::eYes, nullptr);
         }
       }
@@ -3528,17 +3529,26 @@ bool BrowsingContext::CanSet(FieldIndex<IDX_IsUnderHiddenEmbedderElement>,
   return true;
 }
 
+bool BrowsingContext::CanSet(FieldIndex<IDX_ForceOffline>, bool aNewValue,
+                             ContentParent* aSource) {
+  return XRE_IsParentProcess() && !aSource;
+}
+
 void BrowsingContext::DidSet(FieldIndex<IDX_IsUnderHiddenEmbedderElement>,
                              bool aOldValue) {
   nsIDocShell* shell = GetDocShell();
   if (!shell) {
     return;
   }
-
   const bool newValue = IsUnderHiddenEmbedderElement();
   if (NS_WARN_IF(aOldValue == newValue)) {
     return;
   }
+
+  if (auto* bc = BrowserChild::GetFrom(shell)) {
+    bc->UpdateVisibility();
+  }
+
   if (PresShell* presShell = shell->GetPresShell()) {
     presShell->SetIsUnderHiddenEmbedderElement(newValue);
   }

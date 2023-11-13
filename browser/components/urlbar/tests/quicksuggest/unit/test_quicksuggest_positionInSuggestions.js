@@ -162,15 +162,11 @@ function createExpectedQuickSuggestResult(suggest) {
         : undefined,
       helpUrl: QuickSuggest.HELP_URL,
       helpL10n: {
-        id: UrlbarPrefs.get("resultMenu")
-          ? "urlbar-result-menu-learn-more-about-firefox-suggest"
-          : "firefox-suggest-urlbar-learn-more",
+        id: "urlbar-result-menu-learn-more-about-firefox-suggest",
       },
-      isBlockable: UrlbarPrefs.get("quickSuggestBlockingEnabled"),
+      isBlockable: true,
       blockL10n: {
-        id: UrlbarPrefs.get("resultMenu")
-          ? "urlbar-result-menu-dismiss-firefox-suggest"
-          : "firefox-suggest-urlbar-block",
+        id: "urlbar-result-menu-dismiss-firefox-suggest",
       },
       displayUrl: suggest.url,
       source: "remote-settings",
@@ -418,7 +414,7 @@ const TEST_CASES = [
   },
 ];
 
-add_task(async function setup() {
+add_setup(async function () {
   UrlbarPrefs.set("quicksuggest.enabled", true);
   UrlbarPrefs.set("suggest.quicksuggest.sponsored", true);
   UrlbarPrefs.set("suggest.quicksuggest.nonsponsored", true);

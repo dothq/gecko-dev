@@ -162,7 +162,7 @@ void PointerLockManager::RequestLock(Element* aElement,
       aCallerType == CallerType::System;
   nsCOMPtr<nsIRunnable> request =
       new PointerLockRequest(aElement, userInputOrSystemCaller);
-  doc->Dispatch(TaskCategory::Other, request.forget());
+  doc->Dispatch(request.forget());
 }
 
 /* static */
@@ -233,8 +233,8 @@ bool PointerLockManager::StartSetPointerLock(Element* aElement,
 
   ChangePointerLockedElement(aElement, aDocument, nullptr);
   nsContentUtils::DispatchEventOnlyToChrome(
-      aDocument, ToSupports(aElement), u"MozDOMPointerLock:Entered"_ns,
-      CanBubble::eYes, Cancelable::eNo, /* DefaultAction */ nullptr);
+      aDocument, aElement, u"MozDOMPointerLock:Entered"_ns, CanBubble::eYes,
+      Cancelable::eNo, /* DefaultAction */ nullptr);
 
   return true;
 }

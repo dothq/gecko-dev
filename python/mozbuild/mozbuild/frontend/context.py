@@ -490,7 +490,6 @@ class LinkFlags(BaseCompileFlags):
                 not self._context.config.substs.get("MOZ_DEBUG"),
             ]
         ):
-
             if self._context.config.substs.get("MOZ_OPTIMIZE"):
                 flags.append("-OPT:REF,ICF")
 
@@ -2482,6 +2481,14 @@ VARIABLES = {
         dict,
         """Dictionary of compiler defines to declare for wasm compilation.
         See ``DEFINES`` for specifics.
+        """,
+    ),
+    "WASM_LIBS": (
+        List,
+        list,
+        """Wasm system link libraries.
+
+        This variable contains a list of wasm system libaries to link against.
         """,
     ),
     "CMFLAGS": (

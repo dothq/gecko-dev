@@ -13,6 +13,7 @@ var subtests = [
   {"file": "helper_zoomToFocusedInput_scroll.html"},
   {"file": "helper_zoomToFocusedInput_multiline.html"},
   {"file": "helper_zoomToFocusedInput_iframe.html"},
+  {"file": "helper_zoomToFocusedInput_iframe.html?cross-origin"},
   {"file": "helper_zoomToFocusedInput_fixed_bug1673511.html"},
   {"file": "helper_zoomToFocusedInput_nozoom_bug1738696.html"},
 ];
@@ -31,6 +32,9 @@ if (platform == "android") {
   );
   subtests.push(
     {"file": "helper_zoomToFocusedInput_touch-action.html"}
+  );
+  subtests.push(
+    {"file": "helper_zoomToFocusedInput_dynamic_toolbar_bug1828235.html"}
   );
 }
 

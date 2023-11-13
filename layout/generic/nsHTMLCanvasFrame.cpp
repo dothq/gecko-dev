@@ -284,14 +284,14 @@ class nsDisplayCanvas final : public nsPaintedDisplayItem {
       if (!surface || !surface->IsValid()) {
         return;
       }
-      gfx::IntSize size = surface->GetSize();
 
       transform = gfxUtils::SnapTransform(
-          transform, gfxRect(0, 0, size.width, size.height), nullptr);
+          transform, gfxRect(0, 0, canvasSizeInPx.width, canvasSizeInPx.height),
+          nullptr);
       aCtx->Multiply(transform);
 
       aCtx->GetDrawTarget()->FillRect(
-          Rect(0, 0, size.width, size.height),
+          Rect(0, 0, canvasSizeInPx.width, canvasSizeInPx.height),
           SurfacePattern(surface, ExtendMode::CLAMP, Matrix(),
                          nsLayoutUtils::GetSamplingFilterForFrame(f)));
       return;
@@ -346,12 +346,11 @@ NS_QUERYFRAME_TAIL_INHERITING(nsContainerFrame)
 
 NS_IMPL_FRAMEARENA_HELPERS(nsHTMLCanvasFrame)
 
-void nsHTMLCanvasFrame::DestroyFrom(nsIFrame* aDestroyRoot,
-                                    PostDestroyData& aPostDestroyData) {
+void nsHTMLCanvasFrame::Destroy(DestroyContext& aContext) {
   if (IsPrimaryFrame()) {
     HTMLCanvasElement::FromNode(*mContent)->ResetPrintCallback();
   }
-  nsContainerFrame::DestroyFrom(aDestroyRoot, aPostDestroyData);
+  nsContainerFrame::Destroy(aContext);
 }
 
 nsHTMLCanvasFrame::~nsHTMLCanvasFrame() = default;

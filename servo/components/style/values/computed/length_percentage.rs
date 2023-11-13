@@ -28,9 +28,9 @@ use super::{Context, Length, Percentage, ToComputedValue};
 use crate::gecko_bindings::structs::GeckoFontMetrics;
 use crate::values::animated::{Animate, Procedure, ToAnimatedValue, ToAnimatedZero};
 use crate::values::distance::{ComputeSquaredDistance, SquaredDistance};
-use crate::values::generics::calc::CalcUnits;
+use crate::values::generics::calc::{CalcUnits, PositivePercentageBasis};
 use crate::values::generics::{calc, NonNegative};
-use crate::values::specified::length::FontBaseSize;
+use crate::values::specified::length::{FontBaseSize, LineHeightBase};
 use crate::values::{specified, CSSFloat};
 use crate::{Zero, ZeroNoPercent};
 use app_units::Au;
@@ -638,18 +638,6 @@ impl CalcLengthPercentageLeaf {
     }
 }
 
-impl PartialOrd for CalcLengthPercentageLeaf {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        use self::CalcLengthPercentageLeaf::*;
-        // NOTE: Percentages can't be compared reasonably here because the
-        // percentage basis might be negative, see bug 1709018.
-        match (self, other) {
-            (&Length(ref one), &Length(ref other)) => one.partial_cmp(other),
-            _ => None,
-        }
-    }
-}
-
 impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
     fn unit(&self) -> CalcUnits {
         match self {
@@ -675,6 +663,20 @@ impl calc::CalcNodeLeaf for CalcLengthPercentageLeaf {
         match *self {
             Self::Length(_) | Self::Percentage(_) => None,
             Self::Number(value) => Some(value),
+        }
+    }
+
+    fn compare(&self, other: &Self, basis: PositivePercentageBasis) -> Option<std::cmp::Ordering> {
+        use self::CalcLengthPercentageLeaf::*;
+        match (self, other) {
+            (&Length(ref one), &Length(ref other)) => one.partial_cmp(other),
+            (&Percentage(ref one), &Percentage(ref other)) => {
+                match basis {
+                    PositivePercentageBasis::Yes => one.partial_cmp(other),
+                    PositivePercentageBasis::Unknown => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -838,6 +840,7 @@ impl specified::CalcLengthPercentage {
         context: &Context,
         zoom_fn: F,
         base_size: FontBaseSize,
+        line_height_base: LineHeightBase,
     ) -> LengthPercentage
     where
         F: Fn(Length) -> Length,
@@ -847,7 +850,8 @@ impl specified::CalcLengthPercentage {
         let node = self.node.map_leaves(|leaf| match *leaf {
             Leaf::Percentage(p) => CalcLengthPercentageLeaf::Percentage(Percentage(p)),
             Leaf::Length(l) => CalcLengthPercentageLeaf::Length({
-                let result = l.to_computed_value_with_base_size(context, base_size);
+                let result =
+                    l.to_computed_value_with_base_size(context, base_size, line_height_base);
                 if l.should_zoom_text() {
                     zoom_fn(result)
                 } else {
@@ -868,8 +872,14 @@ impl specified::CalcLengthPercentage {
         &self,
         context: &Context,
         base_size: FontBaseSize,
+        line_height_base: LineHeightBase,
     ) -> LengthPercentage {
-        self.to_computed_value_with_zoom(context, |abs| context.maybe_zoom_text(abs), base_size)
+        self.to_computed_value_with_zoom(
+            context,
+            |abs| context.maybe_zoom_text(abs),
+            base_size,
+            line_height_base,
+        )
     }
 
     /// Compute the value into pixel length as CSSFloat without context,
@@ -908,9 +918,14 @@ impl specified::CalcLengthPercentage {
         }
     }
 
-    /// Compute the calc using the current font-size (and without text-zoom).
+    /// Compute the calc using the current font-size and line-height. (and without text-zoom).
     pub fn to_computed_value(&self, context: &Context) -> LengthPercentage {
-        self.to_computed_value_with_zoom(context, |abs| abs, FontBaseSize::CurrentStyle)
+        self.to_computed_value_with_zoom(
+            context,
+            |abs| abs,
+            FontBaseSize::CurrentStyle,
+            LineHeightBase::CurrentStyle,
+        )
     }
 
     #[inline]

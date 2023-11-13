@@ -14,6 +14,7 @@
 #include "mozilla/AtomicBitfields.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/dom/DOMTypes.h"
+#include "mozilla/DataMutex.h"
 #include "mozilla/net/DNS.h"
 #include "mozilla/net/NeckoChannelParams.h"
 #include "mozilla/net/NeckoCommon.h"
@@ -183,6 +184,8 @@ class HttpBaseChannel : public nsHashPropertyBag,
   NS_IMETHOD DoApplyContentConversions(nsIStreamListener* aNextListener,
                                        nsIStreamListener** aNewNextListener,
                                        nsISupports* aCtxt) override;
+  NS_IMETHOD SetHasContentDecompressed(bool value) override;
+  NS_IMETHOD GetHasContentDecompressed(bool* value) override;
 
   // HttpBaseChannel::nsIHttpChannel
   NS_IMETHOD GetRequestMethod(nsACString& aMethod) override;
@@ -344,7 +347,8 @@ class HttpBaseChannel : public nsHashPropertyBag,
       nsILoadInfo::CrossOriginEmbedderPolicy* aOutPolicy) override;
 
   inline void CleanRedirectCacheChainIfNecessary() {
-    mRedirectedCachekeys = nullptr;
+    auto redirectedCachekeys = mRedirectedCachekeys.Lock();
+    redirectedCachekeys.ref() = nullptr;
   }
   NS_IMETHOD HTTPUpgrade(const nsACString& aProtocolName,
                          nsIHttpUpgradeListener* aListener) override;
@@ -568,6 +572,16 @@ class HttpBaseChannel : public nsHashPropertyBag,
     return mCachedOpaqueResponseBlockingPref;
   }
 
+  TimeStamp GetOnStartRequestStartTime() const {
+    return mOnStartRequestStartTime;
+  }
+  TimeStamp GetDataAvailableStartTime() const {
+    return mOnDataAvailableStartTime;
+  }
+  TimeStamp GetOnStopRequestStartTime() const {
+    return mOnStopRequestStartTime;
+  }
+
  protected:
   nsresult GetTopWindowURI(nsIURI* aURIBeingLoaded, nsIURI** aTopWindowURI);
 
@@ -751,7 +765,9 @@ class HttpBaseChannel : public nsHashPropertyBag,
   nsCOMPtr<nsIConsoleReportCollector> mReportCollector;
 
   RefPtr<nsHttpHandler> mHttpHandler;  // keep gHttpHandler alive
-  UniquePtr<nsTArray<nsCString>> mRedirectedCachekeys;
+  // Accessed on MainThread and Cache2 IO thread
+  DataMutex<UniquePtr<nsTArray<nsCString>>> mRedirectedCachekeys{
+      "mRedirectedCacheKeys"};
   nsCOMPtr<nsIRequestContext> mRequestContext;
 
   NetAddr mSelfAddr;
@@ -778,6 +794,9 @@ class HttpBaseChannel : public nsHashPropertyBag,
   TimeStamp mDispatchFetchEventEnd;
   TimeStamp mHandleFetchEventStart;
   TimeStamp mHandleFetchEventEnd;
+  TimeStamp mOnStartRequestStartTime;
+  TimeStamp mOnDataAvailableStartTime;
+  TimeStamp mOnStopRequestStartTime;
   // copied from the transaction before we null out mTransaction
   // so that the timing can still be queried from OnStopRequest
   TimingStruct mTransactionTimings;
@@ -982,6 +1001,8 @@ class HttpBaseChannel : public nsHashPropertyBag,
   bool mChannelBlockedByOpaqueResponse;
 
   bool mDummyChannelForImageCache;
+
+  bool mHasContentDecompressed;
 
   // clang-format off
   MOZ_ATOMIC_BITFIELDS(mAtomicBitfields3, 8, (

@@ -11,6 +11,7 @@
 
 [package]
 edition = "2021"
+rust-version = "1.65"
 name = "wgpu-core"
 version = "0.17.0"
 authors = ["wgpu developers"]
@@ -55,7 +56,7 @@ package = "wgpu-hal"
 [dependencies.naga]
 version = "0.13.0"
 git = "https://github.com/gfx-rs/naga"
-rev = "bac2d82a430fbfcf100ee22b7c3bc12f3d593079"
+rev = "33b75a27d93c6574b11b4dd4492b85b5783d6c52"
 features = [
     "clone",
     "span",
@@ -85,7 +86,6 @@ path = "../wgpu-types"
 package = "wgpu-types"
 
 [features]
-angle = ["hal/gles"]
 default = ["link"]
 dx11 = ["hal/dx11"]
 dx12 = ["hal/dx12"]

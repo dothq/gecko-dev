@@ -18,7 +18,7 @@ use cssparser::{BasicParseError, BasicParseErrorKind, ParseError, ParseErrorKind
 use cssparser::{CowRcStr, Delimiter, SourceLocation};
 use cssparser::{Parser as CssParser, ToCss, Token};
 use precomputed_hash::PrecomputedHash;
-use servo_arc::{ThinArc, UniqueArc};
+use servo_arc::{Arc, ThinArc, UniqueArc, ThinArcUnion, ArcUnionBorrow};
 use smallvec::SmallVec;
 use std::borrow::{Borrow, Cow};
 use std::fmt::{self, Debug};
@@ -107,7 +107,7 @@ bitflags! {
         const AFTER_NON_STATEFUL_PSEUDO_ELEMENT = 1 << 4;
 
         /// Whether we are after any of the pseudo-like things.
-        const AFTER_PSEUDO = Self::AFTER_PART.bits | Self::AFTER_SLOTTED.bits | Self::AFTER_PSEUDO_ELEMENT.bits;
+        const AFTER_PSEUDO = Self::AFTER_PART.bits() | Self::AFTER_SLOTTED.bits() | Self::AFTER_PSEUDO_ELEMENT.bits();
 
         /// Whether we explicitly disallow combinators.
         const DISALLOW_COMBINATORS = 1 << 5;
@@ -352,11 +352,64 @@ pub trait Parser<'i> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, ToShmem)]
+/// A selector list is a tagged pointer with either a single selector, or a ThinArc<()> of multiple
+/// selectors.
+#[derive(Clone, Eq, Debug, PartialEq, ToShmem)]
 #[shmem(no_bounds)]
 pub struct SelectorList<Impl: SelectorImpl>(
-    #[shmem(field_bound)] pub SmallVec<[Selector<Impl>; 1]>,
+    #[shmem(field_bound)] ThinArcUnion<SpecificityAndFlags, Component<Impl>, (), Selector<Impl>>
 );
+
+impl<Impl: SelectorImpl> SelectorList<Impl> {
+    pub fn from_one(selector: Selector<Impl>) -> Self {
+        #[cfg(debug_assertions)]
+        let selector_repr = unsafe { *(&selector as *const _ as *const usize) };
+        let list = Self(ThinArcUnion::from_first(selector.into_data()));
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            selector_repr,
+            unsafe { *(&list as *const _ as *const usize) },
+            "We rely on the same bit representation for the single selector variant"
+        );
+        list
+    }
+
+    pub fn from_iter(mut iter: impl ExactSizeIterator<Item = Selector<Impl>>) -> Self {
+        if iter.len() == 1 {
+            Self::from_one(iter.next().unwrap())
+        } else {
+            Self(ThinArcUnion::from_second(ThinArc::from_header_and_iter((), iter)))
+        }
+    }
+
+    #[inline]
+    pub fn slice(&self) -> &[Selector<Impl>] {
+        match self.0.borrow() {
+            ArcUnionBorrow::First(..) => {
+                // SAFETY: see from_one.
+                let selector: &Selector<Impl> = unsafe { std::mem::transmute(self) };
+                std::slice::from_ref(selector)
+            },
+            ArcUnionBorrow::Second(list) => list.get().slice(),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self.0.borrow() {
+            ArcUnionBorrow::First(..) => 1,
+            ArcUnionBorrow::Second(list) => list.len(),
+        }
+    }
+
+    /// Returns the address on the heap of the ThinArc for memory reporting.
+    pub fn thin_arc_heap_ptr(&self) -> *const ::std::os::raw::c_void {
+        match self.0.borrow() {
+            ArcUnionBorrow::First(s) => s.with_arc(|a| a.heap_ptr()),
+            ArcUnionBorrow::Second(s) => s.with_arc(|a| a.heap_ptr()),
+        }
+    }
+}
 
 /// Uniquely identify a selector based on its components, which is behind ThinArc and
 /// is therefore stable.
@@ -371,6 +424,7 @@ impl SelectorKey {
 }
 
 /// Whether or not we're using forgiving parsing mode
+#[derive(PartialEq)]
 enum ForgivingParsing {
     /// Discard the entire selector list upon encountering any invalid selector.
     /// This is the default behavior for almost all of CSS.
@@ -396,18 +450,7 @@ pub enum ParseRelative {
 impl<Impl: SelectorImpl> SelectorList<Impl> {
     /// Returns a selector list with a single `&`
     pub fn ampersand() -> Self {
-        Self(smallvec::smallvec![Selector::ampersand()])
-    }
-
-    /// Copies a selector list into a reference counted list.
-    pub fn to_shared(&self) -> ArcSelectorList<Impl> {
-        ThinArc::from_header_and_iter((), self.0.iter().cloned())
-    }
-
-    /// Turns a selector list into a reference counted list. Drains the list. We don't use
-    /// `mut self` to avoid memmoving around.
-    pub fn into_shared(&mut self) -> ArcSelectorList<Impl> {
-        ThinArc::from_header_and_iter((), self.0.drain(..))
+        Self::from_one(Selector::ampersand())
     }
 
     /// Parse a comma-separated list of Selectors.
@@ -442,46 +485,39 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
     where
         P: Parser<'i, Impl = Impl>,
     {
-        let mut values = SmallVec::new();
+        let mut values = SmallVec::<[_; 4]>::new();
+        let forgiving = recovery == ForgivingParsing::Yes && parser.allow_forgiving_selectors();
         loop {
-            let selector = input.parse_until_before(Delimiter::Comma, |i| {
-                parse_selector(parser, i, state, parse_relative)
-            });
-
-            let was_ok = selector.is_ok();
-            match selector {
-                Ok(selector) => values.push(selector),
-                Err(err) => match recovery {
-                    ForgivingParsing::No => return Err(err),
-                    ForgivingParsing::Yes => {
-                        if !parser.allow_forgiving_selectors() {
-                            return Err(err);
-                        }
-                    },
-                },
-            }
-
-            loop {
-                match input.next() {
-                    Err(_) => return Ok(SelectorList(values)),
-                    Ok(&Token::Comma) => break,
-                    Ok(_) => {
-                        debug_assert!(!was_ok, "Shouldn't have got a selector if getting here");
-                    },
+            let selector = input.parse_until_before(Delimiter::Comma, |input| {
+                let start = input.position();
+                let mut selector = parse_selector(parser, input, state, parse_relative);
+                if forgiving && (selector.is_err() || input.expect_exhausted().is_err()) {
+                    input.expect_no_error_token()?;
+                    selector = Ok(Selector::new_invalid(input.slice_from(start)));
                 }
+                selector
+            })?;
+
+            values.push(selector);
+
+            match input.next() {
+                Ok(&Token::Comma) => {},
+                Ok(_) => unreachable!(),
+                Err(_) => break,
             }
         }
+        Ok(Self::from_iter(values.into_iter()))
     }
 
     /// Replaces the parent selector in all the items of the selector list.
-    pub fn replace_parent_selector(&self, parent: &ArcSelectorList<Impl>) -> Self {
-        Self(self.0.iter().map(|selector| selector.replace_parent_selector(parent)).collect())
+    pub fn replace_parent_selector(&self, parent: &SelectorList<Impl>) -> Self {
+        Self::from_iter(self.slice().iter().map(|selector| selector.replace_parent_selector(parent)))
     }
 
     /// Creates a SelectorList from a Vec of selectors. Used in tests.
     #[allow(dead_code)]
     pub(crate) fn from_vec(v: Vec<Selector<Impl>>) -> Self {
-        SelectorList(SmallVec::from_vec(v))
+        SelectorList::from_iter(v.into_iter())
     }
 }
 
@@ -588,9 +624,10 @@ where
                 // :where and :is OR their selectors, so we can't put any hash
                 // in the filter if there's more than one selector, as that'd
                 // exclude elements that may match one of the other selectors.
-                if list.len() == 1 &&
+                let slice = list.slice();
+                if slice.len() == 1 &&
                     !collect_selector_hashes(
-                        create_inner_iterator(&list.slice()[0]),
+                        create_inner_iterator(&slice[0]),
                         quirks_mode,
                         hashes,
                         len,
@@ -659,6 +696,8 @@ pub fn namespace_empty_string<Impl: SelectorImpl>() -> Impl::NamespaceUrl {
     Impl::NamespaceUrl::default()
 }
 
+type SelectorData<Impl> = ThinArc<SpecificityAndFlags, Component<Impl>>;
+
 /// A Selector stores a sequence of simple selectors and combinators. The
 /// iterator classes allow callers to iterate at either the raw sequence level or
 /// at the level of sequences of simple selectors separated by combinators. Most
@@ -675,9 +714,8 @@ pub fn namespace_empty_string<Impl: SelectorImpl>() -> Impl::NamespaceUrl {
 /// handle it in to_css to make it invisible to serialization.
 #[derive(Clone, Eq, PartialEq, ToShmem)]
 #[shmem(no_bounds)]
-pub struct Selector<Impl: SelectorImpl>(
-    #[shmem(field_bound)] ThinArc<SpecificityAndFlags, Component<Impl>>,
-);
+#[repr(transparent)]
+pub struct Selector<Impl: SelectorImpl>(#[shmem(field_bound)] SelectorData<Impl>);
 
 impl<Impl: SelectorImpl> Selector<Impl> {
     /// See Arc::mark_as_intentionally_leaked
@@ -911,7 +949,12 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         Selector(builder.build_with_specificity_and_flags(spec))
     }
 
-    pub fn replace_parent_selector(&self, parent: &ArcSelectorList<Impl>) -> Self {
+    #[inline]
+    fn into_data(self) -> SelectorData<Impl> {
+        self.0
+    }
+
+    pub fn replace_parent_selector(&self, parent: &SelectorList<Impl>) -> Self {
         // FIXME(emilio): Shouldn't allow replacing if parent has a pseudo-element selector
         // or what not.
         let flags = self.flags() - SelectorFlags::HAS_PARENT;
@@ -928,14 +971,13 @@ impl<Impl: SelectorImpl> Selector<Impl> {
 
         fn replace_parent_on_selector_list<Impl: SelectorImpl>(
             orig: &[Selector<Impl>],
-            parent: &ArcSelectorList<Impl>,
+            parent: &SelectorList<Impl>,
             specificity: &mut Specificity,
             with_specificity: bool,
-        ) -> Option<ArcSelectorList<Impl>> {
+        ) -> Option<SelectorList<Impl>> {
             let mut any = false;
 
-            let result = ArcSelectorList::from_header_and_iter(
-                (),
+            let result = SelectorList::from_iter(
                 orig
                     .iter()
                     .map(|s| {
@@ -964,7 +1006,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
 
         fn replace_parent_on_relative_selector_list<Impl: SelectorImpl>(
             orig: &[RelativeSelector<Impl>],
-            parent: &ArcSelectorList<Impl>,
+            parent: &SelectorList<Impl>,
             specificity: &mut Specificity,
         ) -> Vec<RelativeSelector<Impl>> {
             let mut any = false;
@@ -996,7 +1038,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
 
         fn replace_parent_on_selector<Impl: SelectorImpl>(
             orig: &Selector<Impl>,
-            parent: &ArcSelectorList<Impl>,
+            parent: &SelectorList<Impl>,
             specificity: &mut Specificity,
         ) -> Selector<Impl> {
             if !orig.has_parent_selector() {
@@ -1045,6 +1087,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
                     Combinator(..) |
                     Host(None) |
                     Part(..) |
+                    Invalid(..) |
                     RelativeSelectorAnchor => component.clone(),
                     ParentSelector => {
                         specificity += parent_specificity;
@@ -1167,6 +1210,65 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         }
 
         true
+    }
+
+    /// Parse a selector, without any pseudo-element.
+    #[inline]
+    pub fn parse<'i, 't, P>(
+        parser: &P,
+        input: &mut CssParser<'i, 't>,
+    ) -> Result<Self, ParseError<'i, P::Error>>
+    where
+        P: Parser<'i, Impl = Impl>,
+    {
+        parse_selector(
+            parser,
+            input,
+            SelectorParsingState::empty(),
+            ParseRelative::No,
+        )
+    }
+
+    pub fn new_invalid(s: &str) -> Self {
+        fn check_for_parent(input: &mut CssParser, has_parent: &mut bool) {
+            while let Ok(t) = input.next() {
+                match *t {
+                    Token::Function(_) |
+                    Token::ParenthesisBlock |
+                    Token::CurlyBracketBlock |
+                    Token::SquareBracketBlock => {
+                        let _ = input.parse_nested_block(|i| -> Result<(), ParseError<'_, BasicParseError>> {
+                            check_for_parent(i, has_parent);
+                            Ok(())
+                        });
+                    },
+                    Token::Delim('&') => {
+                        *has_parent = true;
+                    }
+                    _ => {},
+                }
+                if *has_parent {
+                    break;
+                }
+            }
+        }
+        let mut has_parent = false;
+        {
+            let mut parser = cssparser::ParserInput::new(s);
+            let mut parser = CssParser::new(&mut parser);
+            check_for_parent(&mut parser, &mut has_parent);
+        }
+        Self(ThinArc::from_header_and_iter(
+            SpecificityAndFlags {
+                specificity: 0,
+                flags: if has_parent {
+                    SelectorFlags::HAS_PARENT
+                } else {
+                    SelectorFlags::empty()
+                },
+            },
+            std::iter::once(Component::Invalid(Arc::new(String::from(s.trim()))))
+        ))
     }
 }
 
@@ -1544,6 +1646,51 @@ pub enum RelativeSelectorMatchHint {
 }
 
 impl RelativeSelectorMatchHint {
+    /// Create a new relative selector match hint based on its composition.
+    pub fn new(
+        relative_combinator: Combinator,
+        has_child_or_descendants: bool,
+        has_adjacent_or_next_siblings: bool,
+    ) -> Self {
+        match relative_combinator {
+            Combinator::Descendant => RelativeSelectorMatchHint::InSubtree,
+            Combinator::Child => {
+                if !has_child_or_descendants {
+                    RelativeSelectorMatchHint::InChild
+                } else {
+                    // Technically, for any composition that consists of child combinators only,
+                    // the search space is depth-constrained, but it's probably not worth optimizing for.
+                    RelativeSelectorMatchHint::InSubtree
+                }
+            },
+            Combinator::NextSibling => {
+                if !has_child_or_descendants && !has_adjacent_or_next_siblings {
+                    RelativeSelectorMatchHint::InNextSibling
+                } else if !has_child_or_descendants && has_adjacent_or_next_siblings {
+                    RelativeSelectorMatchHint::InSibling
+                } else if has_child_or_descendants && !has_adjacent_or_next_siblings {
+                    // Match won't cross multiple siblings.
+                    RelativeSelectorMatchHint::InNextSiblingSubtree
+                } else {
+                    RelativeSelectorMatchHint::InSiblingSubtree
+                }
+            },
+            Combinator::LaterSibling => {
+                if !has_child_or_descendants {
+                    RelativeSelectorMatchHint::InSibling
+                } else {
+                    // Even if the match may not cross multiple siblings, we have to look until
+                    // we find a match anyway.
+                    RelativeSelectorMatchHint::InSiblingSubtree
+                }
+            },
+            Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
+                debug_assert!(false, "Unexpected relative combinator");
+                RelativeSelectorMatchHint::InSubtree
+            },
+        }
+    }
+
     /// Is the match traversal direction towards the descendant of this element (As opposed to siblings)?
     pub fn is_descendant_direction(&self) -> bool {
         matches!(*self, Self::InChild | Self::InSubtree)
@@ -1559,6 +1706,53 @@ impl RelativeSelectorMatchHint {
         matches!(
             *self,
             Self::InSubtree | Self::InSiblingSubtree | Self::InNextSiblingSubtree
+        )
+    }
+}
+
+/// Count of combinators in a given relative selector, not traversing selectors of pseudoclasses.
+#[derive(Clone, Copy)]
+pub struct RelativeSelectorCombinatorCount {
+    relative_combinator: Combinator,
+    pub child_or_descendants: usize,
+    pub adjacent_or_next_siblings: usize,
+}
+
+impl RelativeSelectorCombinatorCount {
+    /// Create a new relative selector combinator count from a given relative selector.
+    pub fn new<Impl: SelectorImpl>(relative_selector: &RelativeSelector<Impl>) -> Self {
+        let mut result = RelativeSelectorCombinatorCount {
+            relative_combinator: relative_selector.selector.combinator_at_parse_order(1),
+            child_or_descendants: 0,
+            adjacent_or_next_siblings: 0,
+        };
+
+        for combinator in CombinatorIter::new(
+            relative_selector
+                .selector
+                .iter_skip_relative_selector_anchor(),
+        ) {
+            match combinator {
+                Combinator::Descendant | Combinator::Child => {
+                    result.child_or_descendants += 1;
+                },
+                Combinator::NextSibling | Combinator::LaterSibling => {
+                    result.adjacent_or_next_siblings += 1;
+                },
+                Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
+                    continue
+                },
+            };
+        }
+        result
+    }
+
+    /// Get the match hint based on the current combinator count.
+    pub fn get_match_hint(&self) -> RelativeSelectorMatchHint {
+        RelativeSelectorMatchHint::new(
+            self.relative_combinator,
+            self.child_or_descendants != 0,
+            self.adjacent_or_next_siblings != 0,
         )
     }
 }
@@ -1609,8 +1803,8 @@ impl CombinatorComposition {
 impl<Impl: SelectorImpl> RelativeSelector<Impl> {
     fn from_selector_list(selector_list: SelectorList<Impl>) -> Box<[Self]> {
         let vec: Vec<Self> = selector_list
-            .0
-            .into_iter()
+            .slice()
+            .iter()
             .map(|selector| {
                 // It's more efficient to keep track of all this during the parse time, but that seems like a lot of special
                 // case handling for what it's worth.
@@ -1629,60 +1823,21 @@ impl<Impl: SelectorImpl> RelativeSelector<Impl> {
                     );
                 }
                 // Leave a hint for narrowing down the search space when we're matching.
-                let match_hint = match selector.combinator_at_parse_order(1) {
-                    Combinator::Descendant => RelativeSelectorMatchHint::InSubtree,
-                    Combinator::Child => {
-                        let composition = CombinatorComposition::for_relative_selector(&selector);
-                        if composition.is_empty() || composition == CombinatorComposition::SIBLINGS
-                        {
-                            RelativeSelectorMatchHint::InChild
-                        } else {
-                            // Technically, for any composition that consists of child combinators only,
-                            // the search space is depth-constrained, but it's probably not worth optimizing for.
-                            RelativeSelectorMatchHint::InSubtree
-                        }
-                    },
-                    Combinator::NextSibling => {
-                        let composition = CombinatorComposition::for_relative_selector(&selector);
-                        if composition.is_empty() {
-                            RelativeSelectorMatchHint::InNextSibling
-                        } else if composition == CombinatorComposition::SIBLINGS {
-                            RelativeSelectorMatchHint::InSibling
-                        } else if composition == CombinatorComposition::DESCENDANTS {
-                            // Match won't cross multiple siblings.
-                            RelativeSelectorMatchHint::InNextSiblingSubtree
-                        } else {
-                            RelativeSelectorMatchHint::InSiblingSubtree
-                        }
-                    },
-                    Combinator::LaterSibling => {
-                        let composition = CombinatorComposition::for_relative_selector(&selector);
-                        if composition.is_empty() || composition == CombinatorComposition::SIBLINGS
-                        {
-                            RelativeSelectorMatchHint::InSibling
-                        } else {
-                            // Even if the match may not cross multiple siblings, we have to look until
-                            // we find a match anyway.
-                            RelativeSelectorMatchHint::InSiblingSubtree
-                        }
-                    },
-                    Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
-                        debug_assert!(false, "Unexpected relative combinator");
-                        RelativeSelectorMatchHint::InSubtree
-                    },
-                };
+                let composition = CombinatorComposition::for_relative_selector(&selector);
+                let match_hint = RelativeSelectorMatchHint::new(
+                    selector.combinator_at_parse_order(1),
+                    composition.intersects(CombinatorComposition::DESCENDANTS),
+                    composition.intersects(CombinatorComposition::SIBLINGS),
+                );
                 RelativeSelector {
                     match_hint,
-                    selector,
+                    selector: selector.clone(),
                 }
             })
             .collect();
         vec.into_boxed_slice()
     }
 }
-
-/// A reference-counted selector list.
-pub type ArcSelectorList<Impl> = ThinArc<(), Selector<Impl>>;
 
 /// A CSS simple selector or combinator. We store both in the same enum for
 /// optimal packing and cache performance, see [1].
@@ -1723,7 +1878,7 @@ pub enum Component<Impl: SelectorImpl> {
     ),
 
     /// Pseudo-classes
-    Negation(ArcSelectorList<Impl>),
+    Negation(SelectorList<Impl>),
     Root,
     Empty,
     Scope,
@@ -1762,19 +1917,21 @@ pub enum Component<Impl: SelectorImpl> {
     ///
     /// The inner argument is conceptually a SelectorList, but we move the
     /// selectors to the heap to keep Component small.
-    Where(ArcSelectorList<Impl>),
+    Where(SelectorList<Impl>),
     /// The `:is` pseudo-class.
     ///
     /// https://drafts.csswg.org/selectors/#matches-pseudo
     ///
     /// Same comment as above re. the argument.
-    Is(ArcSelectorList<Impl>),
+    Is(SelectorList<Impl>),
     /// The `:has` pseudo-class.
     ///
     /// https://drafts.csswg.org/selectors/#has-pseudo
     ///
     /// Same comment as above re. the argument.
     Has(Box<[RelativeSelector<Impl>]>),
+    /// An invalid selector inside :is() / :where().
+    Invalid(Arc<String>),
     /// An implementation-dependent pseudo-element selector.
     PseudoElement(#[shmem(field_bound)] Impl::PseudoElement),
 
@@ -1929,6 +2086,11 @@ impl<Impl: SelectorImpl> Component<Impl> {
                     return false;
                 }
             },
+            Has(ref list) => {
+                if !visitor.visit_relative_selector_list(list) {
+                    return false;
+                }
+            },
             _ => {},
         }
 
@@ -1995,7 +2157,7 @@ impl<Impl: SelectorImpl> ToCss for SelectorList<Impl> {
     where
         W: fmt::Write,
     {
-        serialize_selector_list(self.0.iter(), dest)
+        serialize_selector_list(self.slice().iter(), dest)
     }
 }
 
@@ -2232,9 +2394,7 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
                 dest.write_char('[')?;
                 local_name.to_css(dest)?;
                 operator.to_css(dest)?;
-                dest.write_char('"')?;
                 value.to_css(dest)?;
-                dest.write_char('"')?;
                 match case_sensitivity {
                     ParsedCaseSensitivity::CaseSensitive |
                     ParsedCaseSensitivity::AsciiCaseInsensitiveIfInHtmlElementInHtmlDocument => {},
@@ -2310,6 +2470,7 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
                 dest.write_str(")")
             },
             NonTSPseudoClass(ref pseudo) => pseudo.to_css(dest),
+            Invalid(ref css) => dest.write_str(css),
             RelativeSelectorAnchor => Ok(()),
         }
     }
@@ -2338,9 +2499,7 @@ impl<Impl: SelectorImpl> ToCss for AttrSelectorWithOptionalNamespace<Impl> {
                 ref value,
             } => {
                 operator.to_css(dest)?;
-                dest.write_char('"')?;
                 value.to_css(dest)?;
-                dest.write_char('"')?;
                 match case_sensitivity {
                     ParsedCaseSensitivity::CaseSensitive |
                     ParsedCaseSensitivity::AsciiCaseInsensitiveIfInHtmlElementInHtmlDocument => {},
@@ -2459,25 +2618,6 @@ fn try_parse_combinator<'i, 't, P, Impl>(input: &mut CssParser<'i, 't>) -> Resul
                 }
             },
         }
-    }
-}
-
-impl<Impl: SelectorImpl> Selector<Impl> {
-    /// Parse a selector, without any pseudo-element.
-    #[inline]
-    pub fn parse<'i, 't, P>(
-        parser: &P,
-        input: &mut CssParser<'i, 't>,
-    ) -> Result<Self, ParseError<'i, P::Error>>
-    where
-        P: Parser<'i, Impl = Impl>,
-    {
-        parse_selector(
-            parser,
-            input,
-            SelectorParsingState::empty(),
-            ParseRelative::No,
-        )
     }
 }
 
@@ -2866,7 +3006,7 @@ where
     P: Parser<'i, Impl = Impl>,
     Impl: SelectorImpl,
 {
-    let mut list = SelectorList::parse_with_state(
+    let list = SelectorList::parse_with_state(
         parser,
         input,
         state |
@@ -2876,7 +3016,7 @@ where
         ParseRelative::No,
     )?;
 
-    Ok(Component::Negation(list.into_shared()))
+    Ok(Component::Negation(list))
 }
 
 /// simple_selector_sequence
@@ -2982,7 +3122,7 @@ fn parse_is_where<'i, 't, P, Impl>(
     parser: &P,
     input: &mut CssParser<'i, 't>,
     state: SelectorParsingState,
-    component: impl FnOnce(ArcSelectorList<Impl>) -> Component<Impl>,
+    component: impl FnOnce(SelectorList<Impl>) -> Component<Impl>,
 ) -> Result<Component<Impl>, ParseError<'i, P::Error>>
 where
     P: Parser<'i, Impl = Impl>,
@@ -2994,7 +3134,7 @@ where
     //     Pseudo-elements cannot be represented by the matches-any
     //     pseudo-class; they are not valid within :is().
     //
-    let mut inner = SelectorList::parse_with_state(
+    let inner = SelectorList::parse_with_state(
         parser,
         input,
         state |
@@ -3003,7 +3143,7 @@ where
         ForgivingParsing::Yes,
         ParseRelative::No,
     )?;
-    Ok(component(inner.into_shared()))
+    Ok(component(inner))
 }
 
 fn parse_has<'i, 't, P, Impl>(
@@ -3107,7 +3247,7 @@ where
     }
     // Whitespace between "of" and the selector list is optional
     // https://github.com/w3c/csswg-drafts/issues/8285
-    let mut selectors = SelectorList::parse_with_state(
+    let selectors = SelectorList::parse_with_state(
         parser,
         input,
         state |
@@ -3118,7 +3258,7 @@ where
     )?;
     Ok(Component::NthOf(NthOfSelectorData::new(
         &nth_data,
-        selectors.0.drain(..),
+        selectors.slice().iter().cloned(),
     )))
 }
 
@@ -3431,7 +3571,9 @@ pub mod tests {
         {
             use std::fmt::Write;
 
-            write!(cssparser::CssStringWriter::new(dest), "{}", &self.0)
+            dest.write_char('"')?;
+            write!(cssparser::CssStringWriter::new(dest), "{}", &self.0)?;
+            dest.write_char('"')
         }
     }
 
@@ -3931,7 +4073,7 @@ pub mod tests {
                             vec![Component::Class(DummyAtom::from("cl"))],
                             specificity(0, 1, 0),
                             Default::default(),
-                        )]).to_shared()
+                        )])
                     ),
                 ],
                 specificity(0, 1, 0),
@@ -3951,7 +4093,7 @@ pub mod tests {
                             ],
                             specificity(0, 0, 0),
                             Default::default(),
-                        )]).to_shared(),
+                        )]),
                     ),
                 ],
                 specificity(0, 0, 0),
@@ -3974,7 +4116,7 @@ pub mod tests {
                             ],
                             specificity(0, 0, 1),
                             Default::default(),
-                        )]).to_shared()
+                        )])
                     ),
                 ],
                 specificity(0, 0, 1),
@@ -4080,7 +4222,7 @@ pub mod tests {
                         vec![Component::ExplicitUniversalType],
                         specificity(0, 0, 0),
                         Default::default(),
-                    )]).to_shared()
+                    )])
                 )],
                 specificity(0, 0, 0),
                 Default::default(),
@@ -4097,7 +4239,7 @@ pub mod tests {
                         ],
                         specificity(0, 0, 0),
                         Default::default(),
-                    )]).to_shared()
+                    )])
                 )],
                 specificity(0, 0, 0),
                 Default::default(),
@@ -4113,7 +4255,7 @@ pub mod tests {
                         vec![Component::ExplicitUniversalType],
                         specificity(0, 0, 0),
                         Default::default()
-                    )]).to_shared()
+                    )])
                 )],
                 specificity(0, 0, 0),
                 Default::default(),
@@ -4143,7 +4285,7 @@ pub mod tests {
 
         assert!(parse("foo:where()").is_ok());
         assert!(parse("foo:where(div, foo, .bar baz)").is_ok());
-        assert!(parse_expected("foo:where(::before)", Some("foo:where()")).is_ok());
+        assert!(parse("foo:where(::before)").is_ok());
     }
 
     #[test]
@@ -4166,19 +4308,19 @@ pub mod tests {
         let parent = parse(".bar, div .baz").unwrap();
         let child = parse("#foo &.bar").unwrap();
         assert_eq!(
-            child.replace_parent_selector(&parent.to_shared()),
+            child.replace_parent_selector(&parent),
             parse("#foo :is(.bar, div .baz).bar").unwrap()
         );
 
         let has_child = parse("#foo:has(&.bar)").unwrap();
         assert_eq!(
-            has_child.replace_parent_selector(&parent.to_shared()),
+            has_child.replace_parent_selector(&parent),
             parse("#foo:has(:is(.bar, div .baz).bar)").unwrap()
         );
 
         let child = parse("#foo").unwrap();
         assert_eq!(
-            child.replace_parent_selector(&parent.to_shared()),
+            child.replace_parent_selector(&parent),
             parse(":is(.bar, div .baz) #foo").unwrap()
         );
 
@@ -4188,7 +4330,8 @@ pub mod tests {
 
     #[test]
     fn test_pseudo_iter() {
-        let selector = &parse("q::before").unwrap().0[0];
+        let list = parse("q::before").unwrap();
+        let selector = &list.slice()[0];
         assert!(!selector.is_universal());
         let mut iter = selector.iter();
         assert_eq!(
@@ -4205,18 +4348,19 @@ pub mod tests {
 
     #[test]
     fn test_universal() {
-        let selector = &parse_ns(
+        let list = parse_ns(
             "*|*::before",
             &DummyParser::default_with_namespace(DummyAtom::from("https://mozilla.org")),
         )
-        .unwrap()
-        .0[0];
+        .unwrap();
+        let selector = &list.slice()[0];
         assert!(selector.is_universal());
     }
 
     #[test]
     fn test_empty_pseudo_iter() {
-        let selector = &parse("::before").unwrap().0[0];
+        let list = parse("::before").unwrap();
+        let selector = &list.slice()[0];
         assert!(selector.is_universal());
         let mut iter = selector.iter();
         assert_eq!(
@@ -4247,11 +4391,11 @@ pub mod tests {
     #[test]
     fn visitor() {
         let mut test_visitor = TestVisitor { seen: vec![] };
-        parse(":not(:hover) ~ label").unwrap().0[0].visit(&mut test_visitor);
+        parse(":not(:hover) ~ label").unwrap().slice()[0].visit(&mut test_visitor);
         assert!(test_visitor.seen.contains(&":hover".into()));
 
         let mut test_visitor = TestVisitor { seen: vec![] };
-        parse("::before:hover").unwrap().0[0].visit(&mut test_visitor);
+        parse("::before:hover").unwrap().slice()[0].visit(&mut test_visitor);
         assert!(test_visitor.seen.contains(&":hover".into()));
     }
 }

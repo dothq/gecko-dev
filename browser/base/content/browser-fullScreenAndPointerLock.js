@@ -6,6 +6,8 @@
 // This file is loaded into the browser window scope.
 /* eslint-env mozilla/browser-window */
 
+const FS_PERM_PROMPT_TIME_SHOWN_OFFSET_MS = 2000;
+
 var PointerlockFsWarning = {
   _element: null,
   _origin: null,
@@ -411,13 +413,23 @@ var FullScreen = {
     // shiftSize is sent from Cocoa widget code as a very precise double. We
     // don't need that kind of precision in our CSS.
     shiftSize = shiftSize.toFixed(2);
-    let toolbox = document.getElementById("navigator-toolbox");
+    let toolbox = gNavToolbox;
     if (shiftSize > 0) {
       toolbox.style.setProperty("transform", `translateY(${shiftSize}px)`);
       toolbox.style.setProperty("z-index", "2");
+
+      // If the mouse tracking missed our fullScreenToggler, then the toolbox
+      // might not have been shown before the menubar is animated down. Make
+      // sure it is shown now.
+      if (!this.fullScreenToggler.hidden) {
+        this.showNavToolbox();
+      }
     } else {
       toolbox.style.removeProperty("transform");
       toolbox.style.removeProperty("z-index");
+
+      // If menubar is animating away, we might need to hide the toolbox also.
+      this.hideNavToolbox(false);
     }
   },
 
@@ -466,6 +478,11 @@ var FullScreen = {
         this._permissionNotificationIDs
       ).filter(n => !n.dismissed).length
     ) {
+      if (PopupNotifications.panel.firstChild) {
+        PopupNotifications.panel.firstChild.notification.timeShown +=
+          FS_PERM_PROMPT_TIME_SHOWN_OFFSET_MS;
+      }
+
       this.exitDomFullScreen();
       this._logWarningPermissionPromptFS("fullScreenCanceled");
     }

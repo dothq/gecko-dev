@@ -174,7 +174,7 @@ class AsyncFreeSnowWhite : public Runnable {
 
   nsresult Dispatch() {
     nsCOMPtr<nsIRunnable> self(this);
-    return NS_DispatchToCurrentThreadQueue(self.forget(), 500,
+    return NS_DispatchToCurrentThreadQueue(self.forget(), 1000,
                                            EventQueuePriority::Idle);
   }
 
@@ -2528,10 +2528,6 @@ void JSReporter::CollectReports(WindowPaths* windowPaths,
                gStats.helperThread.stateData,
                "Memory used by HelperThreadState.");
 
-  REPORT_BYTES("explicit/js-non-window/helper-thread/parse-task"_ns, KIND_HEAP,
-               gStats.helperThread.parseTask,
-               "The memory used by ParseTasks waiting in HelperThreadState.");
-
   REPORT_BYTES(
       "explicit/js-non-window/helper-thread/ion-compile-task"_ns, KIND_HEAP,
       gStats.helperThread.ionCompileTask,
@@ -2787,9 +2783,7 @@ XPCJSRuntime::XPCJSRuntime(JSContext* aCx)
       mIID2NativeInterfaceMap(mozilla::MakeUnique<IID2NativeInterfaceMap>()),
       mClassInfo2NativeSetMap(mozilla::MakeUnique<ClassInfo2NativeSetMap>()),
       mNativeSetMap(mozilla::MakeUnique<NativeSetMap>()),
-      mWrappedNativeScopes(),
       mGCIsRunning(false),
-      mNativesToReleaseArray(),
       mDoingFinalization(false),
       mAsyncSnowWhiteFreer(new AsyncFreeSnowWhite()) {
   MOZ_COUNT_CTOR_INHERITED(XPCJSRuntime, CycleCollectedJSRuntime);

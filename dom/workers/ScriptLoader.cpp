@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <type_traits>
 
+#include "mozilla/dom/RequestBinding.h"
 #include "nsIChannel.h"
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
@@ -395,14 +396,15 @@ nsresult GetModuleSecFlags(bool aIsTopLevel, nsIPrincipal* principal,
   // Step 9. If destination is "worker", "sharedworker", or "serviceworker",
   //         and the top-level module fetch flag is set, then set request's
   //         mode to "same-origin".
-  secFlags = aIsTopLevel
-                 ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
-                 : nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_INHERITS_SEC_CONTEXT;
 
   // Step 8. Let request be a new request whose [...] mode is "cors" [...]
+  secFlags = aIsTopLevel ? nsILoadInfo::SEC_REQUIRE_SAME_ORIGIN_DATA_IS_BLOCKED
+                         : nsILoadInfo::SEC_REQUIRE_CORS_INHERITS_SEC_CONTEXT;
+
   // This implements the same Cookie settings as  nsContentSecurityManager's
   // ComputeSecurityFlags. The main difference is the line above, Step 9,
   // setting to same origin.
+
   if (aCredentials == RequestCredentials::Include) {
     secFlags |= nsILoadInfo::nsILoadInfo::SEC_COOKIES_INCLUDE;
   } else if (aCredentials == RequestCredentials::Same_origin) {
@@ -644,15 +646,16 @@ already_AddRefed<ScriptLoadRequest> WorkerScriptLoader::CreateScriptLoadRequest(
   // is "not-parser-inserted", credentials mode is credentials mode, referrer
   // policy is the empty string, and fetch priority is "auto".
   RefPtr<ScriptFetchOptions> fetchOptions = new ScriptFetchOptions(
-      CORSMode::CORS_NONE, referrerPolicy, /* aNonce = */ u""_ns,
+      CORSMode::CORS_NONE, /* aNonce = */ u""_ns, RequestPriority::Auto,
       ParserMetadata::NotParserInserted, nullptr);
 
   RefPtr<ScriptLoadRequest> request = nullptr;
   // Bug 1817259 - For now the debugger scripts are always loaded a Classic.
   if (mWorkerRef->Private()->WorkerType() == WorkerType::Classic ||
       IsDebuggerScript()) {
-    request = new ScriptLoadRequest(ScriptKind::eClassic, uri, fetchOptions,
-                                    SRIMetadata(), nullptr,  // mReferrer
+    request = new ScriptLoadRequest(ScriptKind::eClassic, uri, referrerPolicy,
+                                    fetchOptions, SRIMetadata(),
+                                    nullptr,  // mReferrer
                                     loadContext);
   } else {
     // Implements part of "To fetch a worklet/module worker script graph"
@@ -684,7 +687,7 @@ already_AddRefed<ScriptLoadRequest> WorkerScriptLoader::CreateScriptLoadRequest(
 
     // Part of Step 2. This sets the Top-level flag to true
     request = new ModuleLoadRequest(
-        uri, fetchOptions, SRIMetadata(), referrer, loadContext,
+        uri, referrerPolicy, fetchOptions, SRIMetadata(), referrer, loadContext,
         true,  /* is top level */
         false, /* is dynamic import */
         moduleLoader, ModuleLoadRequest::NewVisitedSetForTopLevelImport(uri),
@@ -1208,8 +1211,8 @@ bool WorkerScriptLoader::EvaluateScript(JSContext* aCx,
     } else {
       requestBaseURI = aRequest->mBaseURL;
     }
-    classicScript =
-        new JS::loader::ClassicScript(aRequest->mFetchOptions, requestBaseURI);
+    classicScript = new JS::loader::ClassicScript(
+        aRequest->ReferrerPolicy(), aRequest->mFetchOptions, requestBaseURI);
   }
 
   JS::Rooted<JSScript*> script(aCx);

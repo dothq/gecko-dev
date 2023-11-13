@@ -34,6 +34,7 @@ use std::str;
 use std::time::Duration;
 use std::time::Instant;
 use thin_vec::ThinVec;
+use uuid::Uuid;
 #[cfg(windows)]
 use winapi::shared::ws2def::{AF_INET, AF_INET6};
 use xpcom::{AtomicRefcnt, RefCounted, RefPtr};
@@ -124,10 +125,20 @@ impl NeqoHttp3Conn {
         } else {
             vec![quic_version]
         };
+
+        let cc_algorithm = match static_prefs::pref!("network.http.http3.cc_algorithm") {
+            0 => CongestionControlAlgorithm::NewReno,
+            1 => CongestionControlAlgorithm::Cubic,
+            _ => {
+                // Unknown preferences; default to Cubic
+                CongestionControlAlgorithm::Cubic
+            }
+        };
+
         #[allow(unused_mut)]
         let mut params = ConnectionParameters::default()
             .versions(quic_version, version_list)
-            .cc_algorithm(CongestionControlAlgorithm::Cubic)
+            .cc_algorithm(cc_algorithm)
             .max_data(max_data)
             .max_stream_data(StreamType::BiDi, false, max_stream_data)
             .grease(static_prefs::pref!("security.tls.grease_http3_enable"));
@@ -166,7 +177,7 @@ impl NeqoHttp3Conn {
         if !qlog_dir.is_empty() {
             let qlog_dir_conv = str::from_utf8(qlog_dir).map_err(|_| NS_ERROR_INVALID_ARG)?;
             let mut qlog_path = PathBuf::from(qlog_dir_conv);
-            qlog_path.push(format!("{}.qlog", origin));
+            qlog_path.push(format!("{}_{}.qlog", origin, Uuid::new_v4()));
 
             // Emit warnings but to not return an error if qlog initialization
             // fails.
@@ -1326,6 +1337,21 @@ pub extern "C" fn neqo_http3conn_webtransport_max_datagram_size(
             *result = size;
             NS_OK
         }
+        Err(_) => NS_ERROR_UNEXPECTED,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn neqo_http3conn_webtransport_set_sendorder(
+    conn: &mut NeqoHttp3Conn,
+    stream_id: u64,
+    sendorder: i64,
+) -> nsresult {
+    match conn
+        .conn
+        .webtransport_set_sendorder(StreamId::from(stream_id), sendorder)
+    {
+        Ok(()) => NS_OK,
         Err(_) => NS_ERROR_UNEXPECTED,
     }
 }

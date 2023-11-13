@@ -127,10 +127,18 @@ already_AddRefed<Buffer> Buffer::Create(Device* aDevice, RawId aDeviceId,
     buffer->SetMapped(0, aDesc.mSize, writable);
   }
 
+  aDevice->TrackBuffer(buffer.get());
+
   return buffer.forget();
 }
 
 void Buffer::Drop() {
+  if (!mValid) {
+    return;
+  }
+
+  mValid = false;
+
   AbortMapRequest();
 
   if (mMapped && !mMapped->mArrayBuffers.IsEmpty()) {
@@ -144,10 +152,11 @@ void Buffer::Drop() {
   }
   mMapped.reset();
 
-  if (mValid && !GetDevice().IsLost()) {
+  GetDevice().UntrackBuffer(this);
+
+  if (GetDevice().IsBridgeAlive()) {
     GetDevice().GetBridge()->SendBufferDrop(mId);
   }
-  mValid = false;
 }
 
 void Buffer::SetMapped(BufferAddress aOffset, BufferAddress aSize,
@@ -207,6 +216,11 @@ already_AddRefed<dom::Promise> Buffer::MapAsync(
         if (promise->State() != dom::Promise::PromiseState::Pending) {
           return;
         }
+
+        // mValid should be true or we should have called unmap while marking
+        // the buffer invalid, causing the promise to be rejected and the branch
+        // above to have early-returned.
+        MOZ_RELEASE_ASSERT(self->mValid);
 
         switch (aResult.type()) {
           case BufferMapResult::TBufferMapSuccess: {

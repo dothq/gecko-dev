@@ -28,6 +28,13 @@
 #include "rtc_base/synchronization/mutex.h"
 #include "rtc_base/time_utils.h"
 
+// Wrapper for gfxVars::UseDMABuf() as we can't include gfxVars here.
+// We don't want to use dmabuf of known broken systems.
+// See FEATURE_DMABUF for details.
+namespace mozilla::gfx {
+bool IsDMABufEnabled();
+}
+
 namespace webrtc {
 
 const int kBytesPerPixel = 4;
@@ -294,7 +301,7 @@ void SharedScreenCastStreamPrivate::OnStreamParamChanged(
   that->modifier_ =
       has_modifier ? that->spa_video_format_.modifier : DRM_FORMAT_MOD_INVALID;
   std::vector<const spa_pod*> params;
-  const int buffer_types = has_modifier
+  const int buffer_types = has_modifier && mozilla::gfx::IsDMABufEnabled()
                                ? (1 << SPA_DATA_DmaBuf) | (1 << SPA_DATA_MemFd)
                                : (1 << SPA_DATA_MemFd);
 
@@ -412,7 +419,9 @@ bool SharedScreenCastStreamPrivate::StartScreenCastStream(
     RTC_LOG(LS_ERROR) << "Unable to open PipeWire library";
     return false;
   }
-  egl_dmabuf_ = std::make_unique<EglDmaBuf>();
+  if (mozilla::gfx::IsDMABufEnabled()) {
+    egl_dmabuf_ = std::make_unique<EglDmaBuf>();
+  }
 
   pw_stream_node_id_ = stream_node_id;
 
@@ -448,7 +457,7 @@ bool SharedScreenCastStreamPrivate::StartScreenCastStream(
   {
     PipeWireThreadLoopLock thread_loop_lock(pw_main_loop_);
 
-    if (fd >= 0) {
+    if (fd != kInvalidPipeWireFd) {
       pw_core_ = pw_context_connect_fd(
           pw_context_, fcntl(fd, F_DUPFD_CLOEXEC, 0), nullptr, 0);
     } else {
@@ -501,7 +510,8 @@ bool SharedScreenCastStreamPrivate::StartScreenCastStream(
     for (uint32_t format : {SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA,
                             SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBx}) {
       // Modifiers can be used with PipeWire >= 0.3.33
-      if (has_required_pw_client_version && has_required_pw_server_version) {
+      if (egl_dmabuf_ &&
+          has_required_pw_client_version && has_required_pw_server_version) {
         modifiers_ = egl_dmabuf_->QueryDmaBufModifiers(format);
 
         if (!modifiers_.empty()) {
@@ -920,7 +930,7 @@ bool SharedScreenCastStreamPrivate::ProcessDMABuffer(
 
   const uint n_planes = spa_buffer->n_datas;
 
-  if (!n_planes) {
+  if (!n_planes || !egl_dmabuf_) {
     return false;
   }
 
@@ -978,7 +988,7 @@ SharedScreenCastStream::CreateDefault() {
 }
 
 bool SharedScreenCastStream::StartScreenCastStream(uint32_t stream_node_id) {
-  return private_->StartScreenCastStream(stream_node_id, -1);
+  return private_->StartScreenCastStream(stream_node_id, kInvalidPipeWireFd);
 }
 
 bool SharedScreenCastStream::StartScreenCastStream(

@@ -117,31 +117,32 @@ namespace net {
 
 static bool IsHeaderBlacklistedForRedirectCopy(nsHttpAtom const& aHeader) {
   // IMPORTANT: keep this list ASCII-code sorted
-  static nsHttpAtom const* blackList[] = {&nsHttp::Accept,
-                                          &nsHttp::Accept_Encoding,
-                                          &nsHttp::Accept_Language,
-                                          &nsHttp::Alternate_Service_Used,
-                                          &nsHttp::Authentication,
-                                          &nsHttp::Authorization,
-                                          &nsHttp::Connection,
-                                          &nsHttp::Content_Length,
-                                          &nsHttp::Cookie,
-                                          &nsHttp::Host,
-                                          &nsHttp::If,
-                                          &nsHttp::If_Match,
-                                          &nsHttp::If_Modified_Since,
-                                          &nsHttp::If_None_Match,
-                                          &nsHttp::If_None_Match_Any,
-                                          &nsHttp::If_Range,
-                                          &nsHttp::If_Unmodified_Since,
-                                          &nsHttp::Proxy_Authenticate,
-                                          &nsHttp::Proxy_Authorization,
-                                          &nsHttp::Range,
-                                          &nsHttp::TE,
-                                          &nsHttp::Transfer_Encoding,
-                                          &nsHttp::Upgrade,
-                                          &nsHttp::User_Agent,
-                                          &nsHttp::WWW_Authenticate};
+  static nsHttpAtomLiteral const* blackList[] = {
+      &nsHttp::Accept,
+      &nsHttp::Accept_Encoding,
+      &nsHttp::Accept_Language,
+      &nsHttp::Alternate_Service_Used,
+      &nsHttp::Authentication,
+      &nsHttp::Authorization,
+      &nsHttp::Connection,
+      &nsHttp::Content_Length,
+      &nsHttp::Cookie,
+      &nsHttp::Host,
+      &nsHttp::If,
+      &nsHttp::If_Match,
+      &nsHttp::If_Modified_Since,
+      &nsHttp::If_None_Match,
+      &nsHttp::If_None_Match_Any,
+      &nsHttp::If_Range,
+      &nsHttp::If_Unmodified_Since,
+      &nsHttp::Proxy_Authenticate,
+      &nsHttp::Proxy_Authorization,
+      &nsHttp::Range,
+      &nsHttp::TE,
+      &nsHttp::Transfer_Encoding,
+      &nsHttp::Upgrade,
+      &nsHttp::User_Agent,
+      &nsHttp::WWW_Authenticate};
 
   class HttpAtomComparator {
     nsHttpAtom const& mTarget;
@@ -149,6 +150,12 @@ static bool IsHeaderBlacklistedForRedirectCopy(nsHttpAtom const& aHeader) {
    public:
     explicit HttpAtomComparator(nsHttpAtom const& aTarget) : mTarget(aTarget) {}
     int operator()(nsHttpAtom const* aVal) const {
+      if (mTarget == *aVal) {
+        return 0;
+      }
+      return strcmp(mTarget.get(), aVal->get());
+    }
+    int operator()(nsHttpAtomLiteral const* aVal) const {
       if (mTarget == *aVal) {
         return 0;
       }
@@ -237,7 +244,8 @@ HttpBaseChannel::HttpBaseChannel()
       mCachedOpaqueResponseBlockingPref(
           StaticPrefs::browser_opaqueResponseBlocking()),
       mChannelBlockedByOpaqueResponse(false),
-      mDummyChannelForImageCache(false) {
+      mDummyChannelForImageCache(false),
+      mHasContentDecompressed(false) {
   StoreApplyConversion(true);
   StoreAllowSTS(true);
   StoreTracingEnabled(true);
@@ -3522,7 +3530,9 @@ HttpBaseChannel::SetChannelIsForDownload(bool aChannelIsForDownload) {
 
 NS_IMETHODIMP
 HttpBaseChannel::SetCacheKeysRedirectChain(nsTArray<nsCString>* cacheKeys) {
-  mRedirectedCachekeys = WrapUnique(cacheKeys);
+  auto RedirectedCachekeys = mRedirectedCachekeys.Lock();
+  auto& ref = RedirectedCachekeys.ref();
+  ref = WrapUnique(cacheKeys);
   return NS_OK;
 }
 
@@ -4462,7 +4472,7 @@ void HttpBaseChannel::AddCookiesToRequest() {
 
   // If we are in the child process, we want the parent seeing any
   // cookie headers that might have been set by SetRequestHeader()
-  SetRequestHeader(nsDependentCString(nsHttp::Cookie), cookie, false);
+  SetRequestHeader(nsHttp::Cookie.val(), cookie, false);
 }
 
 /* static */
@@ -5018,14 +5028,17 @@ nsresult HttpBaseChannel::SetupReplacementChannel(nsIURI* newURI,
 
     // if there is a chain of keys for redirect-responses we transfer it to
     // the new channel (see bug #561276)
-    if (mRedirectedCachekeys) {
-      LOG(
-          ("HttpBaseChannel::SetupReplacementChannel "
-           "[this=%p] transferring chain of redirect cache-keys",
-           this));
-      rv = httpInternal->SetCacheKeysRedirectChain(
-          mRedirectedCachekeys.release());
-      MOZ_ASSERT(NS_SUCCEEDED(rv));
+    {
+      auto redirectedCachekeys = mRedirectedCachekeys.Lock();
+      auto& ref = redirectedCachekeys.ref();
+      if (ref) {
+        LOG(
+            ("HttpBaseChannel::SetupReplacementChannel "
+             "[this=%p] transferring chain of redirect cache-keys",
+             this));
+        rv = httpInternal->SetCacheKeysRedirectChain(ref.release());
+        MOZ_ASSERT(NS_SUCCEEDED(rv));
+      }
     }
 
     // Preserve Request mode.
@@ -5857,6 +5870,12 @@ HttpBaseChannel::SetNavigationStartTimeStamp(TimeStamp aTimeStamp) {
 
 nsresult HttpBaseChannel::CheckRedirectLimit(uint32_t aRedirectFlags) const {
   if (aRedirectFlags & nsIChannelEventSink::REDIRECT_INTERNAL) {
+    // for internal redirect due to auth retry we do not have any limit
+    // as we might restrict the number of times a user might retry
+    // authentication
+    if (aRedirectFlags & nsIChannelEventSink::REDIRECT_AUTH_RETRY) {
+      return NS_OK;
+    }
     // Some platform features, like Service Workers, depend on internal
     // redirects.  We should allow some number of internal redirects above
     // and beyond the normal redirect limit so these features continue
@@ -6383,6 +6402,19 @@ NS_IMETHODIMP HttpBaseChannel::SetEarlyHintLinkType(
 NS_IMETHODIMP HttpBaseChannel::GetEarlyHintLinkType(
     uint32_t* aEarlyHintLinkType) {
   *aEarlyHintLinkType = mEarlyHintLinkType;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+HttpBaseChannel::SetHasContentDecompressed(bool aValue) {
+  LOG(("HttpBaseChannel::SetHasContentDecompressed [this=%p value=%d]\n", this,
+       aValue));
+  mHasContentDecompressed = aValue;
+  return NS_OK;
+}
+NS_IMETHODIMP
+HttpBaseChannel::GetHasContentDecompressed(bool* value) {
+  *value = mHasContentDecompressed;
   return NS_OK;
 }
 

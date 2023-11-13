@@ -459,6 +459,7 @@ std::vector<UniquePtr<JsepCodecDescription>> JsepTrack::NegotiateCodecs(
     Maybe<const SdpMediaSection&> local) {
   std::vector<UniquePtr<JsepCodecDescription>> negotiatedCodecs;
   std::vector<UniquePtr<JsepCodecDescription>> newPrototypeCodecs;
+  bool onlyRedUlpFec = true;
 
   // Outer loop establishes the remote side's preference
   for (const std::string& fmt : remote.GetFormats()) {
@@ -487,6 +488,10 @@ std::vector<UniquePtr<JsepCodecDescription>> JsepTrack::NegotiateCodecs(
           videoCodec->mRtxPayloadType = cloneVideoCodec->mRtxPayloadType;
         }
 
+        if (codec->mName != "red" && codec->mName != "ulpfec") {
+          onlyRedUlpFec = false;
+        }
+
         // Moves the codec out of mPrototypeCodecs, leaving an empty
         // UniquePtr, so we don't use it again. Also causes successfully
         // negotiated codecs to be placed up front in the future.
@@ -495,6 +500,12 @@ std::vector<UniquePtr<JsepCodecDescription>> JsepTrack::NegotiateCodecs(
         break;
       }
     }
+  }
+
+  if (onlyRedUlpFec) {
+    // We don't have any codecs we can actually use. Clearing so we don't
+    // attempt to create a connection signaling only RED and/or ULPFEC.
+    negotiatedCodecs.clear();
   }
 
   // newPrototypeCodecs contains just the negotiated stuff so far. Add the rest.
@@ -524,23 +535,6 @@ std::vector<UniquePtr<JsepCodecDescription>> JsepTrack::NegotiateCodecs(
       dtmf = static_cast<JsepAudioCodecDescription*>(codec.get());
     }
   }
-  // if we have a red codec remove redundant encodings that don't exist
-  if (red) {
-    // Since we could have an externally specified redundant endcodings
-    // list, we shouldn't simply rebuild the redundant encodings list
-    // based on the current list of codecs.
-    std::vector<uint8_t> unnegotiatedEncodings;
-    std::swap(unnegotiatedEncodings, red->mRedundantEncodings);
-    for (auto redundantPt : unnegotiatedEncodings) {
-      std::string pt = std::to_string(redundantPt);
-      for (const auto& codec : negotiatedCodecs) {
-        if (pt == codec->mDefaultPt) {
-          red->mRedundantEncodings.push_back(redundantPt);
-          break;
-        }
-      }
-    }
-  }
   // Video FEC is indicated by the existence of the red and ulpfec
   // codecs and not an attribute on the particular video codec (like in
   // a rtcpfb attr). If we see both red and ulpfec codecs, we enable FEC
@@ -550,7 +544,8 @@ std::vector<UniquePtr<JsepCodecDescription>> JsepTrack::NegotiateCodecs(
       if (codec->mName != "red" && codec->mName != "ulpfec") {
         JsepVideoCodecDescription* videoCodec =
             static_cast<JsepVideoCodecDescription*>(codec.get());
-        videoCodec->EnableFec(red->mDefaultPt, ulpfec->mDefaultPt);
+        videoCodec->EnableFec(red->mDefaultPt, ulpfec->mDefaultPt,
+                              red->mRtxPayloadType);
       }
     }
   }

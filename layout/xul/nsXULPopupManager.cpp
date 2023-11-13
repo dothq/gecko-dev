@@ -1282,7 +1282,7 @@ void nsXULPopupManager::HidePopup(Element* aPopup, HidePopupOptions aOptions,
     nsCOMPtr<nsIRunnable> event =
         new nsXULPopupHidingEvent(popupToHide, nextPopup, lastPopup,
                                   popupFrame->GetPopupType(), aOptions);
-    aPopup->OwnerDoc()->Dispatch(TaskCategory::Other, event.forget());
+    aPopup->OwnerDoc()->Dispatch(event.forget());
   } else {
     RefPtr<nsPresContext> presContext = popupFrame->PresContext();
     FirePopupHidingEvent(popupToHide, nextPopup, lastPopup, presContext,
@@ -1429,8 +1429,7 @@ void nsXULPopupManager::HidePopupAfterDelay(nsMenuPopupFrame* aPopup,
   KillMenuTimer();
 
   // Kick off the timer.
-  nsIEventTarget* target =
-      aPopup->PopupElement().OwnerDoc()->EventTargetFor(TaskCategory::Other);
+  nsIEventTarget* target = GetMainThreadSerialEventTarget();
   NS_NewTimerWithFuncCallback(
       getter_AddRefs(mCloseTimer),
       [](nsITimer* aTimer, void* aClosure) {
@@ -1556,7 +1555,7 @@ void nsXULPopupManager::ExecuteMenu(nsIContent* aMenu,
   HideOpenMenusBeforeExecutingMenu(cmm);
   aEvent->SetCloseMenuMode(cmm);
   nsCOMPtr<nsIRunnable> event = aEvent;
-  aMenu->OwnerDoc()->Dispatch(TaskCategory::Other, event.forget());
+  aMenu->OwnerDoc()->Dispatch(event.forget());
 }
 
 bool nsXULPopupManager::ActivateNativeMenuItem(nsIContent* aItem,
@@ -2728,7 +2727,7 @@ bool nsXULPopupPositionedEvent::DispatchIfNeeded(Element* aPopup) {
   if (aPopup->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type, nsGkAtoms::arrow,
                           eCaseMatters)) {
     nsCOMPtr<nsIRunnable> event = new nsXULPopupPositionedEvent(aPopup);
-    aPopup->OwnerDoc()->Dispatch(TaskCategory::Other, event.forget());
+    aPopup->OwnerDoc()->Dispatch(event.forget());
     return true;
   }
 
@@ -2762,6 +2761,33 @@ static void AlignmentPositionToString(nsMenuPopupFrame* aFrame,
       return aString.AssignLiteral("after_pointer");
     case POPUPPOSITION_SELECTION:
       return aString.AssignLiteral("selection");
+    default:
+      // Leave as an empty string.
+      break;
+  }
+}
+
+static void PopupAlignmentToString(nsMenuPopupFrame* aFrame,
+                                   nsAString& aString) {
+  aString.Truncate();
+  int alignment = aFrame->GetPopupAlignment();
+  switch (alignment) {
+    case POPUPALIGNMENT_TOPLEFT:
+      return aString.AssignLiteral("topleft");
+    case POPUPALIGNMENT_TOPRIGHT:
+      return aString.AssignLiteral("topright");
+    case POPUPALIGNMENT_BOTTOMLEFT:
+      return aString.AssignLiteral("bottomleft");
+    case POPUPALIGNMENT_BOTTOMRIGHT:
+      return aString.AssignLiteral("bottomright");
+    case POPUPALIGNMENT_LEFTCENTER:
+      return aString.AssignLiteral("leftcenter");
+    case POPUPALIGNMENT_RIGHTCENTER:
+      return aString.AssignLiteral("rightcenter");
+    case POPUPALIGNMENT_TOPCENTER:
+      return aString.AssignLiteral("topcenter");
+    case POPUPALIGNMENT_BOTTOMCENTER:
+      return aString.AssignLiteral("bottomcenter");
     default:
       // Leave as an empty string.
       break;
@@ -2804,6 +2830,7 @@ nsXULPopupPositionedEvent::Run() {
   init.mIsAnchored = popupFrame->IsAnchored();
   init.mAlignmentOffset = popupOffset;
   AlignmentPositionToString(popupFrame, init.mAlignmentPosition);
+  PopupAlignmentToString(popupFrame, init.mPopupAlignment);
   RefPtr<PopupPositionedEvent> event =
       PopupPositionedEvent::Constructor(mPopup, u"popuppositioned"_ns, init);
   event->SetTrusted(true);

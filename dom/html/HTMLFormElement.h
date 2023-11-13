@@ -13,11 +13,10 @@
 #include "mozilla/dom/AnchorAreaFormRelValues.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/PopupBlocker.h"
-#include "mozilla/dom/RadioGroupManager.h"
+#include "mozilla/dom/RadioGroupContainer.h"
 #include "nsCOMPtr.h"
 #include "nsIFormControl.h"
 #include "nsGenericHTMLElement.h"
-#include "nsIRadioGroupContainer.h"
 #include "nsIWeakReferenceUtils.h"
 #include "nsThreadUtils.h"
 #include "nsInterfaceHashtable.h"
@@ -39,9 +38,7 @@ class HTMLImageElement;
 class FormData;
 
 class HTMLFormElement final : public nsGenericHTMLElement,
-                              public nsIRadioGroupContainer,
-                              public AnchorAreaFormRelValues,
-                              RadioGroupManager {
+                              public AnchorAreaFormRelValues {
   friend class HTMLFormControlsCollection;
 
  public:
@@ -57,27 +54,9 @@ class HTMLFormElement final : public nsGenericHTMLElement,
 
   int32_t IndexOfContent(nsIContent* aContent);
   nsGenericHTMLFormElement* GetDefaultSubmitElement() const;
-
-  // nsIRadioGroupContainer
-  void SetCurrentRadioButton(const nsAString& aName,
-                             HTMLInputElement* aRadio) override;
-  HTMLInputElement* GetCurrentRadioButton(const nsAString& aName) override;
-  NS_IMETHOD GetNextRadioButton(const nsAString& aName, const bool aPrevious,
-                                HTMLInputElement* aFocusedRadio,
-                                HTMLInputElement** aRadioOut) override;
-  NS_IMETHOD WalkRadioGroup(const nsAString& aName,
-                            nsIRadioVisitor* aVisitor) override;
-  void AddToRadioGroup(const nsAString& aName,
-                       HTMLInputElement* aRadio) override;
-  void RemoveFromRadioGroup(const nsAString& aName,
-                            HTMLInputElement* aRadio) override;
-  uint32_t GetRequiredRadioCount(const nsAString& aName) const override;
-  void RadioRequiredWillChange(const nsAString& aName,
-                               bool aRequiredAdded) override;
-  bool GetValueMissingState(const nsAString& aName) const override;
-  void SetValueMissingState(const nsAString& aName, bool aValue) override;
-
-  ElementState IntrinsicState() const override;
+  bool IsDefaultSubmitElement(nsGenericHTMLFormElement* aElement) const {
+    return aElement == mDefaultSubmitElement;
+  }
 
   // EventTarget
   void AsyncEventRunning(AsyncEventDispatcher* aEvent) override;
@@ -207,15 +186,6 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   bool IsLastActiveElement(const nsGenericHTMLFormElement* aElement) const;
 
   /**
-   * Check whether a given nsGenericHTMLFormElement is the default submit
-   * element.  This is different from just comparing to
-   * GetDefaultSubmitElement() in certain situations inside an update
-   * when GetDefaultSubmitElement() might not be up to date. aElement
-   * is expected to not be null.
-   */
-  bool IsDefaultSubmitElement(const nsGenericHTMLFormElement* aElement) const;
-
-  /**
    * Flag the form to know that a button or image triggered scripted form
    * submission. In that case the form will defer the submission until the
    * script handler returns and the return value is known.
@@ -337,7 +307,7 @@ class HTMLFormElement final : public nsGenericHTMLElement,
 
   // it's only out-of-line because the class definition is not available in the
   // header
-  nsIHTMLCollection* Elements();
+  HTMLFormControlsCollection* Elements();
 
   int32_t Length();
 
@@ -617,6 +587,8 @@ class HTMLFormElement final : public nsGenericHTMLElement,
 
  private:
   bool IsSubmitting() const;
+
+  void SetDefaultSubmitElement(nsGenericHTMLFormElement*);
 
   NotNull<const Encoding*> GetSubmitEncoding();
 

@@ -68,10 +68,9 @@ class AudioBufferSourceNodeEngine final : public AudioNodeEngine {
 
   void SetSourceTrack(AudioNodeTrack* aSource) { mSource = aSource; }
 
-  void RecvTimelineEvent(uint32_t aIndex,
-                         dom::AudioTimelineEvent& aEvent) override {
+  void RecvTimelineEvent(uint32_t aIndex, AudioParamEvent& aEvent) override {
     MOZ_ASSERT(mDestination);
-    WebAudioUtils::ConvertAudioTimelineEventToTicks(aEvent, mDestination);
+    aEvent.ConvertToTicks(mDestination);
     mRecomputeOutRate = true;
 
     switch (aIndex) {
@@ -463,12 +462,13 @@ class AudioBufferSourceNodeEngine final : public AudioNodeEngine {
     if (simplePlaybackRate) {
       playbackRate = mPlaybackRateTimeline.GetValue();
     } else {
-      playbackRate = mPlaybackRateTimeline.GetValueAtTime(aTrackPosition);
+      playbackRate =
+          mPlaybackRateTimeline.GetComplexValueAtTime(aTrackPosition);
     }
     if (simpleDetune) {
       detune = mDetuneTimeline.GetValue();
     } else {
-      detune = mDetuneTimeline.GetValueAtTime(aTrackPosition);
+      detune = mDetuneTimeline.GetComplexValueAtTime(aTrackPosition);
     }
     if (playbackRate <= 0 || std::isnan(playbackRate)) {
       playbackRate = 1.0f;

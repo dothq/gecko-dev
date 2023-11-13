@@ -303,6 +303,8 @@ browsertime-benchmark:
                         custom-car: []
                         chromium: []
                         safari: []  # Bug 1848400 safari perma-fails on osx1300
+                        chrome:
+                            - [speedometer, sp]
                         default:
                             - [speedometer, sp]
                             - [speedometer3, sp3]
@@ -314,6 +316,8 @@ browsertime-benchmark:
                             - [jetstream2, js2]
                             - [matrix-react-bench, mrb]
                             - [motionmark-animometer, mm-a]
+                            - [motionmark-animometer-ramp, mm-ar]
+                            - [motionmark-htmlsuite-ramp, mm-hr]
                             - [motionmark-htmlsuite, mm-h]
                             - [speedometer, sp]
                             - [speedometer3, sp3]
@@ -326,18 +330,22 @@ browsertime-benchmark:
                             - ares6
                             - [assorted-dom, dom]
                             - [jetstream2, js2]
-                            # - [matrix-react-bench, mrb] (Bug 1802922)
+                            # - [matrix-react-bench, mrb] Perma fails on osx 10.15.x machines (Bug 1807754)
                             - [motionmark-animometer, mm-a]
                             - [motionmark-htmlsuite, mm-h]
+                            - [motionmark-animometer-ramp, mm-ar]
+                            - [motionmark-htmlsuite-ramp, mm-hr]
                             - [speedometer, sp]
-                            - [speedometer3, sp3]
+                            # - [speedometer3, sp3] Perma fails on osx 10.15.x machines (Bug 1809535)
                             - [stylebench, sb]
                             - [sunspider, ss]
                             - [unity-webgl, ugl]
-                            # - [webaudio, wa] (Bug 1802922)
+                            - [webaudio, wa]
                         custom-car:
                             - [speedometer, sp]
                             - [speedometer3, sp3]
+                            - [motionmark-animometer-ramp, mm-ar]
+                            - [motionmark-htmlsuite-ramp, mm-hr]
                         default:
                             - ares6
                             - [assorted-dom, dom]
@@ -345,6 +353,8 @@ browsertime-benchmark:
                             - [matrix-react-bench, mrb]
                             - [motionmark-animometer, mm-a]
                             - [motionmark-htmlsuite, mm-h]
+                            - [motionmark-animometer-ramp, mm-ar]
+                            - [motionmark-htmlsuite-ramp, mm-hr]
                             - [speedometer, sp]
                             - [speedometer3, sp3]
                             - [stylebench, sb]
@@ -416,18 +426,28 @@ browsertime-benchmark:
             jetstream2: 8000
             matrix-react-bench: 1500
             motionmark-htmlsuite: 1500
+            motionmark-htmlsuite-ramp: 3000
+            motionmark-animometer-ramp: 2100
             unity-webgl: 1500
-            speedometer3: 2100
+            speedometer3:
+                by-test-platform:
+                    macosx1300.*shippable.*: 4200
+                    default: 2100
             speedometer: 2100
             default: 900
     mozharness:
         extra-options:
-            - --extra-profiler-run
+            by-test-platform:
+                macosx1300.*shippable.*:
+                    - --extra-profiler-run
+                    - --page-timeout=900000
+                default:
+                    - --extra-profiler-run
 
 browsertime-benchmark-wasm:
     description: Raptor (browsertime) WASM benchmarks
     raptor:
-        apps: [firefox, chrome, chromium]  # Safari depends on Bug 1802922
+        apps: [firefox, chrome, chromium, safari]
         subtests:
             by-app:
                 firefox:
@@ -437,6 +457,9 @@ browsertime-benchmark-wasm:
                     - [wasm-misc, wm]
                     - [wasm-misc-baseline, wm-b]
                     - [wasm-misc-optimizing, wm-i]
+                safari:
+                    # - [wasm-misc, wm] Perma fails (Bug 1809533)
+                    - [wasm-godot, godot]
                 default:
                     - [wasm-misc, wm]
                     - [wasm-godot, godot]
@@ -454,6 +477,7 @@ browsertime-benchmark-wasm:
         by-subtest:
             wasm-godot: 1500
             wasm-godot-baseline: 1500
+            wasm-misc-baseline: 1500
             default: 900
     mozharness:
         extra-options:
@@ -534,28 +558,28 @@ browsertime-tp6-live:
                     - amazon
                     - [bing-search, bing]
                     - ebay
-                    - [facebook, fb]
-                    # - fandom (Bug 1802922)
+                    # - [facebook, fb] Perma fails on osx 10.15.7
+                    - fandom
                     - [google-docs, gdocs]
-                    # - [google-mail, gmail] (Bug 1802922)
+                    - [google-mail, gmail]
                     - [google-search, gsearch]
                     - [google-slides, gslides]
                     - imdb
-                    # - imgur (Bug 1802922)
-                    # - instagram (see bug 1736999)
+                    - imgur
+                    # - instagram # (see bug 1736999)
                     - linkedin
                     - microsoft
-                    # - netflix (Bug 1802922)
+                    # - netflix # Perma fails on osx 10.15.7 (Bug 1802922)
                     # - office (site loads blank page if not signed in)
-                    - outlook
+                    # - outlook Perma fails on osx 10.15.7
                     - paypal
                     - pinterest
                     - reddit
                     - tumblr
                     - twitch
-                    - twitter
+                    # - twitter Perma fails on osx 10.15.7
                     - wikipedia
-                    # - yahoo-mail (Bug 1802922)
+                    - yahoo-mail
                     - youtube
                 chrome:
                     - amazon

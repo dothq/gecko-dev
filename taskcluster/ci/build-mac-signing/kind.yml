@@ -9,6 +9,7 @@ transforms:
     - gecko_taskgraph.transforms.name_sanity
     - gecko_taskgraph.transforms.build_signing
     - gecko_taskgraph.transforms.signing
+    - gecko_taskgraph.transforms.hardened_signing
     - gecko_taskgraph.transforms.task
 
 kind-dependencies:
@@ -22,10 +23,12 @@ only-for-build-platforms:
     - macosx64-devedition/opt
     - macosx64/opt
     - macosx64/debug
+    - macosx64-aarch64/debug
 
 jobs:
     build-mac-signing:
-        from-deps: {}
+        from-deps:
+            group-by: single-with-filters
         treeherder:
             symbol: BMS
         enable-signing-routes: false

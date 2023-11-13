@@ -22,6 +22,7 @@
 #include "mozilla/layers/TextureClientPool.h"  // for TextureClientPool
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/layers/SyncObject.h"  // for SyncObjectClient
+#include "mozilla/gfx/CanvasManagerChild.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/Logging.h"
@@ -119,10 +120,6 @@ void CompositorBridgeChild::AfterDestroy() {
       Send__delete__(this);
     }
     mActorDestroyed = true;
-  }
-
-  if (mCanvasChild) {
-    mCanvasChild->Destroy();
   }
 
   if (sCompositorBridge == this) {
@@ -420,8 +417,7 @@ mozilla::ipc::IPCResult CompositorBridgeChild::RecvParentAsyncMessages(
 }
 
 mozilla::ipc::IPCResult CompositorBridgeChild::RecvObserveLayersUpdate(
-    const LayersId& aLayersId, const LayersObserverEpoch& aEpoch,
-    const bool& aActive) {
+    const LayersId& aLayersId, const bool& aActive) {
   // This message is sent via the window compositor, not the tab compositor -
   // however it still has a layers id.
   MOZ_ASSERT(aLayersId.IsValid());
@@ -429,7 +425,7 @@ mozilla::ipc::IPCResult CompositorBridgeChild::RecvObserveLayersUpdate(
 
   if (RefPtr<dom::BrowserParent> tab =
           dom::BrowserParent::GetBrowserParentFromLayersId(aLayersId)) {
-    tab->LayerTreeUpdate(aEpoch, aActive);
+    tab->LayerTreeUpdate(aActive);
   }
   return IPC_OK();
 }
@@ -521,34 +517,20 @@ PTextureChild* CompositorBridgeChild::CreateTexture(
 
 already_AddRefed<CanvasChild> CompositorBridgeChild::GetCanvasChild() {
   MOZ_ASSERT(gfx::gfxVars::RemoteCanvasEnabled());
-
-  if (CanvasChild::Deactivated()) {
-    return nullptr;
+  if (auto* cm = gfx::CanvasManagerChild::Get()) {
+    return cm->GetCanvasChild().forget();
   }
-
-  if (!mCanvasChild) {
-    ipc::Endpoint<PCanvasParent> parentEndpoint;
-    ipc::Endpoint<PCanvasChild> childEndpoint;
-    nsresult rv = PCanvas::CreateEndpoints(OtherPid(), base::GetCurrentProcId(),
-                                           &parentEndpoint, &childEndpoint);
-    if (NS_SUCCEEDED(rv)) {
-      Unused << SendInitPCanvasParent(std::move(parentEndpoint));
-      mCanvasChild = new CanvasChild(std::move(childEndpoint));
-    }
-  }
-
-  return do_AddRef(mCanvasChild);
+  return nullptr;
 }
 
 void CompositorBridgeChild::EndCanvasTransaction() {
-  if (mCanvasChild) {
-    mCanvasChild->EndTransaction();
-    if (mCanvasChild->ShouldBeCleanedUp()) {
-      mCanvasChild->Destroy();
-      Unused << SendReleasePCanvasParent();
-      mCanvasChild = nullptr;
-    }
+  if (auto* cm = gfx::CanvasManagerChild::Get()) {
+    cm->EndCanvasTransaction();
   }
+}
+
+void CompositorBridgeChild::ClearCachedResources() {
+  CanvasChild::ClearCachedResources();
 }
 
 bool CompositorBridgeChild::AllocUnsafeShmem(size_t aSize, ipc::Shmem* aShmem) {
