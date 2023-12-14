@@ -16,8 +16,7 @@ use crate::error_reporting::ContextualParseError;
 use crate::parser::{Parse, ParserContext};
 use crate::shared_lock::{SharedRwLockReadGuard, ToCssWithGuard};
 use crate::str::CssStringWriter;
-use crate::stylesheets::UrlExtraData;
-use crate::values::serialize_atom_name;
+use crate::values::{computed, serialize_atom_name};
 use cssparser::{
     AtRuleParser, BasicParseErrorKind, CowRcStr, DeclarationParser, ParseErrorKind, Parser,
     ParserInput, QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, SourceLocation,
@@ -80,7 +79,7 @@ pub fn parse_property_block<'i, 't>(
     //     missing, the @property rule is invalid.
     let Some(inherits) = descriptors.inherits else { return Err(input.new_error(BasicParseErrorKind::AtRuleBodyInvalid)) };
 
-    if PropertyRegistration::validate_initial_value(&syntax, descriptors.initial_value.as_ref(), context.url_data).is_err() {
+    if PropertyRegistration::validate_initial_value(&syntax, descriptors.initial_value.as_ref()).is_err() {
         return Err(input.new_error(BasicParseErrorKind::AtRuleBodyInvalid));
     }
 
@@ -205,12 +204,35 @@ impl PropertyRegistration {
         MallocSizeOf::size_of(self, ops)
     }
 
+    /// Computes the value of the computationally independent initial value.
+    pub fn compute_initial_value(
+        &self,
+        computed_context: &computed::Context,
+    ) -> Result<InitialValue, ()> {
+        let Some(ref initial) = self.initial_value else {
+            return Err(());
+        };
+
+        let mut input = ParserInput::new(initial.css_text());
+        let mut input = Parser::new(&mut input);
+        input.skip_whitespace();
+
+        match SpecifiedRegisteredValue::compute(
+            &mut input,
+            self,
+            computed_context,
+            AllowComputationallyDependent::No,
+        ) {
+            Ok(computed) => Ok(computed),
+            Err(_) => Err(()),
+        }
+    }
+
     /// Performs syntax validation as per the initial value descriptor.
     /// https://drafts.css-houdini.org/css-properties-values-api-1/#initial-value-descriptor
     pub fn validate_initial_value(
         syntax: &Descriptor,
         initial_value: Option<&InitialValue>,
-        url_data: &UrlExtraData,
     ) -> Result<(), PropertyRegistrationError> {
         use crate::properties::CSSWideKeyword;
         // If the value of the syntax descriptor is the universal syntax definition, then the
@@ -246,7 +268,7 @@ impl PropertyRegistration {
         match SpecifiedRegisteredValue::parse(
             &mut input,
             syntax,
-            url_data,
+            &initial.url_data,
             AllowComputationallyDependent::No,
         ) {
             Ok(_) => {},
@@ -304,10 +326,10 @@ pub type InitialValue = Arc<SpecifiedValue>;
 
 impl Parse for InitialValue {
     fn parse<'i, 't>(
-        _context: &ParserContext,
+        context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self, ParseError<'i>> {
         input.skip_whitespace();
-        SpecifiedValue::parse(input)
+        SpecifiedValue::parse(input, &context.url_data)
     }
 }

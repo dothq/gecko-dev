@@ -128,57 +128,6 @@ class TierStatus(object):
         t["finish_time"] = time.monotonic()
         t["duration"] = self.resources.finish_phase(tier)
 
-    def tiered_resource_usage(self):
-        """Obtains an object containing resource usage for tiers.
-
-        The returned object is suitable for serialization.
-        """
-        o = []
-
-        for tier, state in self.tiers.items():
-            t_entry = dict(
-                name=tier,
-                start=state["begin_time"],
-                end=state["finish_time"],
-                duration=state["duration"],
-            )
-
-            self.add_resources_to_dict(t_entry, phase=tier)
-
-            o.append(t_entry)
-
-        return o
-
-    def add_resources_to_dict(self, entry, start=None, end=None, phase=None):
-        """Helper function to append resource information to a dict."""
-        cpu_percent = self.resources.aggregate_cpu_percent(
-            start=start, end=end, phase=phase, per_cpu=False
-        )
-        cpu_times = self.resources.aggregate_cpu_times(
-            start=start, end=end, phase=phase, per_cpu=False
-        )
-        io = self.resources.aggregate_io(start=start, end=end, phase=phase)
-
-        if cpu_percent is None:
-            return entry
-
-        entry["cpu_percent"] = cpu_percent
-        entry["cpu_times"] = list(cpu_times)
-        entry["io"] = list(io)
-
-        return entry
-
-    def add_resource_fields_to_dict(self, d):
-        for usage in self.resources.range_usage():
-            cpu_times = self.resources.aggregate_cpu_times(per_cpu=False)
-
-            d["cpu_times_fields"] = list(cpu_times._fields)
-            d["io_fields"] = list(usage.io._fields)
-            d["virt_fields"] = list(usage.virt._fields)
-            d["swap_fields"] = list(usage.swap._fields)
-
-            return d
-
 
 def record_cargo_timings(resource_monitor, timings_path):
     cargo_start = 0
@@ -221,7 +170,7 @@ def record_cargo_timings(resource_monitor, timings_path):
 
     for name, start, duration in data:
         resource_monitor.record_marker(
-            "Rust", cargo_start + start, cargo_start + start + duration, name
+            "RustCrate", cargo_start + start, cargo_start + start + duration, name
         )
 
 
@@ -309,8 +258,9 @@ class BuildMonitor(MozbuildObject):
         # does not interfere with our parsing of the line.
         plain_line = self._terminal.strip(line) if self._terminal else line.strip()
         if plain_line.startswith("BUILDSTATUS"):
-            args = plain_line.split()[1:]
+            args = plain_line.split()
 
+            _, _, disambiguator = args.pop(0).partition("@")
             action = args.pop(0)
             update_needed = True
 
@@ -325,13 +275,17 @@ class BuildMonitor(MozbuildObject):
                 self.tiers.finish_tier(tier)
             elif action == "OBJECT_FILE":
                 self.build_objects.append(args[0])
-                self.resources.begin_marker("Object", args[0])
+                self.resources.begin_marker("Object", args[0], disambiguator)
                 update_needed = False
             elif action.startswith("START_"):
-                self.resources.begin_marker(action[len("START_") :], " ".join(args))
+                self.resources.begin_marker(
+                    action[len("START_") :], " ".join(args), disambiguator
+                )
                 update_needed = False
             elif action.startswith("END_"):
-                self.resources.end_marker(action[len("END_") :], " ".join(args))
+                self.resources.end_marker(
+                    action[len("END_") :], " ".join(args), disambiguator
+                )
                 update_needed = False
             elif action == "BUILD_VERBOSE":
                 build_dir = args[0]
@@ -350,10 +304,10 @@ class BuildMonitor(MozbuildObject):
             return BuildOutputResult(None, False, None)
 
         warning = None
+        message = line
 
         try:
             warning = self._warnings_collector.process_line(line)
-            message = line
         except Exception:
             pass
 
@@ -365,7 +319,7 @@ class BuildMonitor(MozbuildObject):
 
         self._resources_started = False
 
-    def finish(self, record_usage=True):
+    def finish(self):
         """Record the end of the build."""
         self.stop_resource_recording()
         self.end_time = time.monotonic()
@@ -375,16 +329,9 @@ class BuildMonitor(MozbuildObject):
         self.warnings_database.prune()
         self.warnings_database.save_to_file(self._warnings_path)
 
-        # Record usage.
-        if not record_usage:
-            return
-
+    def record_usage(self):
+        build_resources_profile_path = None
         try:
-            usage = self.get_resource_usage()
-            if not usage:
-                return
-
-            self.log_resource_usage(usage)
             # When running on automation, we store the resource usage data in
             # the upload path, alongside, for convenience, a copy of the HTML
             # viewer.
@@ -410,6 +357,14 @@ class BuildMonitor(MozbuildObject):
                 {"msg": str(e)},
                 "Exception when writing resource usage file: {msg}",
             )
+            try:
+                if build_resources_profile_path and os.path.exists(
+                    build_resources_profile_path
+                ):
+                    os.remove(build_resources_profile_path)
+            except Exception:
+                # In case there's an exception for some reason, ignore it.
+                pass
 
     def _get_finder_cpu_usage(self):
         """Obtain the CPU usage of the Finder app on OS X.
@@ -507,64 +462,12 @@ class BuildMonitor(MozbuildObject):
             return None
 
         cpu_percent = self.resources.aggregate_cpu_percent(phase=None, per_cpu=False)
-        cpu_times = self.resources.aggregate_cpu_times(phase=None, per_cpu=False)
         io = self.resources.aggregate_io(phase=None)
 
-        o = dict(
-            version=3,
-            argv=sys.argv,
-            start=self.start_time,
-            end=self.end_time,
-            duration=self.end_time - self.start_time,
-            resources=[],
+        return dict(
             cpu_percent=cpu_percent,
-            cpu_times=cpu_times,
             io=io,
-            objects=self.build_objects,
         )
-
-        o["tiers"] = self.tiers.tiered_resource_usage()
-
-        self.tiers.add_resource_fields_to_dict(o)
-
-        for usage in self.resources.range_usage():
-            cpu_percent = self.resources.aggregate_cpu_percent(
-                usage.start, usage.end, per_cpu=False
-            )
-            cpu_times = self.resources.aggregate_cpu_times(
-                usage.start, usage.end, per_cpu=False
-            )
-
-            entry = dict(
-                start=usage.start,
-                end=usage.end,
-                virt=list(usage.virt),
-                swap=list(usage.swap),
-            )
-
-            self.tiers.add_resources_to_dict(entry, start=usage.start, end=usage.end)
-
-            o["resources"].append(entry)
-
-        # If the imports for this file ran before the in-tree virtualenv
-        # was bootstrapped (for instance, for a clobber build in automation),
-        # psutil might not be available.
-        #
-        # Treat psutil as optional to avoid an outright failure to log resources
-        # TODO: it would be nice to collect data on the storage device as well
-        # in this case.
-        o["system"] = {}
-        if psutil:
-            o["system"].update(
-                dict(
-                    logical_cpu_count=psutil.cpu_count(),
-                    physical_cpu_count=psutil.cpu_count(logical=False),
-                    swap_total=psutil.swap_memory()[0],
-                    vmem_total=psutil.virtual_memory()[0],
-                )
-            )
-
-        return o
 
     def log_resource_usage(self, usage):
         """Summarize the resource usage of this build in a log message."""
@@ -1167,6 +1070,46 @@ class BuildDriver(MozbuildObject):
         mach_context=None,
         append_env=None,
     ):
+        warnings_path = self._get_state_filename("warnings.json")
+        monitor = self._spawn(BuildMonitor)
+        monitor.init(warnings_path, self.log_manager.terminal)
+        status = self._build(
+            monitor,
+            metrics,
+            what,
+            jobs,
+            job_size,
+            directory,
+            verbose,
+            keep_going,
+            mach_context,
+            append_env,
+        )
+
+        record_usage = True
+
+        # On automation, only record usage for plain `mach build`
+        if "MOZ_AUTOMATION" in os.environ and what:
+            record_usage = False
+
+        if record_usage:
+            monitor.record_usage()
+
+        return status
+
+    def _build(
+        self,
+        monitor,
+        metrics,
+        what=None,
+        jobs=0,
+        job_size=0,
+        directory=None,
+        verbose=False,
+        keep_going=False,
+        mach_context=None,
+        append_env=None,
+    ):
         """Invoke the build backend.
 
         ``what`` defines the thing to build. If not defined, the default
@@ -1174,9 +1117,6 @@ class BuildDriver(MozbuildObject):
         """
         self.metrics = metrics
         self.mach_context = mach_context
-        warnings_path = self._get_state_filename("warnings.json")
-        monitor = self._spawn(BuildMonitor)
-        monitor.init(warnings_path, self.log_manager.terminal)
         footer = BuildProgressFooter(self.log_manager.terminal, monitor)
 
         # Disable indexing in objdir because it is not necessary and can slow
@@ -1431,18 +1371,13 @@ class BuildDriver(MozbuildObject):
                     # it through; otherwise, fail.
                     status = 1
 
-            record_usage = status == 0
-
-            # On automation, only record usage for plain `mach build`
-            if "MOZ_AUTOMATION" in os.environ and what:
-                record_usage = False
-
-            monitor.finish(record_usage=record_usage)
+            monitor.finish()
 
         if status == 0:
             usage = monitor.get_resource_usage()
             if usage:
                 self.mach_context.command_attrs["usage"] = usage
+                monitor.log_resource_usage(usage)
 
         # Print the collected compiler warnings. This is redundant with
         # inline output from the compiler itself. However, unlike inline
@@ -1668,6 +1603,7 @@ class BuildDriver(MozbuildObject):
             command.extend(options)
 
         if buildstatus_messages:
+            append_env["MOZ_CONFIGURE_BUILDSTATUS"] = "1"
             line_handler("BUILDSTATUS TIERS configure")
             line_handler("BUILDSTATUS TIER_START configure")
 

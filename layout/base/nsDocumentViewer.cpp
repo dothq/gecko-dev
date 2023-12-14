@@ -63,7 +63,7 @@
 
 #include "nsPageSequenceFrame.h"
 #include "nsNetUtil.h"
-#include "nsIContentViewerEdit.h"
+#include "nsIDocumentViewerEdit.h"
 #include "mozilla/css/Loader.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -95,8 +95,6 @@
 #include "imgIContainer.h"  // image animation mode constants
 #include "nsIXULRuntime.h"
 #include "nsSandboxFlags.h"
-
-#include "mozilla/DocLoadingTimelineMarker.h"
 
 //--------------------------
 // Printing Include
@@ -305,7 +303,7 @@ using viewer_detail::BFCachePreventionObserver;
 
 //-------------------------------------------------------------
 class nsDocumentViewer final : public nsIContentViewer,
-                               public nsIContentViewerEdit,
+                               public nsIDocumentViewerEdit,
                                public nsIDocumentViewerPrint
 #ifdef NS_PRINTING
     ,
@@ -326,8 +324,8 @@ class nsDocumentViewer final : public nsIContentViewer,
   // nsIContentViewer interface...
   NS_DECL_NSICONTENTVIEWER
 
-  // nsIContentViewerEdit
-  NS_DECL_NSICONTENTVIEWEREDIT
+  // nsIDocumentViewerEdit
+  NS_DECL_NSIDOCUMENTVIEWEREDIT
 
 #ifdef NS_PRINTING
   // nsIWebBrowserPrint
@@ -536,7 +534,7 @@ NS_IMPL_RELEASE(nsDocumentViewer)
 
 NS_INTERFACE_MAP_BEGIN(nsDocumentViewer)
   NS_INTERFACE_MAP_ENTRY(nsIContentViewer)
-  NS_INTERFACE_MAP_ENTRY(nsIContentViewerEdit)
+  NS_INTERFACE_MAP_ENTRY(nsIDocumentViewerEdit)
   NS_INTERFACE_MAP_ENTRY(nsIDocumentViewerPrint)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIContentViewer)
 #ifdef NS_PRINTING
@@ -1021,12 +1019,6 @@ nsDocumentViewer::LoadComplete(nsresult aStatus) {
                                 ? "chrome-document-loaded"
                                 : "content-document-loaded",
                             nullptr);
-      }
-
-      // Notify any devtools about the load.
-      if (TimelineConsumers::HasConsumer(docShell)) {
-        TimelineConsumers::AddMarkerForDocShell(
-            docShell, MakeUnique<DocLoadingTimelineMarker>("document::Load"));
       }
 
       nsPIDOMWindowInner* innerWindow = window->GetCurrentInnerWindow();
@@ -2407,7 +2399,7 @@ mozilla::dom::Selection* nsDocumentViewer::GetDocumentSelection() {
 }
 
 /* ============================================================================
- * nsIContentViewerEdit
+ * nsIDocumentViewerEdit
  * ============================================================================
  */
 

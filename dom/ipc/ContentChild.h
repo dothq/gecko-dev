@@ -229,6 +229,9 @@ class ContentChild final : public PContentChild,
 
   PRemotePrintJobChild* AllocPRemotePrintJobChild();
 
+  already_AddRefed<PClipboardReadRequestChild> AllocPClipboardReadRequestChild(
+      const nsTArray<nsCString>& aTypes);
+
   PMediaChild* AllocPMediaChild();
 
   bool DeallocPMediaChild(PMediaChild* aActor);
@@ -560,10 +563,6 @@ class ContentChild final : public PContentChild,
   PURLClassifierLocalChild* AllocPURLClassifierLocalChild(
       nsIURI* aUri, Span<const IPCURLClassifierFeature> aFeatures);
   bool DeallocPURLClassifierLocalChild(PURLClassifierLocalChild* aActor);
-
-  PLoginReputationChild* AllocPLoginReputationChild(nsIURI* aUri);
-
-  bool DeallocPLoginReputationChild(PLoginReputationChild* aActor);
 
   PSessionStorageObserverChild* AllocPSessionStorageObserverChild();
 

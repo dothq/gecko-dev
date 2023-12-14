@@ -167,9 +167,6 @@ zlib-1.3:
         url: https://zlib.net/fossils/zlib-1.3.tar.gz
         sha256: ff0ba4c292013dbc27530b3a81e1f9a813cd39de01ca5e0f8bf355702efa593e
         size: 1495873
-        gpg-signature:
-            sig-url: "{url}.asc"
-            key-path: build/unix/build-gcc/5ED46A6721D365587791E2AA783FCD8E58BCAFBA.key
 
 nsis-3.07:
     description: nsis 3.07 source code
@@ -373,13 +370,13 @@ clang-trunk:
 # We build stable rust from source so the resulting compiler acts as a nightly
 # rust compiler, allowing to use unstable features like -Zbuild-std and
 # sanitizers.
-rust-1.72.1:
-    description: Rust 1.72.1 source code
+rust-1.73.0:
+    description: Rust 1.73.0 source code
     fetch:
         type: git
         include-dot-git: true
         repo: https://github.com/rust-lang/rust/
-        revision: d5c2e9c342b358556da91d61ed4133f6f50fc0c3
+        revision: cc66ad468955717ab92600c770da8c1601a4ff33
 
 wasi-sdk-11:
     description: wasi-sdk-11 source code
@@ -606,7 +603,7 @@ afl-plus-plus-4.0:
     fetch:
         type: git
         repo: https://github.com/AFLplusplus/AFLplusplus
-        revision: 497ff5ff7962ee492fef315227366d658c637ab2
+        revision: d09950f4bb98431576b872436f0fbf773ab895db
 
 cargo-vet:
     description: cargo-vet source
@@ -620,7 +617,7 @@ symbol-scrapers:
     fetch:
         type: git
         repo: http://github.com/mozilla/symbol-scrapers
-        revision: 2b0923643e9c859e00d388b363d2e4be1036dfab
+        revision: 6142272b22aea3496fab8ff7a33d92d7c20caa5d
 
 xz-5.4.4:
     description: xz 5.4.4 source code

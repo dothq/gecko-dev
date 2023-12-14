@@ -134,10 +134,6 @@ let TESTS = {
 };
 
 add_task(async function () {
-  UrlbarPrefs.set("quicksuggest.enabled", true);
-  UrlbarPrefs.set("suggest.quicksuggest.sponsored", true);
-  UrlbarPrefs.set("suggest.quicksuggest.nonsponsored", true);
-
   // Create results and suggestions based on `SUGGESTIONS_DATA`.
   let qsResults = [];
   let qsSuggestions = [];
@@ -210,11 +206,15 @@ add_task(async function () {
   }
 
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
-    remoteSettingsResults: [
+    remoteSettingsRecords: [
       {
         type: "data",
         attachment: qsResults,
       },
+    ],
+    prefs: [
+      ["suggest.quicksuggest.sponsored", true],
+      ["suggest.quicksuggest.nonsponsored", true],
     ],
   });
 
@@ -255,6 +255,7 @@ add_task(async function () {
 
         UrlbarPrefs.set("suggest.quicksuggest.sponsored", sponsored);
         UrlbarPrefs.set("suggest.quicksuggest.nonsponsored", nonsponsored);
+        await QuickSuggestTestUtils.forceSync();
 
         // Set up the search and do it.
         let context = createContext(keyword, {
@@ -279,5 +280,6 @@ add_task(async function () {
 
     UrlbarPrefs.set("suggest.quicksuggest.sponsored", true);
     UrlbarPrefs.set("suggest.quicksuggest.nonsponsored", true);
+    await QuickSuggestTestUtils.forceSync();
   }
 });

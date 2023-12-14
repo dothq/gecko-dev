@@ -2414,6 +2414,8 @@ nsresult nsGlobalWindowOuter::SetNewDocument(Document* aDocument,
 
   MOZ_RELEASE_ASSERT(newInnerWindow->mDoc == aDocument);
 
+  newInnerWindow->RefreshReduceTimerPrecisionCallerType();
+
   if (!aState) {
     if (reUseInnerWindow) {
       // The StorageAccess state may have changed. Invalidate the cached
@@ -2488,7 +2490,7 @@ nsresult nsGlobalWindowOuter::SetNewDocument(Document* aDocument,
         &nsGlobalWindowInner::FireOnNewGlobalObject));
   }
 
-  if (newInnerWindow && !newInnerWindow->mHasNotifiedGlobalCreated && mDoc) {
+  if (!newInnerWindow->mHasNotifiedGlobalCreated && mDoc) {
     // We should probably notify. However if this is the, arguably bad,
     // situation when we're creating a temporary non-chrome-about-blank
     // document in a chrome docshell, don't notify just yet. Instead wait
@@ -3035,7 +3037,7 @@ Navigator* nsGlobalWindowOuter::GetNavigator() {
 }
 
 nsScreen* nsGlobalWindowOuter::GetScreen() {
-  FORWARD_TO_INNER(GetScreen, (IgnoreErrors()), nullptr);
+  FORWARD_TO_INNER(Screen, (), nullptr);
 }
 
 void nsPIDOMWindowOuter::ActivateMediaComponents() {
@@ -3761,9 +3763,9 @@ void nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
 
       // Get the screen dimensions
       // XXX This should use nsIScreenManager once it's fully fleshed out.
-      int32_t screenLeft = screen->GetAvailLeft(IgnoreErrors());
-      int32_t screenWidth = screen->GetAvailWidth(IgnoreErrors());
-      int32_t screenHeight = screen->GetAvailHeight(IgnoreErrors());
+      int32_t screenLeft = screen->AvailLeft();
+      int32_t screenWidth = screen->AvailWidth();
+      int32_t screenHeight = screen->AvailHeight();
 #if defined(XP_MACOSX)
       /* The mac's coordinate system is different from the assumed Windows'
          system. It offsets by the height of the menubar so that a window
@@ -3772,9 +3774,9 @@ void nsGlobalWindowOuter::CheckSecurityLeftAndTop(int32_t* aLeft, int32_t* aTop,
          the Avail... coordinates is overloaded. Here we allow a window
          to be placed at (0,0) because it does make sense to do so.
       */
-      int32_t screenTop = screen->GetTop(IgnoreErrors());
+      int32_t screenTop = screen->Top();
 #else
-      int32_t screenTop = screen->GetAvailTop(IgnoreErrors());
+      int32_t screenTop = screen->AvailTop();
 #endif
 
       if (aLeft) {
@@ -4088,10 +4090,18 @@ FullscreenTransitionTask::Run() {
     // If the widget has been destroyed before we get here, don't try to
     // do anything more. Just let it go and release ourselves.
     NS_WARNING("The widget to fullscreen has been destroyed");
+    mWindow->mIsInFullScreenTransition = false;
     return NS_OK;
   }
   if (stage == eBeforeToggle) {
     PROFILER_MARKER_UNTYPED("Fullscreen transition start", DOM);
+
+    mWindow->mIsInFullScreenTransition = true;
+
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    NS_ENSURE_TRUE(obs, NS_ERROR_FAILURE);
+    obs->NotifyObservers(nullptr, "fullscreen-transition-start", nullptr);
+
     mWidget->PerformFullscreenTransition(nsIWidget::eBeforeFullscreenToggle,
                                          mDuration.mFadeIn, mTransitionData,
                                          this);
@@ -4132,6 +4142,13 @@ FullscreenTransitionTask::Run() {
                                          this);
   } else if (stage == eEnd) {
     PROFILER_MARKER_UNTYPED("Fullscreen transition end", DOM);
+
+    mWindow->mIsInFullScreenTransition = false;
+
+    nsCOMPtr<nsIObserverService> obs = mozilla::services::GetObserverService();
+    NS_ENSURE_TRUE(obs, NS_ERROR_FAILURE);
+    obs->NotifyObservers(nullptr, "fullscreen-transition-end", nullptr);
+
     mWidget->CleanupFullscreenTransition();
   }
   return NS_OK;

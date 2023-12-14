@@ -737,6 +737,12 @@ void nsIFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
   if (!IsPlaceholderFrame() && !aPrevInFlow) {
     UpdateVisibleDescendantsState();
   }
+
+  if (!aPrevInFlow && HasAnyStateBits(NS_FRAME_IS_NONDISPLAY)) {
+    // We aren't going to get a reflow, so nothing else will call
+    // InvalidateRenderingObservers, we have to do it here.
+    SVGObserverUtils::InvalidateRenderingObservers(this);
+  }
 }
 
 void nsIFrame::InitPrimaryFrame() {
@@ -2939,12 +2945,10 @@ static void WrapSeparatorTransform(nsDisplayListBuilder* aBuilder,
 // that will be built for |aMaskedFrame|. If we're not able to compute
 // one, return an empty Maybe.
 // The returned clip rect, if there is one, is relative to |aMaskedFrame|.
-static Maybe<nsRect> ComputeClipForMaskItem(nsDisplayListBuilder* aBuilder,
-                                            nsIFrame* aMaskedFrame) {
+static Maybe<nsRect> ComputeClipForMaskItem(
+    nsDisplayListBuilder* aBuilder, nsIFrame* aMaskedFrame,
+    const SVGUtils::MaskUsage& aMaskUsage) {
   const nsStyleSVGReset* svgReset = aMaskedFrame->StyleSVGReset();
-
-  SVGUtils::MaskUsage maskUsage;
-  SVGUtils::DetermineMaskUsage(aMaskedFrame, false, maskUsage);
 
   nsPoint offsetToUserSpace =
       nsLayoutUtils::ComputeOffsetToUserSpace(aBuilder, aMaskedFrame);
@@ -2958,14 +2962,14 @@ static Maybe<nsRect> ComputeClipForMaskItem(nsDisplayListBuilder* aBuilder,
   aBuilder->FindReferenceFrameFor(aMaskedFrame, &toReferenceFrame);
 
   Maybe<gfxRect> combinedClip;
-  if (maskUsage.shouldApplyBasicShapeOrPath) {
+  if (aMaskUsage.ShouldApplyBasicShapeOrPath()) {
     Maybe<Rect> result =
         CSSClipPathInstance::GetBoundingRectForBasicShapeOrPathClip(
             aMaskedFrame, svgReset->mClipPath);
     if (result) {
       combinedClip = Some(ThebesRect(*result));
     }
-  } else if (maskUsage.shouldApplyClipPath) {
+  } else if (aMaskUsage.ShouldApplyClipPath()) {
     gfxRect result = SVGUtils::GetBBox(
         aMaskedFrame,
         SVGUtils::eBBoxIncludeClipped | SVGUtils::eBBoxIncludeFill |
@@ -3285,7 +3289,8 @@ void nsIFrame::BuildDisplayListForStackingContext(
   }
 
   bool usingFilter = effects->HasFilters() && !style.IsRootElementStyle();
-  bool usingMask = SVGIntegrationUtils::UsingMaskOrClipPathForFrame(this);
+  SVGUtils::MaskUsage maskUsage = SVGUtils::DetermineMaskUsage(this, false);
+  bool usingMask = maskUsage.UsingMaskOrClipPath();
   bool usingSVGEffects = usingFilter || usingMask;
 
   nsRect visibleRectOutsideSVGEffects = visibleRect;
@@ -3419,7 +3424,7 @@ void nsIFrame::BuildDisplayListForStackingContext(
     // Filters are a containing block for fixed and absolute descendants,
     // so the masked content cannot move with an ancestor ASR.
     if (usingMask && !usingFilter) {
-      clipForMask = ComputeClipForMaskItem(aBuilder, this);
+      clipForMask = ComputeClipForMaskItem(aBuilder, this, maskUsage);
       if (clipForMask) {
         aBuilder->IntersectDirtyRect(*clipForMask);
         aBuilder->IntersectVisibleRect(*clipForMask);
@@ -4728,7 +4733,13 @@ nsresult nsIFrame::MoveCaretToEventPoint(nsPresContext* aPresContext,
 
   if (aMouseEvent->mButton == MouseButton::eSecondary &&
       !MovingCaretToEventPointAllowedIfSecondaryButtonEvent(
-          *frameselection, *aMouseEvent, *offsets.content)) {
+          *frameselection, *aMouseEvent, *offsets.content,
+          // When we collapse selection in nsFrameSelection::TakeFocus,
+          // we always collapse selection to the start offset.  Therefore,
+          // we can ignore the end offset here.  E.g., when an <img> is clicked,
+          // set the primary offset to after it, but the the secondary offset
+          // may be before it, see OffsetsForSingleFrame for the detail.
+          offsets.StartOffset())) {
     return NS_OK;
   }
 
@@ -4866,30 +4877,40 @@ nsresult nsIFrame::MoveCaretToEventPoint(nsPresContext* aPresContext,
 bool nsIFrame::MovingCaretToEventPointAllowedIfSecondaryButtonEvent(
     const nsFrameSelection& aFrameSelection,
     WidgetMouseEvent& aSecondaryButtonEvent,
-    const nsIContent& aContentAtEventPoint) const {
+    const nsIContent& aContentAtEventPoint, int32_t aOffsetAtEventPoint) const {
   MOZ_ASSERT(aSecondaryButtonEvent.mButton == MouseButton::eSecondary);
 
-  if (StaticPrefs::
-          ui_mouse_right_click_collapse_selection_stop_if_non_collapsed_selection()) {
-    if (Selection* selection =
-            aFrameSelection.GetSelection(SelectionType::eNormal)) {
-      if (selection->IsCollapsed()) {
-        // If selection is collapsed, it may be allowed to move caret, let's
-        // check other things.
-      } else if (nsIContent* ancestorLimiter =
-                     selection->GetAncestorLimiter()) {
-        // If currently selection is limited in an editing host, we should not
-        // collapse selection if the clicked point is in the ancestor limiter.
-        // Otherwise, this mouse click moves focus from the editing host to
-        // different one or blur the editing host.  In this case, we need to
-        // update selection because keeping current selection in the editing
-        // host looks like it's not blurred.
+  if (NS_WARN_IF(aOffsetAtEventPoint < 0)) {
+    return false;
+  }
+
+  Selection* selection = aFrameSelection.GetSelection(SelectionType::eNormal);
+  if (selection && !selection->IsCollapsed()) {
+    // If right click in a selection range, we should not collapse selection.
+    if (nsContentUtils::IsPointInSelection(
+            *selection, aContentAtEventPoint,
+            static_cast<uint32_t>(aOffsetAtEventPoint))) {
+      return false;
+    }
+
+    if (StaticPrefs::
+            ui_mouse_right_click_collapse_selection_stop_if_non_collapsed_selection()) {
+      // If currently selection is limited in an editing host, we should not
+      // collapse selection if the clicked point is in the ancestor limiter.
+      // Otherwise, this mouse click moves focus from the editing host to
+      // different one or blur the editing host.  In this case, we need to
+      // update selection because keeping current selection in the editing
+      // host looks like it's not blurred.
+      // FIXME: If the active editing host is the document element, editor
+      // does not set ancestor limiter properly.  Fix it in the editor side.
+      if (nsIContent* ancestorLimiter = selection->GetAncestorLimiter()) {
+        MOZ_ASSERT(ancestorLimiter->IsEditable());
         return !aContentAtEventPoint.IsInclusiveDescendantOf(ancestorLimiter);
       }
       // If currently selection is not limited in an editing host, we should
-      // collapse selection only when this click moves focus to an editing host
-      // because we need to update selection in this case.
-      else if (!aContentAtEventPoint.IsEditable()) {
+      // collapse selection only when this click moves focus to an editing
+      // host because we need to update selection in this case.
+      if (!aContentAtEventPoint.IsEditable()) {
         return false;
       }
     }
@@ -6925,10 +6946,10 @@ bool nsIFrame::IsHiddenByContentVisibilityOfInFlowParentForLayout() const {
            Style()->IsAnonBox());
 }
 
-bool nsIFrame::IsHiddenByContentVisibilityOnAnyAncestor(
+nsIFrame* nsIFrame::GetClosestContentVisibilityAncestor(
     const EnumSet<IncludeContentVisibility>& aInclude) const {
   if (!StaticPrefs::layout_css_content_visibility_enabled()) {
-    return false;
+    return nullptr;
   }
 
   auto* parent = GetInFlowParent();
@@ -6936,7 +6957,7 @@ bool nsIFrame::IsHiddenByContentVisibilityOnAnyAncestor(
                           parent->HasAnyStateBits(NS_FRAME_OWNS_ANON_BOXES);
   for (nsIFrame* cur = parent; cur; cur = cur->GetInFlowParent()) {
     if (!isAnonymousBlock && cur->HidesContent(aInclude)) {
-      return true;
+      return cur;
     }
 
     // Anonymous boxes are not hidden by the content-visibility of their first
@@ -6945,7 +6966,12 @@ bool nsIFrame::IsHiddenByContentVisibilityOnAnyAncestor(
     isAnonymousBlock = false;
   }
 
-  return false;
+  return nullptr;
+}
+
+bool nsIFrame::IsHiddenByContentVisibilityOnAnyAncestor(
+    const EnumSet<IncludeContentVisibility>& aInclude) const {
+  return !!GetClosestContentVisibilityAncestor(aInclude);
 }
 
 bool nsIFrame::HasSelectionInSubtree() {
@@ -11146,11 +11172,12 @@ CompositorHitTestInfo nsIFrame::GetCompositorHitTestInfo(
 
   // Anything that didn't match the above conditions is visible to hit-testing.
   result = CompositorHitTestFlags::eVisibleToHitTest;
-  if (SVGIntegrationUtils::UsingMaskOrClipPathForFrame(this)) {
+  SVGUtils::MaskUsage maskUsage = SVGUtils::DetermineMaskUsage(this, false);
+  if (maskUsage.UsingMaskOrClipPath()) {
     // If WebRender is enabled, simple clip-paths can be converted into WR
     // clips that WR knows how to hit-test against, so we don't need to mark
     // it as an irregular area.
-    if (!SVGIntegrationUtils::UsingSimpleClipPathForFrame(this)) {
+    if (!maskUsage.IsSimpleClipShape()) {
       result += CompositorHitTestFlags::eIrregularArea;
     }
   }

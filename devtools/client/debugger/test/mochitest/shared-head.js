@@ -443,8 +443,10 @@ function assertPausedAtSourceAndLine(
   );
   const pauseColumn = getVisibleSelectedFrameColumn(dbg);
   if (expectedColumn) {
+    // `pauseColumn` is 0-based, coming from internal state,
+    // while `expectedColumn` is manually passed from test scripts and so is 1-based.
     is(
-      pauseColumn,
+      pauseColumn + 1,
       expectedColumn,
       "Redux state for currently selected frame's column is correct"
     );
@@ -475,10 +477,14 @@ function assertPausedAtSourceAndLine(
   );
 
   if (expectedColumn) {
+    // `column` is 0-based, coming from internal state,
+    // while `expectedColumn` is manually passed from test scripts and so is 1-based.
     is(
-      column,
+      column + 1,
       expectedColumn,
-      `Frame paused at column ${column}, but expected column ${expectedColumn}`
+      `Frame paused at column ${
+        column + 1
+      }, but expected column ${expectedColumn}`
     );
   }
 }
@@ -547,8 +553,16 @@ function assertPaused(dbg, msg = "client is paused") {
  * @param {Object} dbg
  * @param {String} url
  *        Optional URL of the script we should be pausing on.
+ * @param {Object} options
+ *         {Boolean} shouldWaitForLoadScopes
+ *        When paused in original files with original variable mapping disabled, scopes are
+ *        not going to exist, lets not wait for it. defaults to true
  */
-async function waitForPaused(dbg, url) {
+async function waitForPaused(
+  dbg,
+  url,
+  options = { shouldWaitForLoadedScopes: true }
+) {
   info("Waiting for the debugger to pause");
   const { getSelectedScope, getCurrentThread, getCurrentThreadFrames } =
     dbg.selectors;
@@ -560,7 +574,10 @@ async function waitForPaused(dbg, url) {
   );
 
   await waitForState(dbg, getCurrentThreadFrames, "fetched frames");
-  await waitForLoadedScopes(dbg);
+
+  if (options.shouldWaitForLoadedScopes) {
+    await waitForLoadedScopes(dbg);
+  }
   await waitForSelectedSource(dbg, url);
 }
 
@@ -636,7 +653,7 @@ function isFrameSelected(dbg, index, title) {
 }
 
 /**
- * Clear all the debugger related preferences.
+ *  Clear all the debugger related preferences.
  */
 async function clearDebuggerPreferences(prefs = []) {
   resetSchemaVersion();
@@ -651,7 +668,6 @@ async function clearDebuggerPreferences(prefs = []) {
   Services.prefs.clearUserPref("devtools.debugger.call-stack-visible");
   Services.prefs.clearUserPref("devtools.debugger.scopes-visible");
   Services.prefs.clearUserPref("devtools.debugger.skip-pausing");
-  Services.prefs.clearUserPref("devtools.debugger.map-scopes-enabled");
 
   for (const pref of prefs) {
     await pushPref(...pref);
@@ -863,14 +879,15 @@ function countTabs(dbg) {
  *
  * @memberof mochitest/actions
  * @param {Object} dbg
+ * @param {Object} pauseOptions
  * @return {Promise}
  * @static
  */
-async function stepOver(dbg) {
+async function stepOver(dbg, pauseOptions) {
   const pauseLine = getVisibleSelectedFrameLine(dbg);
   info(`Stepping over from ${pauseLine}`);
   await dbg.actions.stepOver();
-  return waitForPaused(dbg);
+  return waitForPaused(dbg, null, pauseOptions);
 }
 
 /**
@@ -1041,7 +1058,8 @@ async function addBreakpoint(dbg, source, line, column, options) {
   const bpCount = dbg.selectors.getBreakpointCount();
   const onBreakpoint = waitForDispatch(dbg.store, "SET_BREAKPOINT");
   await dbg.actions.addBreakpoint(
-    createLocation({ source, line, column }),
+    // column is 0-based internally, but tests are using 1-based.
+    createLocation({ source, line, column: column - 1 }),
     options
   );
   await onBreakpoint;
@@ -1064,11 +1082,17 @@ async function addBreakpointViaGutter(dbg, line) {
 }
 
 function disableBreakpoint(dbg, source, line, column) {
-  column = column || getFirstBreakpointColumn(dbg, source, line);
+  if (column === 0) {
+    throw new Error("disableBreakpoint expect a 1-based column argument");
+  }
+  // `internalColumn` is 0-based internally, while `column` manually defined in test scripts is 1-based.
+  const internalColumn = column
+    ? column - 1
+    : getFirstBreakpointColumn(dbg, source, line);
   const location = createLocation({
     source,
     line,
-    column,
+    column: internalColumn,
   });
   const bp = getBreakpointForLocation(dbg, location);
   return dbg.actions.disableBreakpoint(bp);
@@ -1107,13 +1131,16 @@ async function loadAndAddBreakpoint(dbg, filename, line, column) {
   await addBreakpoint(dbg, source, line, column);
 
   is(getBreakpointCount(), 1, "One breakpoint exists");
-  if (!getBreakpoint(createLocation({ source, line, column }))) {
+  // column is 0-based internally, but tests are using 1-based.
+  if (!getBreakpoint(createLocation({ source, line, column: column - 1 }))) {
     const breakpoints = getBreakpointsMap();
     const id = Object.keys(breakpoints).pop();
     const loc = breakpoints[id].location;
     ok(
       false,
-      `Breakpoint has correct line ${line}, column ${column}, but was line ${loc.line} column ${loc.column}`
+      `Breakpoint has correct line ${line}, column ${column}, but was line ${
+        loc.line
+      } column ${loc.column + 1}`
     );
   }
 
@@ -1125,14 +1152,15 @@ async function invokeWithBreakpoint(
   fnName,
   filename,
   { line, column },
-  handler
+  handler,
+  pauseOptions
 ) {
   const source = await loadAndAddBreakpoint(dbg, filename, line, column);
 
   const invokeResult = invokeInTab(fnName);
 
   const invokeFailed = await Promise.race([
-    waitForPaused(dbg),
+    waitForPaused(dbg, null, pauseOptions),
     invokeResult.then(
       () => new Promise(() => {}),
       () => true
@@ -1257,7 +1285,8 @@ async function expandAllSourceNodes(dbg, treeNode) {
  */
 function removeBreakpoint(dbg, sourceId, line, column) {
   const source = dbg.selectors.getSource(sourceId);
-  column = column || getFirstBreakpointColumn(dbg, source, line);
+  // column is 0-based internally, but tests are using 1-based.
+  column = column ? column - 1 : getFirstBreakpointColumn(dbg, source, line);
   const location = createLocation({
     source,
     line,
@@ -1672,7 +1701,7 @@ function assertBreakpointSnippet(dbg, index, expectedSnippet) {
 }
 
 const selectors = {
-  callStackHeader: ".call-stack-pane ._header",
+  callStackHeader: ".call-stack-pane ._header .header-label",
   callStackBody: ".call-stack-pane .pane",
   domMutationItem: ".dom-mutation-list li",
   expressionNode: i =>
@@ -1686,7 +1715,8 @@ const selectors = {
   expressionNodes: ".expressions-list .tree-node",
   expressionPlus: ".watch-expressions-pane button.plus",
   expressionRefresh: ".watch-expressions-pane button.refresh",
-  scopesHeader: ".scopes-pane ._header",
+  expressionsHeader: ".watch-expressions-pane ._header .header-label",
+  scopesHeader: ".scopes-pane ._header .header-label",
   breakpointItem: i => `.breakpoints-list div:nth-of-type(${i})`,
   breakpointLabel: i => `${selectors.breakpointItem(i)} .breakpoint-label`,
   breakpointHeadings: ".breakpoints-list .breakpoint-heading",
@@ -1800,6 +1830,8 @@ const selectors = {
   sourceTreeFolderNode: ".sources-panel .node .folder",
   excludePatternsInput: ".project-text-search .exclude-patterns-field input",
   fileSearchInput: ".search-bar input",
+  watchExpressionsHeader: ".watch-expressions-pane ._header .header-label",
+  watchExpressionsAddButton: ".watch-expressions-pane ._header .plus",
 };
 
 function getSelector(elementName, ...args) {
@@ -2009,6 +2041,29 @@ async function typeInPanel(dbg, text) {
   pressKey(dbg, "End");
   type(dbg, text);
   pressKey(dbg, "Enter");
+}
+
+async function toggleMapScopes(dbg) {
+  info("Turn on original variable mapping");
+  const scopesLoaded = waitForLoadedScopes(dbg);
+  const onDispatch = waitForDispatch(dbg.store, "TOGGLE_MAP_SCOPES");
+  clickElement(dbg, "mapScopesCheckbox");
+  return Promise.all([onDispatch, scopesLoaded]);
+}
+
+async function waitForPausedInOriginalFileAndToggleMapScopes(
+  dbg,
+  expectedSelectedSource = null
+) {
+  // Original variable mapping is not switched on, so do not wait for any loaded scopes
+  await waitForPaused(dbg, expectedSelectedSource, {
+    shouldWaitForLoadedScopes: false,
+  });
+  await toggleMapScopes(dbg);
+}
+
+function toggleExpressions(dbg) {
+  return findElement(dbg, "expressionsHeader").click();
 }
 
 function toggleScopes(dbg) {
@@ -2375,6 +2430,16 @@ function getTokenElAtLine(dbg, expression, line, column = 0) {
     }
     return childText === expression;
   });
+}
+
+/**
+ * Wait for a few ms and assert that a tooltip preview was not displayed.
+ * @param {*} dbg
+ */
+async function assertNoTooltip(dbg) {
+  await wait(200);
+  const el = findElement(dbg, "previewPopup");
+  is(el, null, "Tooltip should not exist");
 }
 
 /**

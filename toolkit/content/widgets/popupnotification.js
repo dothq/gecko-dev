@@ -11,6 +11,7 @@
     static get inheritedAttributes() {
       return {
         ".popup-notification-icon": "popupid,src=icon,class=iconclass,hasicon",
+        ".popup-notification-body": "popupid",
         ".popup-notification-origin": "value=origin,tooltiptext=origin",
         ".popup-notification-description": "popupid,id=descriptionid",
         ".popup-notification-description > span:first-of-type":
@@ -96,12 +97,12 @@
       </hbox>
       <hbox class="popup-notification-footer-container"></hbox>
       <html:moz-button-group class="panel-footer">
-        <button class="popup-notification-secondary-button panel-footer-button"/>
-        <button type="menu" class="popup-notification-dropmarker panel-footer-button" data-l10n-id="popup-notification-more-actions-button">
+        <button class="popup-notification-secondary-button footer-button"/>
+        <button type="menu" class="popup-notification-dropmarker footer-button" data-l10n-id="popup-notification-more-actions-button">
           <menupopup position="after_end" data-l10n-id="popup-notification-more-actions-button">
           </menupopup>
         </button>
-        <button class="popup-notification-primary-button primary panel-footer-button" data-l10n-id="popup-notification-default-button"/>
+        <button class="popup-notification-primary-button primary footer-button" data-l10n-id="popup-notification-default-button"/>
       </html:moz-button-group>
       `;
     }

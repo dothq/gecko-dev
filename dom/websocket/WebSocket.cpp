@@ -9,7 +9,7 @@
 #include "mozilla/dom/WebSocketBinding.h"
 #include "mozilla/net/WebSocketChannel.h"
 
-#include "js/ColumnNumber.h"  // JS::ColumnNumberZeroOrigin
+#include "js/ColumnNumber.h"  // JS::ColumnNumberOneOrigin
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "mozilla/Atomics.h"
@@ -1371,7 +1371,7 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
     MOZ_ASSERT(workerPrivate);
 
     uint32_t lineno;
-    JS::ColumnNumberZeroOrigin column;
+    JS::ColumnNumberOneOrigin column;
     JS::AutoFilename file;
     if (!JS::DescribeScriptedCaller(aGlobal.Context(), &file, &lineno,
                                     &column)) {
@@ -1610,7 +1610,7 @@ nsresult WebSocketImpl::Init(JSContext* aCx, bool aIsSecure,
     MOZ_ASSERT(aCx);
 
     uint32_t lineno;
-    JS::ColumnNumberZeroOrigin column;
+    JS::ColumnNumberOneOrigin column;
     JS::AutoFilename file;
     if (JS::DescribeScriptedCaller(aCx, &file, &lineno, &column)) {
       mScriptFile = file.get();
@@ -2519,13 +2519,14 @@ void WebSocket::Close(const Optional<uint16_t>& aCode,
     return;
   }
 
+  RefPtr<WebSocketImpl> impl = mImpl;
   if (readyState == CONNECTING) {
-    mImpl->FailConnection(closeCode, closeReason);
+    impl->FailConnection(closeCode, closeReason);
     return;
   }
 
   MOZ_ASSERT(readyState == OPEN);
-  mImpl->CloseConnection(closeCode, closeReason);
+  impl->CloseConnection(closeCode, closeReason);
 }
 
 //-----------------------------------------------------------------------------
@@ -2740,7 +2741,7 @@ class WorkerRunnableDispatcher final : public WorkerRunnable {
   WorkerRunnableDispatcher(WebSocketImpl* aImpl,
                            ThreadSafeWorkerRef* aWorkerRef,
                            already_AddRefed<nsIRunnable> aEvent)
-      : WorkerRunnable(aWorkerRef->Private(), WorkerThreadUnchangedBusyCount),
+      : WorkerRunnable(aWorkerRef->Private(), WorkerThread),
         mWebSocketImpl(aImpl),
         mEvent(std::move(aEvent)) {}
 

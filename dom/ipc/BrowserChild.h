@@ -482,9 +482,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                     const TimeStamp& aCompositeStart,
                     const TimeStamp& aCompositeEnd);
 
-  void DidRequestComposite(const TimeStamp& aCompositeReqStart,
-                           const TimeStamp& aCompositeReqEnd);
-
   void ClearCachedResources();
   void SchedulePaint();
   void ReinitRendering();
@@ -653,7 +650,10 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const nsTArray<nsCString>& aTrackingFullHashes,
       const Maybe<
           ContentBlockingNotifier::StorageAccessPermissionGrantedReason>&
-          aReason);
+          aReason,
+      const Maybe<ContentBlockingNotifier::CanvasFingerprinter>&
+          aCanvasFingerprinter,
+      const Maybe<bool> aCanvasFingerprinterKnownText);
 
  protected:
   virtual ~BrowserChild();

@@ -76,6 +76,7 @@ const toolkitVariableMap = [
     "--toolbar-field-background-color",
     {
       lwtProperty: "toolbar_field",
+      fallbackColor: "rgba(255, 255, 255, 0.8)",
     },
   ],
   [
@@ -94,12 +95,14 @@ const toolkitVariableMap = [
     "--toolbar-field-color",
     {
       lwtProperty: "toolbar_field_text",
+      fallbackColor: "black",
     },
   ],
   [
     "--toolbar-field-border-color",
     {
       lwtProperty: "toolbar_field_border",
+      fallbackColor: "transparent",
     },
   ],
   [
@@ -107,6 +110,7 @@ const toolkitVariableMap = [
     {
       lwtProperty: "toolbar_field_focus",
       fallbackProperty: "toolbar_field",
+      fallbackColor: "white",
       processColor(rgbaChannels, element, propertyOverrides) {
         if (!rgbaChannels) {
           return null;
@@ -130,6 +134,7 @@ const toolkitVariableMap = [
     {
       lwtProperty: "toolbar_field_text_focus",
       fallbackProperty: "toolbar_field_text",
+      fallbackColor: "black",
     },
   ],
   [
@@ -298,6 +303,8 @@ LightweightThemeConsumer.prototype = {
       root.removeAttribute("lwtheme-image");
     }
 
+    let hasTheme = theme.id != DEFAULT_THEME_ID || useDarkTheme;
+
     this._setExperiment(active, themeData.experiment, theme.experimental);
     _setImage(this._win, root, active, "--lwt-header-image", theme.headerURL);
     _setImage(
@@ -307,9 +314,9 @@ LightweightThemeConsumer.prototype = {
       "--lwt-additional-images",
       theme.additionalBackgrounds
     );
-    _setProperties(root, active, theme);
+    _setProperties(root, active, theme, hasTheme);
 
-    if (theme.id != DEFAULT_THEME_ID || useDarkTheme) {
+    if (hasTheme) {
       if (updateGlobalThemeData) {
         _determineToolbarAndContentTheme(
           this._doc,
@@ -324,7 +331,7 @@ LightweightThemeConsumer.prototype = {
       root.removeAttribute("lwtheme");
     }
 
-    _setDarkModeAttributes(this._doc, root, theme._processedColors);
+    _setDarkModeAttributes(this._doc, root, theme._processedColors, hasTheme);
 
     let contentThemeData = _getContentProperties(this._doc, active, theme);
     Services.ppmm.sharedData.set(`theme/${this._winId}`, contentThemeData);
@@ -454,6 +461,29 @@ function _setProperty(elem, active, variableName, value) {
   }
 }
 
+function _isToolbarDark(aDoc, aColors) {
+  // We prefer looking at toolbar background first (if it's opaque) because
+  // some text colors can be dark enough for our heuristics, but still
+  // contrast well enough with a dark background, see bug 1743010.
+  if (aColors.toolbarColor) {
+    let color = _cssColorToRGBA(aDoc, aColors.toolbarColor);
+    if (color.a == 1) {
+      return _isColorDark(color.r, color.g, color.b);
+    }
+  }
+  if (aColors.toolbar_text) {
+    let color = _cssColorToRGBA(aDoc, aColors.toolbar_text);
+    return !_isColorDark(color.r, color.g, color.b);
+  }
+  // It'd seem sensible to try looking at the "frame" background (accentcolor),
+  // but we don't because some themes that use background images leave it to
+  // black, see bug 1741931.
+  //
+  // Fall back to black as per the textcolor processing above.
+  let color = _cssColorToRGBA(aDoc, aColors.textcolor || "black");
+  return !_isColorDark(color.r, color.g, color.b);
+}
+
 function _determineToolbarAndContentTheme(
   aDoc,
   aTheme,
@@ -465,15 +495,6 @@ function _determineToolbarAndContentTheme(
   const kSystem = 2;
 
   const colors = aTheme?._processedColors;
-  function prefValue(aColor, aIsForeground = false) {
-    if (typeof aColor != "object") {
-      aColor = _cssColorToRGBA(aDoc, aColor);
-    }
-    return _isColorDark(aColor.r, aColor.g, aColor.b) == aIsForeground
-      ? kLight
-      : kDark;
-  }
-
   function colorSchemeValue(aColorScheme) {
     if (!aColorScheme) {
       return null;
@@ -503,24 +524,7 @@ function _determineToolbarAndContentTheme(
     if (aHasDarkTheme) {
       return aIsDarkTheme ? kDark : kLight;
     }
-    // We prefer looking at toolbar background first (if it's opaque) because
-    // some text colors can be dark enough for our heuristics, but still
-    // contrast well enough with a dark background, see bug 1743010.
-    if (colors.toolbarColor) {
-      let color = _cssColorToRGBA(aDoc, colors.toolbarColor);
-      if (color.a == 1) {
-        return prefValue(color);
-      }
-    }
-    if (colors.toolbar_text) {
-      return prefValue(colors.toolbar_text, /* aIsForeground = */ true);
-    }
-    // It'd seem sensible to try looking at the "frame" background (accentcolor),
-    // but we don't because some themes that use background images leave it to
-    // black, see bug 1741931.
-    //
-    // Fall back to black as per the textcolor processing above.
-    return prefValue(colors.textcolor || "black", /* aIsForeground = */ true);
+    return _isToolbarDark(aDoc, colors) ? kDark : kLight;
   })();
 
   let contentTheme = (function () {
@@ -551,8 +555,9 @@ function _determineToolbarAndContentTheme(
  * @param {Element} root
  * @param {object} colors
  *   The `_processedColors` object from the object created for our theme.
+ * @param {boolean} hasTheme
  */
-function _setDarkModeAttributes(doc, root, colors) {
+function _setDarkModeAttributes(doc, root, colors, hasTheme) {
   {
     let textColor = _cssColorToRGBA(doc, colors.textcolor);
     if (textColor && !_isColorDark(textColor.r, textColor.g, textColor.b)) {
@@ -560,6 +565,15 @@ function _setDarkModeAttributes(doc, root, colors) {
     } else {
       root.removeAttribute("lwtheme-brighttext");
     }
+  }
+
+  if (hasTheme) {
+    root.setAttribute(
+      "lwt-toolbar",
+      _isToolbarDark(doc, colors) ? "dark" : "light"
+    );
+  } else {
+    root.removeAttribute("lwt-toolbar");
   }
 
   const setAttribute = function (
@@ -580,6 +594,7 @@ function _setDarkModeAttributes(doc, root, colors) {
     }
   };
 
+  setAttribute("lwt-tab-selected", "tab_text", "tab_selected");
   setAttribute("lwt-toolbar-field", "toolbar_field_text", "toolbar_field");
   setAttribute(
     "lwt-toolbar-field-focus",
@@ -630,7 +645,7 @@ function _determineIfColorPairIsDark(
   return !_isColorDark(color.r, color.g, color.b);
 }
 
-function _setProperties(root, active, themeData) {
+function _setProperties(root, active, themeData, hasTheme) {
   let propertyOverrides = new Map();
   let doc = root.ownerDocument;
 
@@ -645,6 +660,7 @@ function _setProperties(root, active, themeData) {
       const {
         lwtProperty,
         fallbackProperty,
+        fallbackColor,
         optionalElementID,
         processColor,
         isColor = true,
@@ -657,6 +673,9 @@ function _setProperties(root, active, themeData) {
         val = _cssColorToRGBA(doc, val);
         if (!val && fallbackProperty) {
           val = _cssColorToRGBA(doc, themeData[fallbackProperty]);
+        }
+        if (!val && hasTheme && fallbackColor) {
+          val = _cssColorToRGBA(doc, fallbackColor);
         }
         if (processColor) {
           val = processColor(val, elem, propertyOverrides);

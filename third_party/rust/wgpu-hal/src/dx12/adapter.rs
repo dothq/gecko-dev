@@ -1,10 +1,12 @@
 use crate::{
     auxil::{self, dxgi::result::HResult as _},
-    dx12::SurfaceTarget,
+    dx12::{shader_compilation, SurfaceTarget},
 };
 use std::{mem, ptr, sync::Arc, thread};
 use winapi::{
-    shared::{dxgi, dxgi1_2, minwindef::DWORD, windef, winerror},
+    shared::{
+        dxgi, dxgi1_2, dxgiformat::DXGI_FORMAT_B8G8R8A8_UNORM, minwindef::DWORD, windef, winerror,
+    },
     um::{d3d12 as d3d12_ty, d3d12sdklayers, winuser},
 };
 
@@ -48,7 +50,7 @@ impl super::Adapter {
         adapter: d3d12::DxgiAdapter,
         library: &Arc<d3d12::D3D12Lib>,
         instance_flags: wgt::InstanceFlags,
-        dx12_shader_compiler: &wgt::Dx12Compiler,
+        dxc_container: Option<Arc<shader_compilation::DxcContainer>>,
     ) -> Option<crate::ExposedAdapter<super::Api>> {
         // Create the device so that we can get the capabilities.
         let device = {
@@ -100,12 +102,7 @@ impl super::Adapter {
             adapter.unwrap_adapter2().GetDesc2(&mut desc);
         }
 
-        let device_name = {
-            use std::{ffi::OsString, os::windows::ffi::OsStringExt};
-            let len = desc.Description.iter().take_while(|&&c| c != 0).count();
-            let name = OsString::from_wide(&desc.Description[..len]);
-            name.to_string_lossy().into_owned()
-        };
+        let device_name = auxil::dxgi::conv::map_adapter_name(desc.Description);
 
         let mut features_architecture: d3d12_ty::D3D12_FEATURE_DATA_ARCHITECTURE =
             unsafe { mem::zeroed() };
@@ -276,6 +273,25 @@ impl super::Adapter {
             shader_model_support.HighestShaderModel >= d3d12_ty::D3D_SHADER_MODEL_5_1,
         );
 
+        let bgra8unorm_storage_supported = {
+            let mut bgra8unorm_info: d3d12_ty::D3D12_FEATURE_DATA_FORMAT_SUPPORT =
+                unsafe { mem::zeroed() };
+            bgra8unorm_info.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            let hr = unsafe {
+                device.CheckFeatureSupport(
+                    d3d12_ty::D3D12_FEATURE_FORMAT_SUPPORT,
+                    &mut bgra8unorm_info as *mut _ as *mut _,
+                    mem::size_of::<d3d12_ty::D3D12_FEATURE_DATA_FORMAT_SUPPORT>() as _,
+                )
+            };
+            hr == 0
+                && (bgra8unorm_info.Support2 & d3d12_ty::D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE != 0)
+        };
+        features.set(
+            wgt::Features::BGRA8UNORM_STORAGE,
+            bgra8unorm_storage_supported,
+        );
+
         // TODO: Determine if IPresentationManager is supported
         let presentation_timer = auxil::dxgi::time::PresentationTimer::new_dxgi();
 
@@ -289,7 +305,7 @@ impl super::Adapter {
                 private_caps,
                 presentation_timer,
                 workarounds,
-                dx12_shader_compiler: dx12_shader_compiler.clone(),
+                dxc_container,
             },
             info,
             features,
@@ -405,7 +421,7 @@ impl crate::Adapter<super::Api> for super::Adapter {
             limits,
             self.private_caps,
             &self.library,
-            self.dx12_shader_compiler.clone(),
+            self.dxc_container.clone(),
         )?;
         Ok(crate::OpenDevice {
             device,

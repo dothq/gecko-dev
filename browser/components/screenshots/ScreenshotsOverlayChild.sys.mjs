@@ -44,6 +44,7 @@ const REGION_CHANGE_THRESHOLD = 5;
 const SCROLL_BY_EDGE = 20;
 
 export class ScreenshotsOverlay {
+  #content;
   #initialized = false;
   #state = "";
   #moverId;
@@ -53,6 +54,7 @@ export class ScreenshotsOverlay {
   #lastClientX;
   #lastClientY;
   #previousDimensions;
+  #methodsUsed;
 
   get markup() {
     let [cancel, instructions, download, copy] =
@@ -144,6 +146,10 @@ export class ScreenshotsOverlay {
     return this.#state;
   }
 
+  get methodsUsed() {
+    return this.#methodsUsed;
+  }
+
   constructor(contentDocument) {
     this.document = contentDocument;
     this.window = contentDocument.ownerGlobal;
@@ -151,13 +157,14 @@ export class ScreenshotsOverlay {
     this.windowDimensions = new WindowDimensions();
     this.selectionRegion = new Region(this.windowDimensions);
     this.hoverElementRegion = new Region(this.windowDimensions);
+    this.resetMethodsUsed();
   }
 
   get content() {
-    if (!this._content || Cu.isDeadWrapper(this._content)) {
+    if (!this.#content || Cu.isDeadWrapper(this.#content)) {
       return null;
     }
-    return this._content;
+    return this.#content;
   }
 
   getElementById(id) {
@@ -169,8 +176,10 @@ export class ScreenshotsOverlay {
       return;
     }
 
-    this._content = this.document.insertAnonymousContent();
-    this._content.root.appendChild(this.fragment);
+    this.windowDimensions.reset();
+
+    this.#content = this.document.insertAnonymousContent();
+    this.#content.root.appendChild(this.fragment);
 
     this.initializeElements();
     this.updateWindowDimensions();
@@ -212,17 +221,21 @@ export class ScreenshotsOverlay {
   /**
    * Removes all event listeners and removes the overlay from the Anonymous Content
    */
-  tearDown() {
-    if (this._content) {
+  tearDown(options = {}) {
+    if (this.#content) {
       this.removeEventListeners();
+      if (!(options.doNotResetMethods === true)) {
+        this.resetMethodsUsed();
+      }
       try {
-        this.document.removeAnonymousContent(this._content);
+        this.document.removeAnonymousContent(this.#content);
       } catch (e) {
         // If the current window isn't the one the content was inserted into, this
         // will fail, but that's fine.
       }
     }
     this.#initialized = false;
+    this.#setState("");
   }
 
   /**
@@ -277,6 +290,15 @@ export class ScreenshotsOverlay {
     this.screenshotsContainer.removeEventListener("pointerdown", this);
     this.screenshotsContainer.removeEventListener("pointermove", this);
     this.screenshotsContainer.removeEventListener("pointerup", this);
+  }
+
+  resetMethodsUsed() {
+    this.#methodsUsed = {
+      element: 0,
+      region: 0,
+      move: 0,
+      resize: 0,
+    };
   }
 
   /**
@@ -740,6 +762,7 @@ export class ScreenshotsOverlay {
         eventName: "selected",
         reason: "element",
       });
+      this.#methodsUsed.element += 1;
     } else {
       this.#setState("crosshairs");
     }
@@ -757,7 +780,29 @@ export class ScreenshotsOverlay {
     };
     this.selectionRegion.sortCoords();
     this.#setState("selected");
+    this.maybeRecordRegionSelected();
+    this.#methodsUsed.region += 1;
+  }
 
+  /**
+   * Update the selection region dimensions by calling `resizingDrag` and set
+   * the state to selected.
+   * @param {Number} pageX The x position relative to the page
+   * @param {Number} pageY The y position relative to the page
+   */
+  resizingDragEnd(pageX, pageY, targetId) {
+    this.resizingDrag(pageX, pageY, targetId);
+    this.selectionRegion.sortCoords();
+    this.#setState("selected");
+    this.maybeRecordRegionSelected();
+    if (targetId === "highlight") {
+      this.#methodsUsed.move += 1;
+    } else {
+      this.#methodsUsed.resize += 1;
+    }
+  }
+
+  maybeRecordRegionSelected() {
     let { width, height } = this.selectionRegion.dimensions;
 
     if (
@@ -773,18 +818,6 @@ export class ScreenshotsOverlay {
       });
     }
     this.#previousDimensions = { width, height };
-  }
-
-  /**
-   * Update the selection region dimensions by calling `resizingDrag` and set
-   * the state to selected.
-   * @param {Number} pageX The x position relative to the page
-   * @param {Number} pageY The y position relative to the page
-   */
-  resizingDragEnd(pageX, pageY, targetId) {
-    this.resizingDrag(pageX, pageY, targetId);
-    this.selectionRegion.sortCoords();
-    this.#setState("selected");
   }
 
   /**
@@ -807,6 +840,12 @@ export class ScreenshotsOverlay {
 
   hidePreviewContainer() {
     this.previewContainer.hidden = true;
+  }
+
+  updatePreviewContainer() {
+    let { clientWidth, clientHeight } = this.windowDimensions.dimensions;
+    this.previewContainer.style.width = `${clientWidth}px`;
+    this.previewContainer.style.height = `${clientHeight}px`;
   }
 
   /**
@@ -1038,31 +1077,21 @@ export class ScreenshotsOverlay {
    * @param {String} eventType will be "scroll" or "resize"
    */
   updateScreenshotsOverlayDimensions(eventType) {
-    if (this.#state === "crosshairs" && eventType === "resize") {
-      this.hideHoverElementContainer();
-    }
-
     this.updateWindowDimensions();
 
-    if (this.#state === "selected" && eventType === "resize") {
-      this.updateSelectionSizeText();
-      let didShift = this.selectionRegion.shift();
-      if (didShift) {
-        this.drawSelectionContainer();
-      }
-      this.drawButtonsContainer();
-    } else if (
-      this.#state !== "resizing" &&
-      this.#state !== "dragging" &&
-      eventType === "scroll"
-    ) {
-      this.drawButtonsContainer();
-      if (this.#state === "crosshairs") {
+    if (this.state === "crosshairs") {
+      if (eventType === "resize") {
+        this.hideHoverElementContainer();
+        this.updatePreviewContainer();
+      } else if (eventType === "scroll") {
         if (this.#lastClientX && this.#lastClientY) {
           this.#cachedEle = null;
           this.handleElementHover(this.#lastClientX, this.#lastClientY);
         }
       }
+    } else if (this.state === "selected") {
+      this.drawButtonsContainer();
+      this.updateSelectionSizeText();
     }
   }
 
@@ -1151,10 +1180,21 @@ export class ScreenshotsOverlay {
       let heightDiff = this.windowDimensions.clientHeight - clientHeight;
 
       this.windowDimensions.dimensions = {
-        scrollWidth: scrollWidth - widthDiff,
-        scrollHeight: scrollHeight - heightDiff,
+        scrollWidth: scrollWidth - Math.max(widthDiff, 0),
+        scrollHeight: scrollHeight - Math.max(heightDiff, 0),
+        clientWidth,
+        clientHeight,
       };
 
+      if (this.state === "selected") {
+        let didShift = this.selectionRegion.shift();
+        if (didShift) {
+          this.drawSelectionContainer();
+          this.drawButtonsContainer();
+        }
+      } else if (this.state === "crosshairs") {
+        this.updatePreviewContainer();
+      }
       this.updateScreenshotsOverlayContainer();
       // We just updated the screenshots container so we check if the window
       // dimensions are still accurate
@@ -1186,6 +1226,7 @@ export class ScreenshotsOverlay {
     };
 
     if (shouldUpdate) {
+      this.updatePreviewContainer();
       this.updateScreenshotsOverlayContainer();
     }
   }

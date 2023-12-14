@@ -44,9 +44,6 @@ const ZERO_PREFIX_SCALAR_ABANDONMENT = "urlbar.zeroprefix.abandonment";
 const ZERO_PREFIX_SCALAR_ENGAGEMENT = "urlbar.zeroprefix.engagement";
 const ZERO_PREFIX_SCALAR_EXPOSURE = "urlbar.zeroprefix.exposure";
 
-// The name of the pref enabling rich suggestions relative to `browser.urlbar`.
-const RICH_SUGGESTIONS_PREF = "richSuggestions.featureGate";
-
 const RESULT_MENU_COMMANDS = {
   DISMISS: "dismiss",
   HELP: "help",
@@ -113,9 +110,6 @@ export class UrlbarView {
         addDynamicStylesheet(this.window, viewTemplate.stylesheet);
       }
     }
-
-    lazy.UrlbarPrefs.addObserver(this);
-    this.window.setTimeout(() => this.#updateRichSuggestionAttribute());
   }
 
   get oneOffSearchButtons() {
@@ -1705,9 +1699,11 @@ export class UrlbarView {
     let favicon = item._elements.get("favicon");
     favicon.src = this.#iconForResult(result);
 
+    let userContextBox = item._elements.get("user-context");
     if (result.type == lazy.UrlbarUtils.RESULT_TYPE.TAB_SWITCH) {
-      let userContextBox = item._elements.get("user-context");
       this.#setResultUserContextBox(result, userContextBox);
+    } else if (userContextBox) {
+      this.#removeElementL10n(userContextBox);
     }
 
     let title = item._elements.get("title");
@@ -2221,6 +2217,15 @@ export class UrlbarView {
       return { id: "urlbar-group-best-match" };
     }
 
+    // Show "Shortcuts" if there's another result before that group.
+    if (
+      row.result.providerName == lazy.UrlbarProviderTopSites.name &&
+      this.#queryContext.results[0].providerName !=
+        lazy.UrlbarProviderTopSites.name
+    ) {
+      return { id: "urlbar-group-shortcuts" };
+    }
+
     if (!this.#queryContext?.searchString || row.result.heuristic) {
       return null;
     }
@@ -2338,10 +2343,18 @@ export class UrlbarView {
         row?.toggleAttribute("selected", true);
       }
     }
+
+    let result = row?.result;
+    let provider = lazy.UrlbarProvidersManager.getProvider(
+      result?.providerName
+    );
+    if (provider) {
+      provider.tryMethod("onBeforeSelection", result, element);
+    }
+
     this.#setAccessibleFocus(setAccessibleFocus && element);
     this.#selectedElement = element;
 
-    let result = row?.result;
     if (updateInput) {
       let urlOverride = null;
       if (element?.classList?.contains("urlbarView-button")) {
@@ -2353,9 +2366,6 @@ export class UrlbarView {
       this.input.setResultForCurrentValue(result);
     }
 
-    let provider = lazy.UrlbarProvidersManager.getProvider(
-      result?.providerName
-    );
     if (provider) {
       provider.tryMethod("onSelection", result, element);
     }
@@ -2707,10 +2717,9 @@ export class UrlbarView {
   }
 
   #enableOrDisableRowWrap() {
-    this.#rows.toggleAttribute(
-      "wrap",
-      getBoundsWithoutFlushing(this.input.textbox).width < 650
-    );
+    let wrap = getBoundsWithoutFlushing(this.input.textbox).width < 650;
+    this.#rows.toggleAttribute("wrap", wrap);
+    this.oneOffSearchButtons.container.toggleAttribute("wrap", wrap);
   }
 
   /**
@@ -3360,27 +3369,6 @@ export class UrlbarView {
     if (event.target == this.resultMenu) {
       this.#populateResultMenu();
     }
-  }
-
-  /**
-   * Called when a urlbar pref changes.
-   *
-   * @param {string} pref
-   *   The name of the pref relative to `browser.urlbar`.
-   */
-  onPrefChanged(pref) {
-    switch (pref) {
-      case RICH_SUGGESTIONS_PREF:
-        this.#updateRichSuggestionAttribute();
-        break;
-    }
-  }
-
-  #updateRichSuggestionAttribute() {
-    this.input.toggleAttribute(
-      "richSuggestionsEnabled",
-      lazy.UrlbarPrefs.get(RICH_SUGGESTIONS_PREF)
-    );
   }
 
   /**

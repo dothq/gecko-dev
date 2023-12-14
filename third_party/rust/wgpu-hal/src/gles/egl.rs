@@ -289,55 +289,6 @@ fn choose_config(
     )))
 }
 
-fn gl_debug_message_callback(source: u32, gltype: u32, id: u32, severity: u32, message: &str) {
-    let source_str = match source {
-        glow::DEBUG_SOURCE_API => "API",
-        glow::DEBUG_SOURCE_WINDOW_SYSTEM => "Window System",
-        glow::DEBUG_SOURCE_SHADER_COMPILER => "ShaderCompiler",
-        glow::DEBUG_SOURCE_THIRD_PARTY => "Third Party",
-        glow::DEBUG_SOURCE_APPLICATION => "Application",
-        glow::DEBUG_SOURCE_OTHER => "Other",
-        _ => unreachable!(),
-    };
-
-    let log_severity = match severity {
-        glow::DEBUG_SEVERITY_HIGH => log::Level::Error,
-        glow::DEBUG_SEVERITY_MEDIUM => log::Level::Warn,
-        glow::DEBUG_SEVERITY_LOW => log::Level::Info,
-        glow::DEBUG_SEVERITY_NOTIFICATION => log::Level::Trace,
-        _ => unreachable!(),
-    };
-
-    let type_str = match gltype {
-        glow::DEBUG_TYPE_DEPRECATED_BEHAVIOR => "Deprecated Behavior",
-        glow::DEBUG_TYPE_ERROR => "Error",
-        glow::DEBUG_TYPE_MARKER => "Marker",
-        glow::DEBUG_TYPE_OTHER => "Other",
-        glow::DEBUG_TYPE_PERFORMANCE => "Performance",
-        glow::DEBUG_TYPE_POP_GROUP => "Pop Group",
-        glow::DEBUG_TYPE_PORTABILITY => "Portability",
-        glow::DEBUG_TYPE_PUSH_GROUP => "Push Group",
-        glow::DEBUG_TYPE_UNDEFINED_BEHAVIOR => "Undefined Behavior",
-        _ => unreachable!(),
-    };
-
-    let _ = std::panic::catch_unwind(|| {
-        log::log!(
-            log_severity,
-            "GLES: [{}/{}] ID {} : {}",
-            source_str,
-            type_str,
-            id,
-            message
-        );
-    });
-
-    if cfg!(debug_assertions) && log_severity == log::Level::Error {
-        // Set canary and continue
-        crate::VALIDATION_CANARY.set();
-    }
-}
-
 #[derive(Clone, Debug)]
 struct EglContext {
     instance: Arc<EglInstance>,
@@ -723,6 +674,7 @@ unsafe impl Sync for Instance {}
 
 impl crate::Instance<super::Api> for Instance {
     unsafe fn init(desc: &crate::InstanceDescriptor) -> Result<Self, crate::InstanceError> {
+        profiling::scope!("Init OpenGL (EGL) Backend");
         #[cfg(target_os = "emscripten")]
         let egl_result: Result<EglInstance, khronos_egl::Error> =
             Ok(khronos_egl::Instance::new(khronos_egl::Static));
@@ -914,7 +866,7 @@ impl crate::Instance<super::Api> for Instance {
                     .unwrap();
 
                 let ret = unsafe {
-                    ANativeWindow_setBuffersGeometry(handle.a_native_window, 0, 0, format)
+                    ANativeWindow_setBuffersGeometry(handle.a_native_window.as_ptr(), 0, 0, format)
                 };
 
                 if ret != 0 {
@@ -927,7 +879,7 @@ impl crate::Instance<super::Api> for Instance {
             (Rwh::Wayland(_), raw_window_handle::RawDisplayHandle::Wayland(display_handle)) => {
                 if inner
                     .wl_display
-                    .map(|ptr| ptr != display_handle.display)
+                    .map(|ptr| ptr != display_handle.display.as_ptr())
                     .unwrap_or(true)
                 {
                     /* Wayland displays are not sharable between surfaces so if the
@@ -949,7 +901,7 @@ impl crate::Instance<super::Api> for Instance {
                             .unwrap()
                             .get_platform_display(
                                 EGL_PLATFORM_WAYLAND_KHR,
-                                display_handle.display,
+                                display_handle.display.as_ptr(),
                                 &display_attributes,
                             )
                     }
@@ -963,7 +915,7 @@ impl crate::Instance<super::Api> for Instance {
                     )?;
 
                     let old_inner = std::mem::replace(inner.deref_mut(), new_inner);
-                    inner.wl_display = Some(display_handle.display);
+                    inner.wl_display = Some(display_handle.display.as_ptr());
 
                     drop(old_inner);
                 }
@@ -995,7 +947,7 @@ impl crate::Instance<super::Api> for Instance {
         let inner = self.inner.lock();
         inner.egl.make_current();
 
-        let gl = unsafe {
+        let mut gl = unsafe {
             glow::Context::from_loader_function(|name| {
                 inner
                     .egl
@@ -1014,7 +966,7 @@ impl crate::Instance<super::Api> for Instance {
         if self.flags.contains(wgt::InstanceFlags::VALIDATION) && gl.supports_debug() {
             log::info!("Enabling GLES debug output");
             unsafe { gl.enable(glow::DEBUG_OUTPUT) };
-            unsafe { gl.debug_message_callback(gl_debug_message_callback) };
+            unsafe { gl.debug_message_callback(super::gl_debug_message_callback) };
         }
 
         inner.egl.unmake_current();
@@ -1094,8 +1046,9 @@ impl Surface {
     pub(super) unsafe fn present(
         &mut self,
         _suf_texture: super::Texture,
-        gl: &glow::Context,
+        context: &AdapterContext,
     ) -> Result<(), crate::SurfaceError> {
+        let gl = unsafe { context.get_without_egl_lock() };
         let sc = self.swapchain.as_ref().unwrap();
 
         self.egl
@@ -1203,29 +1156,35 @@ impl crate::Surface<super::Api> for Surface {
                         &mut temp_xcb_handle as *mut _ as *mut std::ffi::c_void
                     }
                     (WindowKind::AngleX11, Rwh::Xcb(handle)) => {
-                        handle.window as *mut std::ffi::c_void
+                        handle.window.get() as *mut std::ffi::c_void
                     }
-                    (WindowKind::Unknown, Rwh::AndroidNdk(handle)) => handle.a_native_window,
+                    (WindowKind::Unknown, Rwh::AndroidNdk(handle)) => {
+                        handle.a_native_window.as_ptr()
+                    }
                     (WindowKind::Wayland, Rwh::Wayland(handle)) => {
                         let library = &self.wsi.display_owner.as_ref().unwrap().library;
                         let wl_egl_window_create: libloading::Symbol<WlEglWindowCreateFun> =
                             unsafe { library.get(b"wl_egl_window_create") }.unwrap();
-                        let window = unsafe { wl_egl_window_create(handle.surface, 640, 480) };
+                        let window =
+                            unsafe { wl_egl_window_create(handle.surface.as_ptr(), 640, 480) }
+                                as *mut _;
                         wl_window = Some(window);
                         window
                     }
                     #[cfg(target_os = "emscripten")]
                     (WindowKind::Unknown, Rwh::Web(handle)) => handle.id as *mut std::ffi::c_void,
-                    (WindowKind::Unknown, Rwh::Win32(handle)) => handle.hwnd,
+                    (WindowKind::Unknown, Rwh::Win32(handle)) => {
+                        handle.hwnd.get() as *mut std::ffi::c_void
+                    }
                     (WindowKind::Unknown, Rwh::AppKit(handle)) => {
                         #[cfg(not(target_os = "macos"))]
-                        let window_ptr = handle.ns_view;
+                        let window_ptr = handle.ns_view.as_ptr();
                         #[cfg(target_os = "macos")]
                         let window_ptr = {
                             use objc::{msg_send, runtime::Object, sel, sel_impl};
                             // ns_view always have a layer and don't need to verify that it exists.
                             let layer: *mut Object =
-                                msg_send![handle.ns_view as *mut Object, layer];
+                                msg_send![handle.ns_view.as_ptr() as *mut Object, layer];
                             layer as *mut ffi::c_void
                         };
                         window_ptr
@@ -1410,7 +1369,6 @@ impl crate::Surface<super::Api> for Surface {
                 height: sc.extent.height,
                 depth: 1,
             },
-            is_cubemap: false,
         };
         Ok(Some(crate::AcquiredSurfaceTexture {
             texture,

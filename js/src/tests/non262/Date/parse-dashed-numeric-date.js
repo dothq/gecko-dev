@@ -21,6 +21,11 @@ inTimeZone("MST", () => {
     "19999-09-12 (comment) 23:00:00": new Date(19999, Month.September, 12, 23),
     "19999-09-12 22:00:00 GMT-0800": new Date(19999, Month.September, 12, 23),
 
+    // Single digit mon or mday
+    "2021-09-1": new Date(2021, Month.September, 1),
+    "2021-9-01": new Date(2021, Month.September, 1),
+    "2021-9-1": new Date(2021, Month.September, 1),
+
     // 1-12 for first number should be month
     "1-09-12": new Date(2012, Month.January, 9),
     "1-09-2012": new Date(2012, Month.January, 9),
@@ -53,11 +58,34 @@ inTimeZone("MST", () => {
     "2022-02-29": new Date(2022, Month.March, 1),
     "2022-02-30": new Date(2022, Month.March, 2),
     "2022-02-31": new Date(2022, Month.March, 3),
+
+    // No space before time zone
+    "19999-9-1MST": new Date(19999, Month.September, 1),
+    "19999-9-1GMT-07": new Date(19999, Month.September, 1),
+
+    // Delimiter other than space after prefix
+    "19999-9-1.10:13:14": new Date(19999, Month.September, 1, 10, 13, 14),
+    "19999-9-1,10:13:14": new Date(19999, Month.September, 1, 10, 13, 14),
+    "19999-9-1-10:13:14": new Date(19999, Month.September, 1, 10, 13, 14),
+    "19999-9-1-4:30": new Date(19999, Month.September, 1, 4, 30),
+    "19999-9-1/10:13:14": new Date(19999, Month.September, 1, 10, 13, 14),
+    "19999-9-1()10:13:14": new Date(19999, Month.September, 1, 10, 13, 14),
+    // Open paren only comments out the time
+    "19999-9-1(10:13:14": new Date(19999, Month.September, 1),
   };
   const rejected = [
     "275760-09-12 17:00:01",
     "275760-09-13",
+
+    // Rejected delimiters after prefix
     "19999-09-12T00:00:00",
+    "19999-09-12:00:00:00",
+    "19999-09-12^00:00:00",
+    "19999-09-12|00:00:00",
+    "19999-09-12~00:00:00",
+    "19999-09-12+00:00:00",
+    "19999-09-12=00:00:00",
+    "19999-09-12?00:00:00",
 
     // 13-31 for first number is invalid (after 31 can be parsed as YY-MM-DD),
     // but 32 is still no good if the last number is a YYYY
@@ -71,6 +99,11 @@ inTimeZone("MST", () => {
     "2022-02-32",
     // month > 12
     "2022-13-30",
+
+    // 00 for mon or mday
+    "0000-00-00",
+    "0000-01-00",
+    "0000-00-01",
   ];
 
   for (const [test, dateObject] of Object.entries(accepted)) {

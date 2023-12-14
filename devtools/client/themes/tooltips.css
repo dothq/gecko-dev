@@ -17,7 +17,6 @@
 @import url(chrome://devtools/skin/compatibility.css) layer(shared);
 
 /* Tooltip specific theme variables */
-
 .theme-dark {
   --bezier-diagonal-color: #eee;
   --bezier-grid-color: rgba(255, 255, 255, 0.1);
@@ -69,6 +68,17 @@
 
 :root[platform="mac"].theme-light {
   --theme-arrowpanel-separator: hsla(210,4%,10%,.14);
+}
+
+/*
+  There's a specific color-scheme defined for panels in https://searchfox.org/mozilla-central/rev/02841791400cf7cf5760c0cfaf31f5d772624253/toolkit/themes/shared/popup.css#9-13
+  This could create issues when the Firefox theme is at odd with the DevTools one (e.g.
+  if Firefox uses a dark theme but the user has a DevTools light theme.
+  Unset the color-scheme on those element so it uses the one we set on :root in common.css,
+  which matches our light/dark theme.
+*/
+menupopup, panel {
+  color-scheme: unset
 }
 
 strong {
@@ -497,12 +507,15 @@ strong {
   align-items: baseline;
   margin: 0;
   padding: 4px 12px;
-  outline: none;
   /*
    * It doesn't really make sense, since if this is just about making the items
    * easier to click we should be using min-width instead.
    */
   margin-inline-end: 15px;
+
+  &:focus-visible {
+    --theme-outline-offset: -2px;
+  }
 }
 
 .tooltip-container[type="doorhanger"] .menuitem > button.command:is([role="menuitem"],[role="menuitemcheckbox"],[role="link"]) {
@@ -514,7 +527,7 @@ strong {
   width: 100%;
 }
 
-.tooltip-container[type="doorhanger"] .menuitem > .command:not([disabled],[open],:active):is(:hover,:focus) {
+.tooltip-container[type="doorhanger"] .menuitem > .command:not([disabled],[open],:active):hover {
   background-color: var(--theme-arrowpanel-dimmed);
 }
 
@@ -926,4 +939,19 @@ strong {
   margin-right: 5px;
   margin-left: 5px;
   padding: 3px;
+}
+
+/* Tooltip: Selector warning */
+.devtools-tooltip-selector-warnings {
+  margin: 0;
+  padding: 10px;
+  list-style: none;
+
+  & > li {
+    padding: 0;
+
+    & + li {
+      border-block-start: 1px solid var(--theme-splitter-color);
+    }
+  }
 }

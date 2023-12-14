@@ -461,9 +461,21 @@ inline bool StyleGradient::Repeating() const {
 template <>
 bool StyleGradient::IsOpaque() const;
 
+template <>
+inline const StyleColorInterpolationMethod&
+StyleGradient::ColorInterpolationMethod() const {
+  if (IsLinear()) {
+    return AsLinear().color_interpolation_method;
+  }
+  if (IsRadial()) {
+    return AsRadial().color_interpolation_method;
+  }
+  return AsConic().color_interpolation_method;
+}
+
 template <typename Integer>
 inline StyleGenericGridLine<Integer>::StyleGenericGridLine()
-    : ident(do_AddRef(static_cast<nsAtom*>(nsGkAtoms::_empty))),
+    : ident{StyleAtom(do_AddRef(static_cast<nsAtom*>(nsGkAtoms::_empty)))},
       line_num(0),
       is_span(false) {}
 
@@ -943,7 +955,7 @@ inline bool RestyleHint::DefinitelyRecascadesAllSubtree() const {
 }
 
 template <>
-ImageResolution StyleImage::GetResolution() const;
+ImageResolution StyleImage::GetResolution(const ComputedStyle&) const;
 
 template <>
 inline const StyleImage& StyleImage::FinalImage() const {
@@ -958,9 +970,6 @@ inline const StyleImage& StyleImage::FinalImage() const {
   static auto sNone = StyleImage::None();
   return sNone;
 }
-
-template <>
-Maybe<CSSIntSize> StyleImage::GetIntrinsicSize() const;
 
 template <>
 inline bool StyleImage::IsImageRequestType() const {
@@ -1117,6 +1126,20 @@ inline bool StyleDisplay::IsInlineInside() const {
 
 inline bool StyleDisplay::IsInlineOutside() const {
   return Outside() == StyleDisplayOutside::Inline || IsInternalRuby();
+}
+
+inline float StyleZoom::Zoom(float aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return ToFloat() * aValue;
+}
+
+inline float StyleZoom::Unzoom(float aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return aValue / ToFloat();
 }
 
 }  // namespace mozilla

@@ -8,6 +8,7 @@
 
 #include <utility>
 
+#include "Attr.h"
 #include "jsapi.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/BasePrincipal.h"
@@ -29,9 +30,11 @@
 #include "nsCOMArray.h"
 #include "nsContentList.h"
 #include "nsContentUtils.h"
+#include "nsDOMAttributeMap.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
 #include "nsError.h"
+#include "nsFocusManager.h"
 #include "nsGkAtoms.h"
 #include "nsHTMLDocument.h"
 #include "nsIFormControlFrame.h"
@@ -49,7 +52,6 @@
 #include "mozilla/Telemetry.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_prompts.h"
-#include "mozilla/StaticPrefs_signon.h"
 #include "nsCategoryManagerUtils.h"
 #include "nsIContentInlines.h"
 #include "nsISimpleEnumerator.h"
@@ -160,10 +162,10 @@ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(HTMLFormElement,
 
 // EventTarget
 void HTMLFormElement::AsyncEventRunning(AsyncEventDispatcher* aEvent) {
-  if (mFormPasswordEventDispatcher == aEvent) {
-    mFormPasswordEventDispatcher = nullptr;
-  } else if (mFormPossibleUsernameEventDispatcher == aEvent) {
-    mFormPossibleUsernameEventDispatcher = nullptr;
+  if (aEvent->mEventType == u"DOMFormHasPassword"_ns) {
+    mHasPendingPasswordEvent = false;
+  } else if (aEvent->mEventType == u"DOMFormHasPossibleUsername"_ns) {
+    mHasPendingPossibleUsernameEvent = false;
   }
 }
 
@@ -206,6 +208,41 @@ void HTMLFormElement::GetMethod(nsAString& aValue) {
   GetEnumAttr(nsGkAtoms::method, kFormDefaultMethod->tag, aValue);
 }
 
+void HTMLFormElement::ReportInvalidUnfocusableElements() {
+  RefPtr<nsFocusManager> focusManager = nsFocusManager::GetFocusManager();
+  MOZ_ASSERT(focusManager);
+
+  // This shouldn't be called recursively, so use a rather large value
+  // for the preallocated buffer.
+  AutoTArray<RefPtr<nsGenericHTMLFormElement>, 100> sortedControls;
+  if (NS_FAILED(mControls->GetSortedControls(sortedControls))) {
+    return;
+  }
+
+  for (auto& _e : sortedControls) {
+    // MOZ_CAN_RUN_SCRIPT requires explicit copy, Bug 1620312
+    RefPtr<nsGenericHTMLFormElement> element = _e;
+    bool isFocusable = false;
+    focusManager->ElementIsFocusable(element, 0, &isFocusable);
+    if (!isFocusable) {
+      nsTArray<nsString> params;
+      nsAutoCString messageName("InvalidFormControlUnfocusable");
+
+      if (Attr* nameAttr = element->GetAttributes()->GetNamedItem(u"name"_ns)) {
+        nsAutoString name;
+        nameAttr->GetValue(name);
+        params.AppendElement(name);
+        messageName = "InvalidNamedFormControlUnfocusable";
+      }
+
+      nsContentUtils::ReportToConsole(
+          nsIScriptError::errorFlag, "DOM"_ns, element->GetOwnerDocument(),
+          nsContentUtils::eDOM_PROPERTIES, messageName.get(), params,
+          element->GetBaseURI());
+    }
+  }
+}
+
 // https://html.spec.whatwg.org/multipage/forms.html#concept-form-submit
 void HTMLFormElement::MaybeSubmit(Element* aSubmitter) {
 #ifdef DEBUG
@@ -241,6 +278,7 @@ void HTMLFormElement::MaybeSubmit(Element* aSubmitter) {
       HasAttr(nsGkAtoms::novalidate) ||
       (aSubmitter && aSubmitter->HasAttr(nsGkAtoms::formnovalidate));
   if (!noValidateState && !CheckValidFormSubmission()) {
+    ReportInvalidUnfocusableElements();
     return;
   }
 
@@ -1134,34 +1172,6 @@ void HTMLFormElement::AssertDocumentOrder(
 }
 #endif
 
-void HTMLFormElement::PostPasswordEvent() {
-  // Don't fire another add event if we have a pending add event.
-  if (mFormPasswordEventDispatcher.get()) {
-    return;
-  }
-
-  mFormPasswordEventDispatcher =
-      new AsyncEventDispatcher(this, u"DOMFormHasPassword"_ns, CanBubble::eYes,
-                               ChromeOnlyDispatch::eYes);
-  mFormPasswordEventDispatcher->PostDOMEvent();
-}
-
-void HTMLFormElement::PostPossibleUsernameEvent() {
-  if (!StaticPrefs::signon_usernameOnlyForm_enabled()) {
-    return;
-  }
-
-  // Don't fire another event if we have a pending event.
-  if (mFormPossibleUsernameEventDispatcher) {
-    return;
-  }
-
-  mFormPossibleUsernameEventDispatcher =
-      new AsyncEventDispatcher(this, u"DOMFormHasPossibleUsername"_ns,
-                               CanBubble::eYes, ChromeOnlyDispatch::eYes);
-  mFormPossibleUsernameEventDispatcher->PostDOMEvent();
-}
-
 nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
                                      bool aUpdateValidity, bool aNotify) {
   // If an element has a @form, we can assume it *might* be able to not have
@@ -1184,16 +1194,6 @@ nsresult HTMLFormElement::AddElement(nsGenericHTMLFormElement* aChild,
 #endif
 
   auto type = fc->ControlType();
-
-  // If it is a password control, inform the password manager.
-  if (type == FormControlType::InputPassword) {
-    PostPasswordEvent();
-    // If the type is email or text, it is a username compatible input,
-    // inform the password manager.
-  } else if (type == FormControlType::InputEmail ||
-             type == FormControlType::InputText) {
-    PostPossibleUsernameEvent();
-  }
 
   // Default submit element handling
   if (fc->IsSubmitControl()) {

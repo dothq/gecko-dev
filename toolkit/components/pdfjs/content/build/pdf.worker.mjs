@@ -510,7 +510,6 @@ class FeatureTest {
   }
   static get platform() {
     return shadow(this, "platform", {
-      isWin: navigator.platform.includes("Win"),
       isMac: navigator.platform.includes("Mac")
     });
   }
@@ -24009,6 +24008,12 @@ function signedInt16(b0, b1) {
   const value = (b0 << 8) + b1;
   return value & 1 << 15 ? value - 0x10000 : value;
 }
+function writeUint32(bytes, index, value) {
+  bytes[index + 3] = value & 0xff;
+  bytes[index + 2] = value >>> 8;
+  bytes[index + 1] = value >>> 16;
+  bytes[index] = value >>> 24;
+}
 function int32(b0, b1, b2, b3) {
   return (b0 << 24) + (b1 << 16) + (b2 << 8) + b3;
 }
@@ -25711,8 +25716,18 @@ class Font {
       throw new FormatError('Required "maxp" table is not found');
     }
     font.pos = (font.start || 0) + tables.maxp.offset;
-    const version = font.getInt32();
+    let version = font.getInt32();
     const numGlyphs = font.getUint16();
+    if (version !== 0x00010000 && version !== 0x00005000) {
+      if (tables.maxp.length === 6) {
+        version = 0x0005000;
+      } else if (tables.maxp.length >= 32) {
+        version = 0x00010000;
+      } else {
+        throw new FormatError(`"maxp" table has a wrong version number`);
+      }
+      writeUint32(tables.maxp.data, 0, version);
+    }
     if (properties.scaleFactors?.length === numGlyphs && isTrueType) {
       const {
         scaleFactors
@@ -25755,7 +25770,7 @@ class Font {
     }
     let maxFunctionDefs = 0;
     let maxSizeOfInstructions = 0;
-    if (version >= 0x00010000 && tables.maxp.length >= 22) {
+    if (version >= 0x00010000 && tables.maxp.length >= 32) {
       font.pos += 8;
       const maxZones = font.getUint16();
       if (maxZones > 2) {
@@ -25785,7 +25800,7 @@ class Font {
       const isGlyphLocationsLong = int16(tables.head.data[50], tables.head.data[51]);
       const glyphsInfo = sanitizeGlyphLocations(tables.loca, tables.glyf, numGlyphs, isGlyphLocationsLong, hintsValid, dupFirstEntry, maxSizeOfInstructions);
       missingGlyphs = glyphsInfo.missingGlyphs;
-      if (version >= 0x00010000 && tables.maxp.length >= 22) {
+      if (version >= 0x00010000 && tables.maxp.length >= 32) {
         tables.maxp.data[26] = glyphsInfo.maxSizeOfInstructions >> 8;
         tables.maxp.data[27] = glyphsInfo.maxSizeOfInstructions & 255;
       }
@@ -31196,7 +31211,7 @@ class PartialEvaluator {
       if (!response.ok) {
         warn(`fetchStandardFontData: failed to fetch file "${url}" with "${response.statusText}".`);
       } else {
-        data = await response.arrayBuffer();
+        data = new Uint8Array(await response.arrayBuffer());
       }
     } else {
       try {
@@ -37180,7 +37195,7 @@ async function writeDict(dict, buffer, transform) {
   buffer.push(">>");
 }
 async function writeStream(stream, buffer, transform) {
-  let string = stream.getString();
+  let bytes = stream.getBytes();
   const {
     dict
   } = stream;
@@ -37188,15 +37203,14 @@ async function writeStream(stream, buffer, transform) {
   const filterZero = Array.isArray(filter) ? await dict.xref.fetchIfRefAsync(filter[0]) : filter;
   const isFilterZeroFlateDecode = isName(filterZero, "FlateDecode");
   const MIN_LENGTH_FOR_COMPRESSING = 256;
-  if (typeof CompressionStream !== "undefined" && (string.length >= MIN_LENGTH_FOR_COMPRESSING || isFilterZeroFlateDecode)) {
+  if (typeof CompressionStream !== "undefined" && (bytes.length >= MIN_LENGTH_FOR_COMPRESSING || isFilterZeroFlateDecode)) {
     try {
-      const byteArray = stringToBytes(string);
       const cs = new CompressionStream("deflate");
       const writer = cs.writable.getWriter();
-      writer.write(byteArray);
+      writer.write(bytes);
       writer.close();
       const buf = await new Response(cs.readable).arrayBuffer();
-      string = bytesToString(new Uint8Array(buf));
+      bytes = new Uint8Array(buf);
       let newFilter, newParams;
       if (!filter) {
         newFilter = Name.get("FlateDecode");
@@ -37216,6 +37230,7 @@ async function writeStream(stream, buffer, transform) {
       info(`writeStream - cannot compress data: "${ex}".`);
     }
   }
+  let string = bytesToString(bytes);
   if (transform) {
     string = transform.encryptString(string);
   }
@@ -38561,13 +38576,13 @@ class Catalog {
         return shadow(this, "optionalContentConfig", null);
       }
       const groups = [];
-      const groupRefs = [];
+      const groupRefs = new RefSet();
       for (const groupRef of groupsData) {
-        if (!(groupRef instanceof Ref)) {
+        if (!(groupRef instanceof Ref) || groupRefs.has(groupRef)) {
           continue;
         }
-        groupRefs.push(groupRef);
-        const group = this.xref.fetchIfRef(groupRef);
+        groupRefs.put(groupRef);
+        const group = this.xref.fetch(groupRef);
         groups.push({
           id: groupRef.toString(),
           name: typeof group.get("Name") === "string" ? stringToPDFString(group.get("Name")) : null,
@@ -38592,7 +38607,7 @@ class Catalog {
           if (!(value instanceof Ref)) {
             continue;
           }
-          if (contentGroupRefs.includes(value)) {
+          if (contentGroupRefs.has(value)) {
             onParsed.push(value.toString());
           }
         }
@@ -38605,7 +38620,7 @@ class Catalog {
       }
       const order = [];
       for (const value of refs) {
-        if (value instanceof Ref && contentGroupRefs.includes(value)) {
+        if (value instanceof Ref && contentGroupRefs.has(value)) {
           parsedOrderRefs.put(value);
           order.push(value.toString());
           continue;
@@ -50870,6 +50885,9 @@ class Annotation {
   }
   setFlags(flags) {
     this.flags = Number.isInteger(flags) && flags > 0 ? flags : 0;
+    if (this.flags & AnnotationFlag.INVISIBLE && this.constructor.name !== "Annotation") {
+      this.flags ^= AnnotationFlag.INVISIBLE;
+    }
   }
   hasFlag(flag) {
     return this._hasFlag(this.flags, flag);
@@ -51481,7 +51499,7 @@ class WidgetAnnotation extends Annotation {
     return !!(this.data.fieldFlags & flag);
   }
   _isViewable(flags) {
-    return !this._hasFlag(flags, AnnotationFlag.INVISIBLE);
+    return true;
   }
   mustBeViewed(annotationStorage, renderForms) {
     if (renderForms) {
@@ -52346,7 +52364,7 @@ class ButtonWidgetAnnotation extends WidgetAnnotation {
     }
   }
   _processRadioButton(params) {
-    this.data.fieldValue = this.data.buttonValue = null;
+    this.data.buttonValue = null;
     const fieldParent = params.dict.get("Parent");
     if (fieldParent instanceof Dict) {
       this.parent = params.dict.getRaw("Parent");
@@ -55545,22 +55563,55 @@ class PDFDocument {
   async cleanup(manuallyTriggered = false) {
     return this.catalog ? this.catalog.cleanup(manuallyTriggered) : clearGlobalCaches();
   }
-  #collectFieldObjects(name, fieldRef, promises, annotationGlobals) {
-    const field = this.xref.fetchIfRef(fieldRef);
+  async #collectFieldObjects(name, fieldRef, promises, annotationGlobals, visitedRefs) {
+    const {
+      xref
+    } = this;
+    if (!(fieldRef instanceof Ref) || visitedRefs.has(fieldRef)) {
+      return;
+    }
+    visitedRefs.put(fieldRef);
+    const field = await xref.fetchAsync(fieldRef);
+    if (!(field instanceof Dict)) {
+      return;
+    }
     if (field.has("T")) {
-      const partName = stringToPDFString(field.get("T"));
+      const partName = stringToPDFString(await field.getAsync("T"));
       name = name === "" ? partName : `${name}.${partName}`;
+    } else {
+      let obj = field;
+      while (true) {
+        obj = obj.getRaw("Parent");
+        if (obj instanceof Ref) {
+          if (visitedRefs.has(obj)) {
+            break;
+          }
+          obj = await xref.fetchAsync(obj);
+        }
+        if (!(obj instanceof Dict)) {
+          break;
+        }
+        if (obj.has("T")) {
+          const partName = stringToPDFString(await obj.getAsync("T"));
+          name = name === "" ? partName : `${name}.${partName}`;
+          break;
+        }
+      }
     }
     if (!promises.has(name)) {
       promises.set(name, []);
     }
-    promises.get(name).push(AnnotationFactory.create(this.xref, fieldRef, annotationGlobals, this._localIdFactory, true, null).then(annotation => annotation?.getFieldObject()).catch(function (reason) {
+    promises.get(name).push(AnnotationFactory.create(xref, fieldRef, annotationGlobals, null, true, null).then(annotation => annotation?.getFieldObject()).catch(function (reason) {
       warn(`#collectFieldObjects: "${reason}".`);
       return null;
     }));
-    if (field.has("Kids")) {
-      for (const kid of field.get("Kids")) {
-        this.#collectFieldObjects(name, kid, promises, annotationGlobals);
+    if (!field.has("Kids")) {
+      return;
+    }
+    const kids = await field.getAsync("Kids");
+    if (Array.isArray(kids)) {
+      for (const kid of kids) {
+        await this.#collectFieldObjects(name, kid, promises, annotationGlobals, visitedRefs);
       }
     }
   }
@@ -55568,14 +55619,15 @@ class PDFDocument {
     if (!this.formInfo.hasFields) {
       return shadow(this, "fieldObjects", Promise.resolve(null));
     }
-    const promise = this.pdfManager.ensureDoc("annotationGlobals").then(async annotationGlobals => {
+    const promise = Promise.all([this.pdfManager.ensureDoc("annotationGlobals"), this.pdfManager.ensureCatalog("acroForm")]).then(async ([annotationGlobals, acroForm]) => {
       if (!annotationGlobals) {
         return null;
       }
+      const visitedRefs = new RefSet();
       const allFields = Object.create(null);
       const fieldPromises = new Map();
-      for (const fieldRef of this.catalog.acroForm.get("Fields")) {
-        this.#collectFieldObjects("", fieldRef, fieldPromises, annotationGlobals);
+      for (const fieldRef of await acroForm.getAsync("Fields")) {
+        await this.#collectFieldObjects("", fieldRef, fieldPromises, annotationGlobals, visitedRefs);
       }
       const allPromises = [];
       for (const [name, promises] of fieldPromises) {
@@ -56349,7 +56401,7 @@ class WorkerMessageHandler {
       docId,
       apiVersion
     } = docParams;
-    const workerVersion = '4.0.67';
+    const workerVersion = '4.0.240';
     if (apiVersion !== workerVersion) {
       throw new Error(`The API version "${apiVersion}" does not match ` + `the Worker version "${workerVersion}".`);
     }
@@ -56910,8 +56962,8 @@ if (typeof window === "undefined" && !isNodeJS && typeof self !== "undefined" &&
 
 ;// CONCATENATED MODULE: ./src/pdf.worker.js
 
-const pdfjsVersion = '4.0.67';
-const pdfjsBuild = '5c45dfa0a';
+const pdfjsVersion = '4.0.240';
+const pdfjsBuild = 'ffbfd680e';
 
 var __webpack_exports__WorkerMessageHandler = __webpack_exports__.WorkerMessageHandler;
 export { __webpack_exports__WorkerMessageHandler as WorkerMessageHandler };

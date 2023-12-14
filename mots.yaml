@@ -8,7 +8,7 @@
 # documentation and how to modify this file.
 repo: mozilla-central
 created_at: '2021-10-14T12:50:40.073465'
-updated_at: '2023-10-17T14:34:37.762523'
+updated_at: '2023-11-16T11:14:06.284084'
 export:
   path: ./docs/mots/index.rst
   format: rst
@@ -335,6 +335,10 @@ people:
   - bmo_id: 6102
     name: Neil Deakin
     nick: enndeakin
+  - &epavlov
+    bmo_id: 675384
+    name: Evgeny Pavlov
+    nick: epavlov
   - &erahm
     bmo_id: 496127
     name: Eric Rahm
@@ -393,7 +397,8 @@ people:
   - bmo_id: 420446
     name: Gregory Szorc
     nick: gps
-  - bmo_id: 561658
+  - &gregtatum
+    bmo_id: 561658
     name: Greg Tatum
     nick: gregtatum
   - &groovecoder
@@ -560,6 +565,10 @@ people:
     bmo_id: 646284
     name: Jens Stutte
     nick: jstutte
+  - &jsudiaman
+    bmo_id: 713253
+    name: Jonathan Sudiaman
+    nick: jsudiaman
   - &jteow
     bmo_id: 701257
     name: James Teow
@@ -639,6 +648,10 @@ people:
     bmo_id: 649193
     name: Lougenia Bailey
     nick: lougenia
+  - &lsalzman
+    bmo_id: 536714
+    name: Lee Salzman
+    nick: lsalzman
   - &luke
     bmo_id: 347312
     name: Luke Wagner
@@ -783,6 +796,10 @@ people:
     bmo_id: 499343
     name: ''
     nick: nohlmeier
+  - &nordzilla
+    bmo_id: 651777
+    name: Erik Nordin
+    nick: nordzilla
   - &nrishel
     bmo_id: 697005
     name: Nick Rishel
@@ -942,10 +959,6 @@ people:
     bmo_id: 164722
     name: Tantek Çelik
     nick: tantek
-  - &tanvi
-    bmo_id: 430652
-    name: Tanvi Vyas
-    nick: tanvi
   - &tcampbell
     bmo_id: 586681
     name: Ted Campbell
@@ -1323,16 +1336,17 @@ modules:
         - Jonathan Kingston
         - Thomas Nguyen
         - François Marier
+        - Tanvi Vyas
+        - Andrea Marchesini
       group: dev-security
       components:
         - 'Core::DOM: Security'
     owners:
       - *ckerschb
     peers:
-      - *tanvi
       - *dveditz
-      - *baku
       - *freddy
+      - *tschuster
     machine_name: core_content_security
 
   - name: 'Core: Cookies'
@@ -1744,6 +1758,8 @@ modules:
       - *jnicol
       - *rhunt
       - *gw
+      - *lsalzman
+      - *aosmond
     machine_name: core_graphics
 
   - name: 'Core: HAL'
@@ -2789,6 +2805,10 @@ modules:
       - third_party/rust/wgpu-core/**/*
       - third_party/rust/wgpu-hal/**/*
       - third_party/rust/wgpu-types/**/*
+      - testing/web-platform/tests/webgpu/**/*
+      - testing/web-platform/meta/webgpu/**/*
+      - testing/web-platform/mozilla/tests/webgpu/**/*
+      - testing/web-platform/mozilla/meta/webgpu/**/*
     meta:
       group: dev-platform
       url: https://wiki.mozilla.org/Platform/GFX/WebGPU
@@ -3359,6 +3379,7 @@ modules:
         peers:
           - *sfoster
           - *kcochrane
+          - *jsudiaman
         meta:
       - name: Form Autofill
         description: Form detection and autocomplete.
@@ -4183,6 +4204,28 @@ modules:
           - *willdurand
         machine_name: webextensions
     machine_name: toolkit
+  - machine_name: translation
+    name: Translation
+    description: Support for translation in Firefox, and the infrastructure to train
+      new translation language models.
+    includes:
+      - toolkit/components/translations/**/*
+      - toolkit/components/translation/**/*
+      - browser/components/translations/**/*
+    excludes: []
+    owners:
+      - *gregtatum
+    peers:
+      - *nordzilla
+      - *epavlov
+      - *marco
+    meta:
+      group: dev-platform
+      url: https://github.com/mozilla/firefox-translations-training https://github.com/mozilla/firefox-translations-models
+        https://github.com/mozilla/firefox-translations-evaluations https://github.com/mozilla/firefox-translations
+      components:
+        - Firefox::Translation
+      review_group: translations-reviewers
   - machine_name: url_classifier
     name: URL Classifier
     description: Database and list-based classification of URL resources, such as
@@ -4207,5 +4250,5 @@ modules:
         - Ryan Tilder
       group: dev-platform
 hashes:
-  config: fab1e28e32eca300488081d2fc9b7c0769b3552d
-  export: 23925624c95ce06293fe26987721d8cc8764177c
+  config: d5b62265988dc82ca65cc890040bb62f7b0d7cf9
+  export: 71d3735e528428378a13e202f072302ab8edfb4b

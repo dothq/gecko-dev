@@ -1391,7 +1391,9 @@ skip-if = [
 support-files = ["file_location_href_unknown_protocol.html"]
 
 ["test_lock_orientation_after_fullscreen.html"]
-skip-if = ["os != 'android'"] # Only run on Android.
+skip-if = [
+  "os != 'android'", # Only run on Android.
+]
 
 ["test_lock_orientation_with_pending_fullscreen.html"]
 skip-if = [

@@ -2658,6 +2658,23 @@ class nsContentUtils {
                             nsString& aParams);
 
   /**
+   * Check whether aContent and aOffsetInContent points in a selection range of
+   * one of ranges in aSelection.  If aSelection is collapsed, this always
+   * return false even if aContent and aOffsetInContent is same as the collapsed
+   * position.
+   *
+   * @param aSelection  The selection you want to check whether point is in a
+   *                    range of it.
+   * @param aNode       The container node of the point which you want to check.
+   * @param aOffset     The offset in aNode of the point which you want to
+   *                    check.  aNode and aOffset can be computed with
+   *                    UIEvent::GetRangeParentContentAndOffset() if you want to
+   *                    check the click point.
+   */
+  static bool IsPointInSelection(const mozilla::dom::Selection& aSelection,
+                                 const nsINode& aNode, const uint32_t aOffset);
+
+  /**
    * Takes a selection, and a text control element (<input> or <textarea>), and
    * returns the offsets in the text content corresponding to the selection.
    * The selection's anchor and focus must both be in the root node passed or a
@@ -3675,12 +3692,16 @@ class TreeOrderComparator {
 }  // namespace mozilla::dom
 
 #define NS_INTERFACE_MAP_ENTRY_TEAROFF(_interface, _allocator) \
-  if (aIID.Equals(NS_GET_IID(_interface))) {                   \
-    foundInterface = static_cast<_interface*>(_allocator);     \
-    if (!foundInterface) {                                     \
-      *aInstancePtr = nullptr;                                 \
-      return NS_ERROR_OUT_OF_MEMORY;                           \
-    }                                                          \
+  NS_INTERFACE_MAP_ENTRY_TEAROFF_AMBIGUOUS(_interface, _interface, _allocator)
+
+#define NS_INTERFACE_MAP_ENTRY_TEAROFF_AMBIGUOUS(_interface, _implClass, \
+                                                 _allocator)             \
+  if (aIID.Equals(NS_GET_IID(_interface))) {                             \
+    foundInterface = static_cast<_implClass*>(_allocator);               \
+    if (!foundInterface) {                                               \
+      *aInstancePtr = nullptr;                                           \
+      return NS_ERROR_OUT_OF_MEMORY;                                     \
+    }                                                                    \
   } else
 
 /*

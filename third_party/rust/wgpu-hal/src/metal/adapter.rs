@@ -675,7 +675,7 @@ impl super::PrivateCapabilities {
             format_bgr10a2_all: Self::supports_any(device, BGR10A2_ALL),
             format_bgr10a2_no_write: !Self::supports_any(device, BGR10A2_ALL),
             max_buffers_per_stage: 31,
-            max_vertex_buffers: 31,
+            max_vertex_buffers: 31.min(crate::MAX_VERTEX_BUFFERS as u32),
             max_textures_per_stage: if os_is_mac
                 || (family_check && device.supports_family(MTLGPUFamily::Apple6))
             {
@@ -825,7 +825,8 @@ impl super::PrivateCapabilities {
             | F::TEXTURE_FORMAT_16BIT_NORM
             | F::SHADER_F16
             | F::DEPTH32FLOAT_STENCIL8
-            | F::MULTI_DRAW_INDIRECT;
+            | F::MULTI_DRAW_INDIRECT
+            | F::BGRA8UNORM_STORAGE;
 
         features.set(
             F::TIMESTAMP_QUERY,

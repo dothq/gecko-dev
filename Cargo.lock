@@ -235,22 +235,22 @@ dependencies = [
 
 [[package]]
 name = "audio_thread_priority"
-version = "0.26.1"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b7cd1bfd03dab20ad72e0c5e58d65818d62c0d199d8dec8361053d0f073dbae"
+checksum = "a7e6839a6e8e72338137b3126c7fe61af95b9acc3076d2b7109696f808d1234f"
 dependencies = [
- "cfg-if 0.1.999",
+ "cfg-if 1.0.0",
  "dbus",
  "libc",
  "log",
  "mach",
- "winapi",
+ "windows-sys",
 ]
 
 [[package]]
 name = "audioipc2"
 version = "0.5.0"
-source = "git+https://github.com/mozilla/audioipc?rev=0b51291d2483a17dce3e300c7784b369e02bee73#0b51291d2483a17dce3e300c7784b369e02bee73"
+source = "git+https://github.com/mozilla/audioipc?rev=6be424d75f1367e70f2f5ddcacd6d0237e81a6a9#6be424d75f1367e70f2f5ddcacd6d0237e81a6a9"
 dependencies = [
  "arrayvec",
  "ashmem",
@@ -272,13 +272,13 @@ dependencies = [
  "serde_bytes",
  "serde_derive",
  "slab",
- "winapi",
+ "windows-sys",
 ]
 
 [[package]]
 name = "audioipc2-client"
 version = "0.5.0"
-source = "git+https://github.com/mozilla/audioipc?rev=0b51291d2483a17dce3e300c7784b369e02bee73#0b51291d2483a17dce3e300c7784b369e02bee73"
+source = "git+https://github.com/mozilla/audioipc?rev=6be424d75f1367e70f2f5ddcacd6d0237e81a6a9#6be424d75f1367e70f2f5ddcacd6d0237e81a6a9"
 dependencies = [
  "audio_thread_priority",
  "audioipc2",
@@ -289,7 +289,7 @@ dependencies = [
 [[package]]
 name = "audioipc2-server"
 version = "0.5.0"
-source = "git+https://github.com/mozilla/audioipc?rev=0b51291d2483a17dce3e300c7784b369e02bee73#0b51291d2483a17dce3e300c7784b369e02bee73"
+source = "git+https://github.com/mozilla/audioipc?rev=6be424d75f1367e70f2f5ddcacd6d0237e81a6a9#6be424d75f1367e70f2f5ddcacd6d0237e81a6a9"
 dependencies = [
  "audio_thread_priority",
  "audioipc2",
@@ -827,7 +827,7 @@ version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e859cd57d0710d9e06c381b550c06e76992472a8c6d527aecd2fc673dcc231fb"
 dependencies = [
- "time 0.3.17",
+ "time 0.3.23",
  "version_check",
 ]
 
@@ -1047,8 +1047,7 @@ dependencies = [
 [[package]]
 name = "cssparser"
 version = "0.33.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9be934d936a0fbed5bcdc01042b770de1398bf79d0e192f49fa7faea0e99281e"
+source = "git+https://github.com/servo/rust-cssparser?rev=aaa966d9d6ae70c4b8a62bb5e3a14c068bb7dff0#aaa966d9d6ae70c4b8a62bb5e3a14c068bb7dff0"
 dependencies = [
  "cssparser-macros",
  "dtoa-short",
@@ -1060,8 +1059,7 @@ dependencies = [
 [[package]]
 name = "cssparser-macros"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13b588ba4ac1a99f7f2964d24b3d896ddc6bf847ee3855dbd4366f058cfcd331"
+source = "git+https://github.com/servo/rust-cssparser?rev=aaa966d9d6ae70c4b8a62bb5e3a14c068bb7dff0#aaa966d9d6ae70c4b8a62bb5e3a14c068bb7dff0"
 dependencies = [
  "quote",
  "syn",
@@ -1148,8 +1146,7 @@ dependencies = [
 [[package]]
 name = "d3d12"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16e44ab292b1dddfdaf7be62cfd8877df52f2f3fde5858d95bab606be259f20"
+source = "git+https://github.com/gfx-rs/wgpu?rev=3ec547cdcaaa14488327d8f1b5f7736278c4178d#3ec547cdcaaa14488327d8f1b5f7736278c4178d"
 dependencies = [
  "bitflags 2.4.0",
  "libloading",
@@ -2105,9 +2102,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.9"
+version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c85e1d9ab2eadba7e5040d4e09cbd6d072b76a557ad64e797c2cb9d4da21d7e4"
+checksum = "fe9006bed769170c11f845cf00c7c1e9092aeb3f268e007c3e760ac68008070f"
 dependencies = [
  "cfg-if 1.0.0",
  "libc",
@@ -2210,6 +2207,8 @@ dependencies = [
  "nsstring",
  "oblivious_http",
  "origin-trials-ffi",
+ "oxilangtag",
+ "oxilangtag-ffi",
  "prefs_parser",
  "processtools",
  "profiler_helper",
@@ -2271,9 +2270,9 @@ dependencies = [
 
 [[package]]
 name = "glean"
-version = "54.0.0"
+version = "55.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca520309b2eb189c3834b4d9752286615a1cc04798715805a6da8f0d7f16941"
+checksum = "2082baa3ee5b327652819b7476e1a7dc75c03217382e15764a3284b90fb071e4"
 dependencies = [
  "chrono",
  "crossbeam-channel",
@@ -2291,9 +2290,9 @@ dependencies = [
 
 [[package]]
 name = "glean-core"
-version = "54.0.0"
+version = "55.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d07e342f3f81264ddd21a0cdd37888052d501fa76cdff73948e972731009708e"
+checksum = "ed16f55045cb3e210e6ce19c03597a77a2a086a36733eea9c332dcd696962995"
 dependencies = [
  "android_logger",
  "bincode",
@@ -2989,9 +2988,9 @@ dependencies = [
 
 [[package]]
 name = "keccak"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3afef3b6eff9ce9d8ff9b3601125eec7f0c8cbac7abd14f355d053fa56c98768"
+checksum = "8f6d5ed8676d904364de097082f4e7d240b571b67989ced0240f08b7f966f940"
 dependencies = [
  "cpufeatures",
 ]
@@ -3097,9 +3096,9 @@ checksum = "884e2677b40cc8c339eaefcb701c32ef1fd2493d71118dc0ca4b6a736c93bd67"
 
 [[package]]
 name = "libc"
-version = "0.2.148"
+version = "0.2.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cdc71e17332e86d2e1d38c1f99edcb6288ee11b815fb1a4b049eaa2114d369b"
+checksum = "89d92a4743f9a61002fae18374ed11e7973f530cb3a3255fb354818118b2203c"
 
 [[package]]
 name = "libdbus-sys"
@@ -3382,8 +3381,9 @@ dependencies = [
 
 [[package]]
 name = "metal"
-version = "0.26.0"
-source = "git+https://github.com/gfx-rs/metal-rs/?rev=d24f1a4#d24f1a4ae92470bf87a0c65ecfe78c9299835505"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c43f73953f8cbe511f021b58f18c3ce1c3d1ae13fe953293e13345bf83217f25"
 dependencies = [
  "bitflags 2.4.0",
  "block",
@@ -3634,6 +3634,7 @@ version = "0.1.0"
 dependencies = [
  "arrayvec",
  "bindgen 0.68.1",
+ "bitflags 2.4.0",
  "bytes",
  "chrono",
  "env_logger",
@@ -3649,6 +3650,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
+ "mio 0.8.8",
  "nom",
  "num-integer",
  "num-traits",
@@ -3662,6 +3664,7 @@ dependencies = [
  "serde_json",
  "smallvec",
  "syn",
+ "time 0.3.23",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3758,8 +3761,8 @@ checksum = "a2983372caf4480544083767bf2d27defafe32af49ab4df3a0b7fc90793a3664"
 
 [[package]]
 name = "naga"
-version = "0.13.0"
-source = "git+https://github.com/gfx-rs/naga?rev=33b75a27d93c6574b11b4dd4492b85b5783d6c52#33b75a27d93c6574b11b4dd4492b85b5783d6c52"
+version = "0.14.0"
+source = "git+https://github.com/gfx-rs/wgpu?rev=3ec547cdcaaa14488327d8f1b5f7736278c4178d#3ec547cdcaaa14488327d8f1b5f7736278c4178d"
 dependencies = [
  "bit-set",
  "bitflags 2.4.0",
@@ -3778,21 +3781,21 @@ dependencies = [
 
 [[package]]
 name = "neqo-common"
-version = "0.6.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.6.5#23ae8e8b75b412c1c10fa44fc3f68e5422342b86"
+version = "0.6.6"
+source = "git+https://github.com/mozilla/neqo?tag=v0.6.6#34b2c3c45dc8c396f82ef5c3a5246f04bf0adad3"
 dependencies = [
  "env_logger",
  "lazy_static",
  "log",
  "qlog",
- "time 0.3.17",
+ "time 0.3.23",
  "winapi",
 ]
 
 [[package]]
 name = "neqo-crypto"
-version = "0.6.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.6.5#23ae8e8b75b412c1c10fa44fc3f68e5422342b86"
+version = "0.6.6"
+source = "git+https://github.com/mozilla/neqo?tag=v0.6.6#34b2c3c45dc8c396f82ef5c3a5246f04bf0adad3"
 dependencies = [
  "bindgen 0.64.999",
  "log",
@@ -3805,8 +3808,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-http3"
-version = "0.6.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.6.5#23ae8e8b75b412c1c10fa44fc3f68e5422342b86"
+version = "0.6.6"
+source = "git+https://github.com/mozilla/neqo?tag=v0.6.6#34b2c3c45dc8c396f82ef5c3a5246f04bf0adad3"
 dependencies = [
  "enumset",
  "lazy_static",
@@ -3823,8 +3826,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-qpack"
-version = "0.6.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.6.5#23ae8e8b75b412c1c10fa44fc3f68e5422342b86"
+version = "0.6.6"
+source = "git+https://github.com/mozilla/neqo?tag=v0.6.6#34b2c3c45dc8c396f82ef5c3a5246f04bf0adad3"
 dependencies = [
  "lazy_static",
  "log",
@@ -3837,8 +3840,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-transport"
-version = "0.6.5"
-source = "git+https://github.com/mozilla/neqo?tag=v0.6.5#23ae8e8b75b412c1c10fa44fc3f68e5422342b86"
+version = "0.6.6"
+source = "git+https://github.com/mozilla/neqo?tag=v0.6.6#34b2c3c45dc8c396f82ef5c3a5246f04bf0adad3"
 dependencies = [
  "indexmap 1.9.3",
  "lazy_static",
@@ -4132,6 +4135,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxilangtag"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d91edf4fbb970279443471345a4e8c491bf05bb283b3e6c88e4e606fd8c181b"
+
+[[package]]
+name = "oxilangtag-ffi"
+version = "0.1.0"
+dependencies = [
+ "nsstring",
+ "oxilangtag",
+]
+
+[[package]]
 name = "packed_simd"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4327,7 +4344,7 @@ dependencies = [
  "indexmap 1.9.3",
  "line-wrap",
  "serde",
- "time 0.3.17",
+ "time 0.3.23",
  "xml-rs",
 ]
 
@@ -4349,25 +4366,24 @@ version = "0.0.1"
 
 [[package]]
 name = "prio"
-version = "0.12.1"
+version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3675d093a7713f2b861f77b16c3c33fadd6de0a69bf7203014d938b9d5daa6f7"
+checksum = "b3163d19b7d8bc08c7ab6b74510f5e048c0937509d14c28b8919d2baf8cb9387"
 dependencies = [
- "base64 0.21.3",
  "byteorder",
  "getrandom",
+ "rand_core",
  "serde",
  "sha3",
- "static_assertions",
  "subtle",
  "thiserror",
 ]
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.66"
+version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18fb31db3f9bddb2ea821cde30a9f70117e3f119938b5ee630b7403aa6e2ead9"
+checksum = "134c189feb4956b20f6f547d2cf727d4c0fe06722b20a0eec87ed445a97f92da"
 dependencies = [
  "unicode-ident",
 ]
@@ -4466,14 +4482,15 @@ dependencies = [
 
 [[package]]
 name = "qlog"
-version = "0.4.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8777d5490145d6907198d48b3a907447689ce80e071b3d8a16a9d9fb3df02bc1"
+checksum = "321df7a3199d152be256a416096136191e88b7716f1e2e4c8c05b9f77ffb648b"
 dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
  "serde_with 1.999.999",
+ "smallvec",
 ]
 
 [[package]]
@@ -4538,9 +4555,9 @@ dependencies = [
 
 [[package]]
 name = "raw-window-handle"
-version = "0.5.2"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2ff9a1f06a88b01621b7ae906ef0211290d1c8a168a15542486a8f61c0833b9"
+checksum = "42a9830a0e1b9fb145ebb365b8bc4ccd75f290f98c0247deafbbe2c75cefb544"
 
 [[package]]
 name = "rayon"
@@ -4869,9 +4886,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.163"
+version = "1.0.192"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2113ab51b87a539ae008b5c6c02dc020ffa39afd2d83cffcb3f4eb2722cebec2"
+checksum = "bca2a08484b285dcb282d0f67b26cadc0df8b19f8c12502c13d966bf9482f001"
 dependencies = [
  "serde_derive",
 ]
@@ -4897,9 +4914,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.163"
+version = "1.0.192"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c805777e3930c8883389c602315a24224bcc738b63905ef87cd1420353ea93e"
+checksum = "d6c7207fbec9faa48073f3e3074cbe553af6ea512d7c21ba46e434e70ea9fbc1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5033,9 +5050,9 @@ dependencies = [
 
 [[package]]
 name = "sha3"
-version = "0.10.7"
+version = "0.10.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "54c2bb1a323307527314a36bfb73f24febb08ce2b8a554bf4ffd6f51ad15198c"
+checksum = "75872d278a8f37ef87fa0ddbda7802605cb18344497949862c0d4dcb291eba60"
 dependencies = [
  "digest",
  "keccak",
@@ -5336,9 +5353,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.18"
+version = "2.0.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d41677bcbe24c20c52e7c70b0d8db04134c5d1066bf98662e2871ad200ea3e"
+checksum = "23e78b90f2fcf45d3e842032ce32e3f2d1545ba6636271dcbf24fa306d87be7a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5425,9 +5442,9 @@ dependencies = [
 
 [[package]]
 name = "termcolor"
-version = "1.2.0"
+version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be55cf8942feac5c765c2c993422806843c9a9a45d4d5c407ad6dd2ea95eb9b6"
+checksum = "ff1bc3d3f05aff0403e8ac0d92ced918ec05b666a43f83297ccef5bea8a3d449"
 dependencies = [
  "winapi-util",
 ]
@@ -5481,9 +5498,9 @@ dependencies = [
 
 [[package]]
 name = "time"
-version = "0.3.17"
+version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a561bf4617eebd33bca6434b988f39ed798e527f51a1e797d0ee4f61c0a38376"
+checksum = "59e399c068f43a5d116fedaf73b203fa4f9c519f17e2b34f63221d3792f81446"
 dependencies = [
  "itoa",
  "serde",
@@ -5493,15 +5510,15 @@ dependencies = [
 
 [[package]]
 name = "time-core"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e153e1f1acaef8acc537e68b44906d2db6436e2b35ac2c6b42640fff91f00fd"
+checksum = "7300fbefb4dadc1af235a9cef3737cea692a9d97e1b9cbcd4ebdae6f8868e6fb"
 
 [[package]]
 name = "time-macros"
-version = "0.2.6"
+version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d967f99f534ca7e495c575c62638eebc2898a8c84c119b89e250477bc4ba16b2"
+checksum = "96ba15a897f3c86766b757e5ac7221554c6750054d74d5b28844fce5fb36a6c4"
 dependencies = [
  "time-core",
 ]
@@ -6176,7 +6193,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "time 0.3.17",
+ "time 0.3.23",
  "tokio",
  "tokio-stream",
  "unicode-segmentation",
@@ -6345,8 +6362,8 @@ dependencies = [
 
 [[package]]
 name = "wgpu-core"
-version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=858d7d590ef9ebfe1b91f6f0925aacde15cce714#858d7d590ef9ebfe1b91f6f0925aacde15cce714"
+version = "0.18.0"
+source = "git+https://github.com/gfx-rs/wgpu?rev=3ec547cdcaaa14488327d8f1b5f7736278c4178d#3ec547cdcaaa14488327d8f1b5f7736278c4178d"
 dependencies = [
  "arrayvec",
  "bit-vec",
@@ -6368,8 +6385,8 @@ dependencies = [
 
 [[package]]
 name = "wgpu-hal"
-version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=858d7d590ef9ebfe1b91f6f0925aacde15cce714#858d7d590ef9ebfe1b91f6f0925aacde15cce714"
+version = "0.18.0"
+source = "git+https://github.com/gfx-rs/wgpu?rev=3ec547cdcaaa14488327d8f1b5f7736278c4178d#3ec547cdcaaa14488327d8f1b5f7736278c4178d"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -6389,6 +6406,7 @@ dependencies = [
  "metal",
  "naga",
  "objc",
+ "once_cell",
  "parking_lot",
  "profiling",
  "range-alloc",
@@ -6404,8 +6422,8 @@ dependencies = [
 
 [[package]]
 name = "wgpu-types"
-version = "0.17.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=858d7d590ef9ebfe1b91f6f0925aacde15cce714#858d7d590ef9ebfe1b91f6f0925aacde15cce714"
+version = "0.18.0"
+source = "git+https://github.com/gfx-rs/wgpu?rev=3ec547cdcaaa14488327d8f1b5f7736278c4178d#3ec547cdcaaa14488327d8f1b5f7736278c4178d"
 dependencies = [
  "bitflags 2.4.0",
  "js-sys",
@@ -6510,7 +6528,7 @@ dependencies = [
 [[package]]
 name = "wpf-gpu-raster"
 version = "0.1.0"
-source = "git+https://github.com/FirefoxGraphics/wpf-gpu-raster?rev=5ab6fe33d00021325ee920b3c10526dc8301cf46#5ab6fe33d00021325ee920b3c10526dc8301cf46"
+source = "git+https://github.com/FirefoxGraphics/wpf-gpu-raster?rev=99979da091fd58fba8477e7fcdf5ec0727102916#99979da091fd58fba8477e7fcdf5ec0727102916"
 dependencies = [
  "typed-arena-nomut",
 ]

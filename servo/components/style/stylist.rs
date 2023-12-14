@@ -44,6 +44,7 @@ use crate::stylesheets::{
     PagePseudoClassFlags, PageRule,
 };
 use crate::stylesheets::{StyleRule, StylesheetContents, StylesheetInDocument};
+use crate::values::computed;
 use crate::AllocErr;
 use crate::{Atom, LocalName, Namespace, ShrinkIfNeeded, WeakAtom};
 use dom::{DocumentState, ElementState};
@@ -689,31 +690,41 @@ impl Stylist {
     /// Rebuild custom properties with their registered initial values.
     /// https://drafts.css-houdini.org/css-properties-values-api-1/#determining-registration
     pub fn rebuild_initial_values_for_custom_properties(&mut self) {
-        let mut seen_names = PrecomputedHashSet::default();
         let mut inherited_map = CustomPropertiesMap::default();
         let mut non_inherited_map = CustomPropertiesMap::default();
-        for (k, v) in self.custom_property_script_registry().properties().iter() {
-            seen_names.insert(k.clone());
-            if let Some(value) = &v.initial_value {
+        {
+            let mut seen_names = PrecomputedHashSet::default();
+            let mut rule_cache_conditions = RuleCacheConditions::default();
+            let context = computed::Context::new_for_initial_at_property_value(
+                self,
+                &mut rule_cache_conditions,
+            );
+
+            for (k, v) in self.custom_property_script_registry().properties().iter() {
+                seen_names.insert(k.clone());
+                let Ok(value) = v.compute_initial_value(&context) else {
+                    continue;
+                };
                 let map = if v.inherits() {
                     &mut inherited_map
                 } else {
                     &mut non_inherited_map
                 };
-                map.insert(k.clone(), value.clone());
+                map.insert(k.clone(), value);
             }
-        }
-        for (data, _) in self.iter_origins() {
-            for (k, v) in data.custom_property_registrations.iter() {
-                if seen_names.insert(k.clone()) {
-                    let last_value = &v.last().unwrap().0;
-                    if let Some(ref value) = last_value.initial_value {
+            for (data, _) in self.iter_origins() {
+                for (k, v) in data.custom_property_registrations.iter() {
+                    if seen_names.insert(k.clone()) {
+                        let last_value = &v.last().unwrap().0;
+                        let Ok(value) = last_value.compute_initial_value(&context) else {
+                            continue;
+                        };
                         let map = if last_value.inherits() {
                             &mut inherited_map
                         } else {
                             &mut non_inherited_map
                         };
-                        map.insert(k.clone(), value.clone());
+                        map.insert(k.clone(), value);
                     }
                 }
             }
@@ -983,7 +994,6 @@ impl Stylist {
             },
             pseudo,
             guards,
-            /* originating_element_style */ None,
             parent,
             /* element */ None,
         )
@@ -1077,7 +1087,6 @@ impl Stylist {
             pseudo,
             guards,
             Some(originating_element_style),
-            Some(originating_element_style),
             Some(element),
         ))
     }
@@ -1091,7 +1100,6 @@ impl Stylist {
         inputs: CascadeInputs,
         pseudo: &PseudoElement,
         guards: &StylesheetGuards,
-        originating_element_style: Option<&ComputedValues>,
         parent_style: Option<&ComputedValues>,
         element: Option<E>,
     ) -> Arc<ComputedValues>
@@ -1115,7 +1123,6 @@ impl Stylist {
             Some(pseudo),
             inputs,
             guards,
-            originating_element_style,
             parent_style,
             parent_style,
             FirstLineReparenting::No,
@@ -1142,7 +1149,6 @@ impl Stylist {
         pseudo: Option<&PseudoElement>,
         inputs: CascadeInputs,
         guards: &StylesheetGuards,
-        originating_element_style: Option<&ComputedValues>,
         parent_style: Option<&ComputedValues>,
         layout_parent_style: Option<&ComputedValues>,
         first_line_reparenting: FirstLineReparenting,
@@ -1178,7 +1184,6 @@ impl Stylist {
             pseudo,
             inputs.rules.as_ref().unwrap_or(self.rule_tree.root()),
             guards,
-            originating_element_style,
             parent_style,
             layout_parent_style,
             first_line_reparenting,
@@ -1554,7 +1559,6 @@ impl Stylist {
                     ),
                 )
             }),
-            /* originating_element_style */ None,
             Some(parent_style),
             Some(parent_style),
             FirstLineReparenting::No,

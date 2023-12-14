@@ -657,6 +657,7 @@ bool GLContext::InitImpl() {
       "Gallium 0.4 on llvmpipe",
       "Intel HD Graphics 3000 OpenGL Engine",
       "Microsoft Basic Render Driver",
+      "Samsung Xclipse 920",
       "Unknown"};
 
   mRenderer = GLRenderer::Other;
@@ -753,6 +754,10 @@ bool GLContext::InitImpl() {
     if (IsMesa()) {
       // DrawElementsInstanced hangs the driver.
       MarkUnsupported(GLFeature::robust_buffer_access_behavior);
+    }
+
+    if (Renderer() == GLRenderer::SamsungXclipse920) {
+      MarkUnsupported(GLFeature::invalidate_framebuffer);
     }
   }
 
@@ -902,25 +907,6 @@ bool GLContext::InitImpl() {
       // prevents occasional driver crash.
       mNeedsFlushBeforeDeleteFB = true;
     }
-#ifdef MOZ_WIDGET_ANDROID
-    if ((Renderer() == GLRenderer::AdrenoTM305 ||
-         Renderer() == GLRenderer::AdrenoTM320 ||
-         Renderer() == GLRenderer::AdrenoTM330) &&
-        jni::GetAPIVersion() < 21) {
-      // Bug 1164027. Driver crashes when functions such as
-      // glTexImage2D fail due to virtual memory exhaustion.
-      mTextureAllocCrashesOnMapFailure = true;
-    }
-#endif
-#if MOZ_WIDGET_ANDROID
-    if (Renderer() == GLRenderer::SGX540 && jni::GetAPIVersion() <= 15) {
-      // Bug 1288446. Driver sometimes crashes when uploading data to a
-      // texture if the render target has changed since the texture was
-      // rendered from. Calling glCheckFramebufferStatus after
-      // glFramebufferTexture2D prevents the crash.
-      mNeedsCheckAfterAttachTextureToFb = true;
-    }
-#endif
 
     // -
 
@@ -1655,15 +1641,6 @@ void GLContext::InitExtensions() {
       // Bug 980048
       MarkExtensionUnsupported(OES_EGL_sync);
     }
-
-#ifdef MOZ_WIDGET_ANDROID
-    if (Vendor() == GLVendor::Imagination &&
-        Renderer() == GLRenderer::SGX544MP && jni::GetAPIVersion() < 21) {
-      // Bug 1026404
-      MarkExtensionUnsupported(OES_EGL_image);
-      MarkExtensionUnsupported(OES_EGL_image_external);
-    }
-#endif
 
     if (Vendor() == GLVendor::ARM && (Renderer() == GLRenderer::Mali400MP ||
                                       Renderer() == GLRenderer::Mali450MP)) {

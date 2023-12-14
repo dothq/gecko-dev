@@ -51,7 +51,6 @@
 #include "wasm/WasmCode.h"
 #include "wasm/WasmDebug.h"
 #include "wasm/WasmDebugFrame.h"
-#include "wasm/WasmGcObject.h"
 #include "wasm/WasmInitExpr.h"
 #include "wasm/WasmJS.h"
 #include "wasm/WasmMemory.h"
@@ -65,6 +64,7 @@
 #include "gc/StoreBuffer-inl.h"
 #include "vm/ArrayBufferObject-inl.h"
 #include "vm/JSObject-inl.h"
+#include "wasm/WasmGcObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -241,14 +241,44 @@ bool Instance::callImport(JSContext* cx, uint32_t funcImportIndex,
 
   MOZ_ASSERT(argTypes.lengthWithStackResults() == argc);
   Maybe<char*> stackResultPointer;
-  for (size_t i = 0; i < argc; i++) {
-    const void* rawArgLoc = &argv[i];
+  size_t lastBoxIndexPlusOne = 0;
+  {
+    JS::AutoAssertNoGC nogc;
+    for (size_t i = 0; i < argc; i++) {
+      const void* rawArgLoc = &argv[i];
+      if (argTypes.isSyntheticStackResultPointerArg(i)) {
+        stackResultPointer = Some(*(char**)rawArgLoc);
+        continue;
+      }
+      size_t naturalIndex = argTypes.naturalIndex(i);
+      ValType type = funcType.args()[naturalIndex];
+      // Avoid boxes creation not to trigger GC.
+      if (ToJSValueMayGC(type)) {
+        lastBoxIndexPlusOne = i + 1;
+        continue;
+      }
+      MutableHandleValue argValue = args[naturalIndex];
+      if (!ToJSValue(cx, rawArgLoc, type, argValue)) {
+        return false;
+      }
+    }
+  }
+
+  // Visit arguments that need to perform allocation in a second loop
+  // after the rest of arguments are converted.
+  for (size_t i = 0; i < lastBoxIndexPlusOne; i++) {
     if (argTypes.isSyntheticStackResultPointerArg(i)) {
-      stackResultPointer = Some(*(char**)rawArgLoc);
       continue;
     }
+    const void* rawArgLoc = &argv[i];
     size_t naturalIndex = argTypes.naturalIndex(i);
     ValType type = funcType.args()[naturalIndex];
+    if (!ToJSValueMayGC(type)) {
+      continue;
+    }
+    MOZ_ASSERT(!type.isRefRepr());
+    // The conversions are safe here because source values are not references
+    // and will not be moved.
     MutableHandleValue argValue = args[naturalIndex];
     if (!ToJSValue(cx, rawArgLoc, type, argValue)) {
       return false;

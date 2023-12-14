@@ -3398,12 +3398,8 @@ bool IsSchemeChangePermitted(nsIURI* aOldURI, const nsACString& newScheme) {
   // URL Spec: If url includes credentials or has a non-null port, and
   // buffer is "file", then return.
   if (newScheme.EqualsIgnoreCase("file")) {
-    rv = aOldURI->GetUsername(tmp);
-    if (NS_FAILED(rv) || !tmp.IsEmpty()) {
-      return false;
-    }
-    rv = aOldURI->GetPassword(tmp);
-    if (NS_FAILED(rv) || !tmp.IsEmpty()) {
+    bool hasUserPass;
+    if (NS_FAILED(aOldURI->GetHasUserPass(&hasUserPass)) || hasUserPass) {
       return false;
     }
     int32_t port;
@@ -3525,6 +3521,7 @@ void LinkHeader::Reset() {
   mReferrerPolicy.Truncate();
   mAs.Truncate();
   mCrossOrigin.SetIsVoid(true);
+  mFetchPriority.Truncate();
 }
 
 nsresult LinkHeader::NewResolveHref(nsIURI** aOutURI, nsIURI* aBaseURI) const {
@@ -3548,7 +3545,8 @@ bool LinkHeader::operator==(const LinkHeader& rhs) const {
          mSrcset == rhs.mSrcset && mSizes == rhs.mSizes && mType == rhs.mType &&
          mMedia == rhs.mMedia && mAnchor == rhs.mAnchor &&
          mCrossOrigin == rhs.mCrossOrigin &&
-         mReferrerPolicy == rhs.mReferrerPolicy && mAs == rhs.mAs;
+         mReferrerPolicy == rhs.mReferrerPolicy && mAs == rhs.mAs &&
+         mFetchPriority == rhs.mFetchPriority;
 }
 
 constexpr auto kTitleStar = "title*"_ns;
@@ -3815,6 +3813,12 @@ void LinkHeader::MaybeUpdateAttribute(const nsAString& aAttribute,
   } else if (aAttribute.LowerCaseEqualsLiteral("imagesizes")) {
     if (mSizes.IsEmpty()) {
       mSizes = aValue;
+    }
+  } else if (aAttribute.LowerCaseEqualsLiteral("fetchpriority")) {
+    if (mFetchPriority.IsEmpty()) {
+      LOG(("Update fetchPriority to \"%s\"",
+           NS_ConvertUTF16toUTF8(aValue).get()));
+      mFetchPriority = aValue;
     }
   }
 }

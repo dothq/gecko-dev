@@ -860,7 +860,8 @@ export function serialize(
         serializationOptions,
         ownershipType,
         serializationInternalMap,
-        realm
+        realm,
+        extraOptions
       );
     }
     return serialized;
@@ -874,19 +875,15 @@ export function serialize(
         serializationOptions,
         ownershipType,
         serializationInternalMap,
-        realm
+        realm,
+        extraOptions
       );
     }
     return serialized;
   } else if (
-    [
-      "ArrayBuffer",
-      "Function",
-      "Promise",
-      "WeakMap",
-      "WeakSet",
-      "Window",
-    ].includes(className)
+    ["ArrayBuffer", "Function", "Promise", "WeakMap", "WeakSet"].includes(
+      className
+    )
   ) {
     return buildSerialized(className.toLowerCase(), handleId);
   } else if (className.includes("Generator")) {
@@ -919,6 +916,22 @@ export function serialize(
         realm,
         extraOptions
       );
+    }
+
+    return serialized;
+  } else if (className === "Window") {
+    const serialized = buildSerialized("window", handleId);
+    const window = Cu.unwaiveXrays(value);
+
+    if (window.browsingContext.parent == null) {
+      serialized.value = {
+        context: window.browsingContext.browserId.toString(),
+        isTopBrowsingContext: true,
+      };
+    } else {
+      serialized.value = {
+        context: window.browsingContext.id.toString(),
+      };
     }
 
     return serialized;

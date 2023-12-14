@@ -14,15 +14,12 @@ use super::{
 };
 use crate::custom_properties::ComputedValue as ComputedPropertyValue;
 use crate::parser::{Parse, ParserContext};
-use crate::properties::StyleBuilder;
-use crate::rule_cache::RuleCacheConditions;
-use crate::stylesheets::{container_rule::ContainerSizeQuery, CssRuleType, Origin, UrlExtraData};
-use crate::stylist::Stylist;
+use crate::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use crate::values::{
     computed::{self, ToComputedValue},
     specified, CustomIdent,
 };
-use cssparser::{BasicParseErrorKind, ParseErrorKind, Parser as CSSParser, ParserInput};
+use cssparser::{BasicParseErrorKind, ParseErrorKind, Parser as CSSParser, TokenSerializationType};
 use selectors::matching::QuirksMode;
 use servo_arc::{Arc, ThinArc};
 use smallvec::SmallVec;
@@ -66,6 +63,31 @@ pub type SpecifiedValueComponent = GenericValueComponent<
     specified::Transform,
     SpecifiedValueComponentList,
 >;
+
+impl SpecifiedValueComponent {
+    fn serialization_types(&self) -> (TokenSerializationType, TokenSerializationType) {
+        let first_token_type = match self {
+            Self::Length(_) | Self::Angle(_) | Self::Time(_) | Self::Resolution(_) => {
+                TokenSerializationType::Dimension
+            },
+            Self::Number(_) | Self::Integer(_) => TokenSerializationType::Number,
+            Self::Percentage(_) | Self::LengthPercentage(_) => TokenSerializationType::Percentage,
+            Self::Color(_) |
+            Self::Image(_) |
+            Self::Url(_) |
+            Self::TransformFunction(_) |
+            Self::TransformList(_) => TokenSerializationType::Function,
+            Self::CustomIdent(_) => TokenSerializationType::Ident,
+            Self::String(_) => TokenSerializationType::Other,
+        };
+        let last_token_type = if first_token_type == TokenSerializationType::Function {
+            TokenSerializationType::Other
+        } else {
+            first_token_type
+        };
+        (first_token_type, last_token_type)
+    }
+}
 
 /// A generic enum used for both specified value components and computed value components.
 #[derive(Clone, ToCss)]
@@ -295,6 +317,15 @@ impl SpecifiedValueComponentList {
     {
         Self(ThinArc::from_header_and_iter(multiplier, values))
     }
+
+    fn serialization_types(&self) -> (TokenSerializationType, TokenSerializationType) {
+        if let Some(first) = self.0.slice().first() {
+            // Each element has the same serialization types, so we can use only the first element.
+            first.serialization_types()
+        } else {
+            Default::default()
+        }
+    }
 }
 
 /// A list of computed component values, including the list's unchanged multiplier.
@@ -354,40 +385,23 @@ impl SpecifiedValue {
     pub fn compute<'i, 't>(
         input: &mut CSSParser<'i, 't>,
         registration: &PropertyRegistration,
-        stylist: &Stylist,
+        context: &computed::Context,
+        allow_computationally_dependent: AllowComputationallyDependent,
     ) -> Result<Arc<ComputedPropertyValue>, ()> {
         let Ok(value) = Self::parse(
             input,
             &registration.syntax,
             &registration.url_data,
-            AllowComputationallyDependent::Yes,
+            allow_computationally_dependent,
         ) else {
             return Err(());
         };
 
-        let mut rule_cache_conditions = RuleCacheConditions::default();
-        let context = computed::Context::new(
-            // TODO(zrhoffman, bug 1857674): Pass the existing StyleBuilder from the computed
-            // context.
-            StyleBuilder::new(stylist.device(), Some(stylist), None, None, None, false),
-            stylist.quirks_mode(),
-            &mut rule_cache_conditions,
-            ContainerSizeQuery::none(),
-        );
-        let value = value.to_computed_value(&context);
-        let value = SpecifiedValue::from_computed_value(&value).to_css_string();
-
-        let result = {
-            let mut input = ParserInput::new(&value);
-            let mut input = CSSParser::new(&mut input);
-            // TODO(zrhoffman, bug 1858305): Get the variable without parsing
-            ComputedPropertyValue::parse(&mut input)
-        };
-        if let Ok(value) = result {
-            Ok(value)
-        } else {
-            Err(())
-        }
+        // TODO(zrhoffman, bug 1856522): All font-* properties should already be applied before
+        // computing the value of the registered custom property.
+        let value = value.to_computed_value(context);
+        let value = SpecifiedValue::from_computed_value(&value);
+        Ok(value.to_var(&registration.url_data))
     }
 
     /// Parse and validate a registered custom property value according to its syntax descriptor,
@@ -399,7 +413,7 @@ impl SpecifiedValue {
         allow_computationally_dependent: AllowComputationallyDependent,
     ) -> Result<Self, StyleParseError<'i>> {
         if syntax.is_universal() {
-            return Ok(Self::Universal(ComputedPropertyValue::parse(&mut input)?));
+            return Ok(Self::Universal(ComputedPropertyValue::parse(&mut input, url_data)?));
         }
 
         let mut values = SmallComponentVec::new();
@@ -417,6 +431,29 @@ impl SpecifiedValue {
             Self::Component(values[0].clone())
         };
         Ok(computed_value)
+    }
+
+    fn serialization_types(&self) -> (TokenSerializationType, TokenSerializationType) {
+        match self {
+            Self::Component(component) => component.serialization_types(),
+            Self::Universal(_) => unreachable!(),
+            Self::List(list) => list.serialization_types(),
+        }
+    }
+
+    fn to_var(&self, url_data: &UrlExtraData) -> Arc<ComputedPropertyValue> {
+        if let Self::Universal(var) = self {
+            return var.clone();
+        }
+        let serialization_types = self.serialization_types();
+        Arc::new(ComputedPropertyValue::new(
+            // TODO(zrhoffman, 1864736): Preserve the computed type instead of converting back to a
+            // string.
+            self.to_css_string(),
+            url_data,
+            serialization_types.0,
+            serialization_types.1,
+        ))
     }
 }
 

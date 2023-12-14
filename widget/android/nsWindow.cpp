@@ -306,11 +306,7 @@ class NPZCSupport final
     MOZ_ASSERT(!!win);
 #endif  // defined(DEBUG)
 
-    // Use vsync for touch resampling on API level 19 and above.
-    // See gfxAndroidPlatform::CreateGlobalHardwareVsyncSource() for comparison.
-    if (jni::GetAPIVersion() >= 19) {
-      mAndroidVsync = AndroidVsync::GetInstance();
-    }
+    mAndroidVsync = AndroidVsync::GetInstance();
   }
 
   ~NPZCSupport() {
@@ -1294,8 +1290,10 @@ class LayerViewSupport final
     mY = aY;
     mWidth = aWidth;
     mHeight = aHeight;
-    mSurfaceControl =
-        java::sdk::SurfaceControl::GlobalRef::From(aSurfaceControl);
+    if (StaticPrefs::widget_android_use_surfacecontrol_AtStartup()) {
+      mSurfaceControl =
+          java::sdk::SurfaceControl::GlobalRef::From(aSurfaceControl);
+    }
     if (mSurfaceControl) {
       // When using SurfaceControl, we create a child Surface to render in to
       // rather than rendering directly in to the Surface provided by the

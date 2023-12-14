@@ -105,6 +105,9 @@ this.AccessibilityUtils = (function () {
     interactiveRule: true,
     // Checks that accessible object has a non-empty label.
     labelRule: true,
+    // Checks that a node is enabled and is expected to be enabled via
+    // the accessibility API.
+    mustBeEnabled: true,
     // Checks that a node has a corresponging accessible object.
     mustHaveAccessibleRule: true,
     // Checks that accessible object (and its corresponding node) have a non-
@@ -362,9 +365,9 @@ this.AccessibilityUtils = (function () {
    *        Accessible object.
    */
   function assertEnabled(accessible) {
-    if (matchState(accessible, STATE_UNAVAILABLE)) {
+    if (gEnv.mustBeEnabled && matchState(accessible, STATE_UNAVAILABLE)) {
       a11yFail(
-        "Node is enabled but disabled via the accessibility API",
+        "Node expected to be enabled but is disabled via the accessibility API",
         accessible
       );
     }
@@ -378,7 +381,11 @@ this.AccessibilityUtils = (function () {
    *        Accessible object for a node.
    */
   function assertFocusable(accessible) {
-    if (gEnv.focusableRule && !isKeyboardFocusable(accessible)) {
+    if (
+      gEnv.mustBeEnabled &&
+      gEnv.focusableRule &&
+      !isKeyboardFocusable(accessible)
+    ) {
       const ariaRoles = getAriaRoles(accessible);
       // Do not force ARIA combobox or listbox to be focusable.
       if (!ariaRoles.includes("combobox") && !ariaRoles.includes("listbox")) {
@@ -415,13 +422,21 @@ this.AccessibilityUtils = (function () {
    *        Accessible object for a node.
    */
   function assertInteractive(accessible) {
-    if (gEnv.actionCountRule && accessible.actionCount === 0) {
+    if (
+      gEnv.mustBeEnabled &&
+      gEnv.actionCountRule &&
+      accessible.actionCount === 0
+    ) {
       a11yFail("Node does not support any accessible actions", accessible);
 
       return;
     }
 
-    if (gEnv.interactiveRule && !INTERACTIVE_ROLES.has(accessible.role)) {
+    if (
+      gEnv.mustBeEnabled &&
+      gEnv.interactiveRule &&
+      !INTERACTIVE_ROLES.has(accessible.role)
+    ) {
       if (
         // Labels that have a label for relation with their target are clickable.
         (accessible.role !== Ci.nsIAccessibleRole.ROLE_LABEL ||

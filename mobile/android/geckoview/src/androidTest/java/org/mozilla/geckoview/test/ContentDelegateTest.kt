@@ -665,15 +665,26 @@ class ContentDelegateTest : BaseSessionTest() {
 
     @Test
     fun onProductUrl() {
-        mainSession.loadUri("https://example.com")
+        mainSession.loadUri("example.com")
         sessionRule.waitForPageStop()
 
-        mainSession.forCallbacksDuringWait(object : ContentDelegate {
-            @AssertCalled(count = 0)
+        mainSession.loadUri("example.com/dp/ABCDEFG")
+        sessionRule.waitForPageStop()
+
+        // test below working product urls
+        mainSession.loadUri("example.com/dp/ABCDEFG123")
+        sessionRule.waitForPageStop()
+
+        mainSession.loadUri("example.com/dp/HIJKLMN456")
+        sessionRule.waitForPageStop()
+
+        mainSession.loadUri("example.com/dp/OPQRSTU789")
+        sessionRule.waitForPageStop()
+
+        mainSession.delegateUntilTestEnd(object : ContentDelegate {
+            @AssertCalled(count = 3)
             override fun onProductUrl(session: GeckoSession) {}
         })
-
-        // TODO: bug1845760 when toolkit example.com product page is available, verify onProductUrl is called
     }
 
     @Test
@@ -702,6 +713,7 @@ class ContentDelegateTest : BaseSessionTest() {
             .analysisUrl(analysisURL)
             .needsAnalysis(true)
             .pageNotSupported(false)
+            .notEnoughReviews(false)
             .highlights(null)
             .lastAnalysisTime(lastAnalysisTime)
             .deletedProductReported(true)
@@ -715,13 +727,14 @@ class ContentDelegateTest : BaseSessionTest() {
         assertThat("Analysis URL should match", analysisObject.analysisURL, equalTo(analysisURL))
         assertTrue("NeedsAnalysis should match", analysisObject.needsAnalysis)
         assertFalse("PageNotSupported should match", analysisObject.pageNotSupported)
+        assertFalse("NotEnoughReviews should match", analysisObject.notEnoughReviews)
         assertNull("Highlights should match", analysisObject.highlights)
         assertThat("Last analysis time should match", analysisObject.lastAnalysisTime, equalTo(lastAnalysisTime))
 
         // TODO: bug1845760 replace with static example.com product page and enable in automation
         if (!sessionRule.env.isAutomation) {
             // verify a non product page
-            val nonProductPageResult = mainSession.requestAnalysis("https://www.amazon.com/").accept {
+            val nonProductPageResult = mainSession.requestAnalysis("https://www.example.com/").accept {
                 assertTrue("Should not return analysis", false)
             }
             try {
@@ -738,6 +751,7 @@ class ContentDelegateTest : BaseSessionTest() {
                 assertThat("Product adjusted rating should match", it.adjustedRating, equalTo(null))
                 assertThat("Product highlights should match", it.highlights, equalTo(null))
                 assertThat("Product pageNotSupported should match", it.pageNotSupported, equalTo(false))
+                assertThat("Product notEnoughReviews should match", it.notEnoughReviews, equalTo(false))
             }
 
             // verify product with integer adjusted rating
@@ -820,6 +834,50 @@ class ContentDelegateTest : BaseSessionTest() {
                     assertThat("Recommendation adjusted rating should match", it[0].adjustedRating, equalTo(4.5))
                     assertThat("Recommendation sponsored field should match", it[0].sponsored, equalTo(true))
                 }
+        }
+    }
+
+    @Test
+    fun sendAttributionEvents() {
+        // TODO (bug 1861175): enable in automation
+        if (!sessionRule.env.isAutomation) {
+            // Checks that the pref value is also consistent with the runtime settings
+            val originalPrefs = sessionRule.getPrefs(
+                "geckoview.shopping.test_response",
+            )
+            assertThat("Pref is correct", originalPrefs[0] as Boolean, equalTo(false))
+
+            val aid = "TEST_AID"
+            val invalidClickResult = mainSession.sendClickAttributionEvent(aid)
+            assertThat(
+                "Click event success result should be false",
+                sessionRule.waitForResult(invalidClickResult),
+                equalTo(false),
+            )
+            val invalidImpressionResult = mainSession.sendImpressionAttributionEvent(aid)
+            assertThat(
+                "Impression event result result should be false",
+                sessionRule.waitForResult(invalidImpressionResult),
+                equalTo(false),
+            )
+
+            sessionRule.setPrefsUntilTestEnd(
+                mapOf(
+                    "geckoview.shopping.test_response" to true,
+                ),
+            )
+            val validClickResult = mainSession.sendClickAttributionEvent(aid)
+            assertThat(
+                "Click event success result should be true",
+                sessionRule.waitForResult(validClickResult),
+                equalTo(true),
+            )
+            val validImpressionResult = mainSession.sendImpressionAttributionEvent(aid)
+            assertThat(
+                "Impression event success result should be true",
+                sessionRule.waitForResult(validImpressionResult),
+                equalTo(true),
+            )
         }
     }
 }

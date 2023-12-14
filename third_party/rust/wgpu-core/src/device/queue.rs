@@ -10,6 +10,7 @@ use crate::{
     get_lowest_common_denom,
     global::Global,
     hal_api::HalApi,
+    hal_label,
     hub::Token,
     id,
     identity::{GlobalIdentityHandlerFactory, Input},
@@ -275,10 +276,11 @@ impl<A: hal::Api> PendingWrites<A> {
 fn prepare_staging_buffer<A: HalApi>(
     device: &mut A::Device,
     size: wgt::BufferAddress,
+    instance_flags: wgt::InstanceFlags,
 ) -> Result<(StagingBuffer<A>, *mut u8), DeviceError> {
     profiling::scope!("prepare_staging_buffer");
     let stage_desc = hal::BufferDescriptor {
-        label: Some("(wgpu internal) Staging"),
+        label: hal_label(Some("(wgpu internal) Staging"), instance_flags),
         size,
         usage: hal::BufferUses::MAP_WRITE | hal::BufferUses::COPY_SRC,
         memory_flags: hal::MemoryFlags::TRANSIENT,
@@ -385,7 +387,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         // freed, even if an error occurs. All paths from here must call
         // `device.pending_writes.consume`.
         let (staging_buffer, staging_buffer_ptr) =
-            prepare_staging_buffer(&mut device.raw, data_size)?;
+            prepare_staging_buffer(&mut device.raw, data_size, device.instance_flags)?;
 
         if let Err(flush_error) = unsafe {
             profiling::scope!("copy");
@@ -425,7 +427,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             .map_err(|_| DeviceError::Invalid)?;
 
         let (staging_buffer, staging_buffer_ptr) =
-            prepare_staging_buffer(&mut device.raw, buffer_size.get())?;
+            prepare_staging_buffer(&mut device.raw, buffer_size.get(), device.instance_flags)?;
 
         let fid = hub.staging_buffers.prepare(id_in);
         let id = fid.assign(staging_buffer, device_token);
@@ -695,7 +697,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         let block_size = dst
             .desc
             .format
-            .block_size(Some(destination.aspect))
+            .block_copy_size(Some(destination.aspect))
             .unwrap();
         let bytes_per_row_alignment =
             get_lowest_common_denom(device.alignments.buffer_copy_pitch.get() as u32, block_size);
@@ -779,7 +781,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         // freed, even if an error occurs. All paths from here must call
         // `device.pending_writes.consume`.
         let (staging_buffer, staging_buffer_ptr) =
-            prepare_staging_buffer(&mut device.raw, stage_size)?;
+            prepare_staging_buffer(&mut device.raw, stage_size, device.instance_flags)?;
 
         if stage_bytes_per_row == bytes_per_row {
             profiling::scope!("copy aligned");
@@ -1108,13 +1110,12 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         // it, so make sure to set_size on it.
                         used_surface_textures.set_size(texture_guard.len());
 
+                        // TODO: ideally we would use `get_and_mark_destroyed` but the code here
+                        // wants to consume the command buffer.
                         #[allow(unused_mut)]
-                        let mut cmdbuf = match hub
-                            .command_buffers
-                            .unregister_locked(cmb_id, &mut *command_buffer_guard)
-                        {
-                            Some(cmdbuf) => cmdbuf,
-                            None => continue,
+                        let mut cmdbuf = match command_buffer_guard.replace_with_error(cmb_id) {
+                            Ok(cmdbuf) => cmdbuf,
+                            Err(_) => continue,
                         };
 
                         if cmdbuf.device_id.value.0 != queue_id {
@@ -1138,13 +1139,16 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
 
                         // update submission IDs
                         for id in cmdbuf.trackers.buffers.used() {
-                            let buffer = &mut buffer_guard[id];
-                            let raw_buf = match buffer.raw {
-                                Some(ref raw) => raw,
-                                None => {
+                            let buffer = match buffer_guard.get(id.0) {
+                                Ok(buf) => buf,
+                                Err(..) => {
                                     return Err(QueueSubmitError::DestroyedBuffer(id.0));
                                 }
                             };
+                            // get fails if the buffer is invalid or destroyed so we can assume
+                            // the raw buffer is not None.
+                            let raw_buf = buffer.raw.as_ref().unwrap();
+
                             if !buffer.life_guard.use_at(submit_index) {
                                 if let BufferMapState::Active { .. } = buffer.map_state {
                                     log::warn!("Dropped buffer has a pending mapping.");
@@ -1160,10 +1164,16 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             }
                         }
                         for id in cmdbuf.trackers.textures.used() {
-                            let texture = &mut texture_guard[id];
+                            let texture = match texture_guard.get_mut(id.0) {
+                                Ok(tex) => tex,
+                                Err(..) => {
+                                    return Err(QueueSubmitError::DestroyedTexture(id.0));
+                                }
+                            };
+
                             let should_extend = match texture.inner {
                                 TextureInner::Native { raw: None } => {
-                                    return Err(QueueSubmitError::DestroyedTexture(id.0));
+                                    unreachable!();
                                 }
                                 TextureInner::Native { raw: Some(_) } => false,
                                 TextureInner::Surface {
@@ -1248,7 +1258,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         unsafe {
                             baked
                                 .encoder
-                                .begin_encoding(Some("(wgpu internal) Transit"))
+                                .begin_encoding(hal_label(
+                                    Some("(wgpu internal) Transit"),
+                                    device.instance_flags,
+                                ))
                                 .map_err(DeviceError::from)?
                         };
                         log::trace!("Stitching command buffer {:?} before submission", cmb_id);
@@ -1278,7 +1291,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             unsafe {
                                 baked
                                     .encoder
-                                    .begin_encoding(Some("(wgpu internal) Present"))
+                                    .begin_encoding(hal_label(
+                                        Some("(wgpu internal) Present"),
+                                        device.instance_flags,
+                                    ))
                                     .map_err(DeviceError::from)?
                             };
                             trackers

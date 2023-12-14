@@ -3,6 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 .source-header {
+  grid-area: editor-header;
   display: flex;
   width: 100%;
   height: var(--editor-header-height);
@@ -120,8 +121,7 @@
   background-color: currentColor;
 }
 
-.source-tab .close-btn:hover,
-.source-tab .close-btn:focus {
+.source-tab .close-btn:hover {
   color: var(--theme-selection-color);
   background-color: var(--theme-selection-background);
 }

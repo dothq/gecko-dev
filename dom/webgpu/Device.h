@@ -90,11 +90,14 @@ class Device final : public DOMEventTargetHelper, public SupportsWeakPtr {
   RefPtr<SupportedFeatures> mFeatures;
   RefPtr<SupportedLimits> mLimits;
 
+  static CheckedInt<uint32_t> BufferStrideWithMask(
+      const gfx::IntSize& aSize, const gfx::SurfaceFormat& aFormat);
+
   explicit Device(Adapter* const aParent, RawId aId, const ffi::WGPULimits&);
 
   RefPtr<WebGPUChild> GetBridge();
   already_AddRefed<Texture> InitSwapChain(
-      const dom::GPUCanvasConfiguration& aDesc,
+      const dom::GPUCanvasConfiguration* const aConfig,
       const layers::RemoteTextureOwnerId aOwnerId,
       bool aUseExternalTextureInSwapChain, gfx::SurfaceFormat aFormat,
       gfx::IntSize aCanvasSize);
@@ -108,6 +111,8 @@ class Device final : public DOMEventTargetHelper, public SupportsWeakPtr {
 
   bool IsLost() const;
   bool IsBridgeAlive() const;
+
+  RawId GetId() const { return mId; }
 
  private:
   ~Device();
@@ -135,6 +140,10 @@ class Device final : public DOMEventTargetHelper, public SupportsWeakPtr {
   already_AddRefed<Buffer> CreateBuffer(const dom::GPUBufferDescriptor& aDesc,
                                         ErrorResult& aRv);
 
+  already_AddRefed<Texture> CreateTextureForSwapChain(
+      const dom::GPUCanvasConfiguration* const aConfig,
+      const gfx::IntSize& aCanvasSize,
+      const layers::RemoteTextureOwnerId aOwnerId);
   already_AddRefed<Texture> CreateTexture(
       const dom::GPUTextureDescriptor& aDesc);
   already_AddRefed<Texture> CreateTexture(

@@ -43,6 +43,13 @@ GPU_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_INHERITED(Device, DOMEventTargetHelper,
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(Device, DOMEventTargetHelper)
 GPU_IMPL_JS_WRAP(Device)
 
+/* static */ CheckedInt<uint32_t> Device::BufferStrideWithMask(
+    const gfx::IntSize& aSize, const gfx::SurfaceFormat& aFormat) {
+  constexpr uint32_t kBufferAlignmentMask = 0xff;
+  return CheckedInt<uint32_t>(aSize.width) * gfx::BytesPerPixel(aFormat) +
+         kBufferAlignmentMask;
+}
+
 RefPtr<WebGPUChild> Device::GetBridge() { return mBridge; }
 
 Device::Device(Adapter* const aParent, RawId aId,
@@ -146,6 +153,26 @@ void Device::ResolveLost(Maybe<dom::GPUDeviceLostReason> aReason,
 already_AddRefed<Buffer> Device::CreateBuffer(
     const dom::GPUBufferDescriptor& aDesc, ErrorResult& aRv) {
   return Buffer::Create(this, mId, aDesc, aRv);
+}
+
+already_AddRefed<Texture> Device::CreateTextureForSwapChain(
+    const dom::GPUCanvasConfiguration* const aConfig,
+    const gfx::IntSize& aCanvasSize, layers::RemoteTextureOwnerId aOwnerId) {
+  MOZ_ASSERT(aConfig);
+
+  dom::GPUTextureDescriptor desc;
+  desc.mDimension = dom::GPUTextureDimension::_2d;
+  auto& sizeDict = desc.mSize.SetAsGPUExtent3DDict();
+  sizeDict.mWidth = aCanvasSize.width;
+  sizeDict.mHeight = aCanvasSize.height;
+  sizeDict.mDepthOrArrayLayers = 1;
+  desc.mFormat = aConfig->mFormat;
+  desc.mMipLevelCount = 1;
+  desc.mSampleCount = 1;
+  desc.mUsage = aConfig->mUsage | dom::GPUTextureUsage_Binding::COPY_SRC;
+  desc.mViewFormats = aConfig->mViewFormats;
+
+  return CreateTexture(desc, Some(aOwnerId));
 }
 
 already_AddRefed<Texture> Device::CreateTexture(
@@ -328,11 +355,20 @@ already_AddRefed<dom::Promise> Device::CreateRenderPipelineAsync(
 }
 
 already_AddRefed<Texture> Device::InitSwapChain(
-    const dom::GPUCanvasConfiguration& aDesc,
+    const dom::GPUCanvasConfiguration* const aConfig,
     const layers::RemoteTextureOwnerId aOwnerId,
     bool aUseExternalTextureInSwapChain, gfx::SurfaceFormat aFormat,
     gfx::IntSize aCanvasSize) {
+  MOZ_ASSERT(aConfig);
+
   if (!mBridge->CanSend()) {
+    return nullptr;
+  }
+
+  // Check that aCanvasSize and aFormat will generate a texture stride
+  // within limits.
+  const auto bufferStrideWithMask = BufferStrideWithMask(aCanvasSize, aFormat);
+  if (!bufferStrideWithMask.isValid()) {
     return nullptr;
   }
 
@@ -342,20 +378,9 @@ already_AddRefed<Texture> Device::InitSwapChain(
   mBridge->DeviceCreateSwapChain(mId, rgbDesc, maxBufferCount, aOwnerId,
                                  aUseExternalTextureInSwapChain);
 
-  dom::GPUTextureDescriptor desc;
-  desc.mDimension = dom::GPUTextureDimension::_2d;
-  auto& sizeDict = desc.mSize.SetAsGPUExtent3DDict();
-  sizeDict.mWidth = aCanvasSize.width;
-  sizeDict.mHeight = aCanvasSize.height;
-  sizeDict.mDepthOrArrayLayers = 1;
-  desc.mFormat = aDesc.mFormat;
-  desc.mMipLevelCount = 1;
-  desc.mSampleCount = 1;
-  desc.mUsage = aDesc.mUsage | dom::GPUTextureUsage_Binding::COPY_SRC;
-  desc.mViewFormats = aDesc.mViewFormats;
   // TODO: `mColorSpace`: <https://bugzilla.mozilla.org/show_bug.cgi?id=1846608>
   // TODO: `mAlphaMode`: <https://bugzilla.mozilla.org/show_bug.cgi?id=1846605>
-  return CreateTexture(desc, Some(aOwnerId));
+  return CreateTextureForSwapChain(aConfig, aCanvasSize, aOwnerId);
 }
 
 bool Device::CheckNewWarning(const nsACString& aMessage) {

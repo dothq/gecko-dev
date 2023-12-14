@@ -71,10 +71,11 @@ export class AutofillDoorhanger {
   static preferenceURL = null;
   static learnMoreURL = null;
 
-  constructor(browser, oldRecord, newRecord) {
+  constructor(browser, oldRecord, newRecord, flowId) {
     this.browser = browser;
     this.oldRecord = oldRecord;
     this.newRecord = newRecord;
+    this.flowId = flowId;
   }
 
   get ui() {
@@ -157,6 +158,13 @@ export class AutofillDoorhanger {
   }
 
   onMenuItemClick(evt) {
+    AutofillTelemetry.recordDoorhangerClicked(
+      this.constructor.telemetryType,
+      evt,
+      this.constructor.telemetryObject,
+      this.flowId
+    );
+
     if (evt == "open-pref") {
       this.browser.ownerGlobal.openPreferences(this.preferenceURL);
     } else if (evt == "learn-more") {
@@ -230,6 +238,12 @@ export class AutofillDoorhanger {
   }
 
   show(resolve, callback = null) {
+    AutofillTelemetry.recordDoorhangerShown(
+      this.constructor.telemetryType,
+      this.constructor.telemetryObject,
+      this.flowId
+    );
+
     // call render to setup the doorhanger
     this.render();
 
@@ -255,7 +269,12 @@ export class AutofillDoorhanger {
       ...AutofillDoorhanger.createActions(
         this.ui.footer.mainAction,
         this.ui.footer.secondaryActions,
-        resolve
+        resolve,
+        {
+          type: this.constructor.telemetryType,
+          object: this.constructor.telemetryObject,
+          flowId: this.flowId,
+        }
       ),
       options
     );
@@ -302,7 +321,12 @@ export class AutofillDoorhanger {
               Return the mainAction and secondary actions in an array for showing doorhanger
    */
   // TODO: this is a static method so credit card doorhangers can also use this API.
-  static createActions(mainActionParams, secondaryActionParams, resolve) {
+  static createActions(
+    mainActionParams,
+    secondaryActionParams,
+    resolve,
+    telemetryOptions
+  ) {
     function getLabelAndAccessKey(param) {
       // This should be removed once we port credit card capture doorhanger to use fluent
       if (!param.l10nId) {
@@ -317,10 +341,19 @@ export class AutofillDoorhanger {
       };
     }
 
-    const callback = resolve.bind(null, {
-      state: mainActionParams.callbackState,
-      confirmationHintId: mainActionParams.confirmationHintId,
-    });
+    const callback = () => {
+      AutofillTelemetry.recordDoorhangerClicked(
+        telemetryOptions.type,
+        mainActionParams.callbackState,
+        telemetryOptions.object,
+        telemetryOptions.flowId
+      );
+
+      resolve({
+        state: mainActionParams.callbackState,
+        confirmationHintId: mainActionParams.confirmationHintId,
+      });
+    };
 
     const mainAction = {
       ...getLabelAndAccessKey(mainActionParams),
@@ -329,10 +362,19 @@ export class AutofillDoorhanger {
 
     let secondaryActions = [];
     for (const params of secondaryActionParams) {
-      const cb = resolve.bind(null, {
-        state: params.callbackState,
-        confirmationHintId: params.confirmationHintId,
-      });
+      const cb = () => {
+        AutofillTelemetry.recordDoorhangerClicked(
+          telemetryOptions.type,
+          params.callbackState,
+          telemetryOptions.object,
+          telemetryOptions.flowId
+        );
+
+        resolve({
+          state: params.callbackState,
+          confirmationHintId: params.confirmationHintId,
+        });
+      };
       secondaryActions.push({
         ...getLabelAndAccessKey(params),
         callback: cb,
@@ -348,10 +390,13 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
   static learnMoreURL = "automatically-fill-your-address-web-forms";
   static editButtonId = "address-capture-edit-address-button";
 
+  static telemetryType = AutofillTelemetry.ADDRESS;
+  static telemetryObject = "capture_doorhanger";
+
   #editAddressCb = null;
 
-  constructor(browser, oldRecord, newRecord, editAddressCb) {
-    super(browser, oldRecord, newRecord);
+  constructor(browser, oldRecord, newRecord, flowId, editAddressCb) {
+    super(browser, oldRecord, newRecord, flowId);
 
     this.#editAddressCb = editAddressCb;
   }
@@ -388,16 +433,21 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
     };
 
     let spans = [];
-    for (const [oldData, newData] of datalist) {
+    let previousField;
+    for (const [field, oldData, newData] of datalist) {
       if (!oldData && !newData) {
         continue;
       }
 
-      // Always add a whitespace betwwen different data but we format them
-      // in the same line. Ex. first-name: John, family-name: Doe becomes
+      // Always add a whitespace between field data that we put in the same line.
+      // Ex. first-name: John, family-name: Doe becomes
       // "John Doe"
       if (spans.length) {
-        spans.push(createSpan(" "));
+        if (previousField == "address-level2" && field == "address-level1") {
+          spans.push(createSpan(", "));
+        } else {
+          spans.push(createSpan(" "));
+        }
       }
 
       if (!oldData) {
@@ -420,16 +470,19 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
         spans.push(createSpan(" "));
         spans.push(createSpan(newData, "add"));
       }
+
+      previousField = field;
     }
 
     return spans;
   }
 
-  #formatTextByAddressCategory(field) {
+  #formatTextByAddressCategory(fieldName) {
     let data = [];
-    switch (field) {
+    switch (fieldName) {
       case "name":
         data = ["given-name", "additional-name", "family-name"].map(field => [
+          field,
           this.oldRecord[field],
           this.newRecord[field],
         ]);
@@ -437,6 +490,7 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
       case "street-address":
         data = [
           [
+            fieldName,
             FormAutofillUtils.toOneLineAddress(
               this.oldRecord["street-address"]
             ),
@@ -448,14 +502,16 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
         break;
       case "address":
         data = ["address-level2", "address-level1", "postal-code"].map(
-          field => [this.oldRecord[field], this.newRecord[field]]
+          field => [field, this.oldRecord[field], this.newRecord[field]]
         );
         break;
       case "country":
       case "tel":
       case "email":
       case "organization":
-        data = [[this.oldRecord[field], this.newRecord[field]]];
+        data = [
+          [fieldName, this.oldRecord[fieldName], this.newRecord[fieldName]],
+        ];
         break;
     }
 
@@ -531,17 +587,22 @@ export class AddressSaveDoorhanger extends AutofillDoorhanger {
  * Address Update doorhanger and Address Save doorhanger have the same implementation.
  * The only difference is UI.
  */
-export class AddressUpdateDoorhanger extends AddressSaveDoorhanger {}
+export class AddressUpdateDoorhanger extends AddressSaveDoorhanger {
+  static telemetryObject = "update_doorhanger";
+}
 
 export class AddressEditDoorhanger extends AutofillDoorhanger {
-  constructor(browser, record) {
+  static telemetryType = AutofillTelemetry.ADDRESS;
+  static telemetryObject = "edit_doorhanger";
+
+  constructor(browser, record, flowId) {
     // Address edit dialog doesn't have "old" record
-    super(browser, null, record);
+    super(browser, null, record, flowId);
 
     this.country = record.country || FormAutofill.DEFAULT_REGION;
   }
 
-  // Address edit doorhanger has different layout
+  // Address edit doorhanger changes layout according to the country
   #layout = null;
   get layout() {
     if (this.#layout?.country != this.country) {
@@ -672,10 +733,10 @@ export class AddressEditDoorhanger extends AutofillDoorhanger {
     menuitem.setAttribute("value", "");
     menupopup.appendChild(menuitem);
 
-    for (const [regionCode] of this.layout.addressLevel1Options) {
+    for (const [regionCode, regionName] of this.layout.addressLevel1Options) {
       menuitem = this.doc.createXULElement("menuitem");
       menuitem.setAttribute("label", regionCode);
-      menuitem.setAttribute("value", regionCode);
+      menuitem.setAttribute("value", regionName);
       menupopup.appendChild(menuitem);
     }
 
@@ -719,12 +780,13 @@ export class AddressEditDoorhanger extends AutofillDoorhanger {
     div.appendChild(label);
 
     let input;
+    let popup;
     if ("street-address".includes(fieldName)) {
       input = this.doc.createElement("textarea");
       input.setAttribute("rows", 3);
     } else if (fieldName == "country") {
       input = this.doc.createXULElement("menulist");
-      const popup = this.#buildCountryMenupopup();
+      popup = this.#buildCountryMenupopup();
       popup.addEventListener("popuphidden", e => e.stopPropagation());
       input.appendChild(popup);
 
@@ -739,7 +801,7 @@ export class AddressEditDoorhanger extends AutofillDoorhanger {
       this.layout.addressLevel1Options
     ) {
       input = this.doc.createXULElement("menulist");
-      const popup = this.#buildAddressLevel1Menupopup();
+      popup = this.#buildAddressLevel1Menupopup();
       popup.addEventListener("popuphidden", e => e.stopPropagation());
       input.appendChild(popup);
     } else {
@@ -747,7 +809,19 @@ export class AddressEditDoorhanger extends AutofillDoorhanger {
     }
 
     input.setAttribute("id", AddressEditDoorhanger.getInputId(fieldName));
-    input.value = this.#getFieldDisplayData(fieldName) ?? null;
+
+    const value = this.#getFieldDisplayData(fieldName) ?? null;
+    if (popup) {
+      const menuitem = Array.from(popup.childNodes).find(
+        item =>
+          item.label.toLowerCase() === value?.toLowerCase() ||
+          item.value.toLowerCase() === value?.toLowerCase()
+      );
+      input.selectedItem = menuitem;
+    } else {
+      input.value = value;
+    }
+
     div.appendChild(input);
 
     return div;
@@ -815,7 +889,7 @@ CONTENT = {
         },
         {
           imgClass: "address-capture-img-email",
-          categories: ["tel", "email"],
+          categories: ["email", "tel"],
         },
       ],
     },
@@ -874,7 +948,7 @@ CONTENT = {
         },
         {
           imgClass: "address-capture-img-email",
-          categories: ["tel", "email"],
+          categories: ["email", "tel"],
         },
       ],
     },
@@ -926,7 +1000,7 @@ CONTENT = {
     footer: {
       mainAction: {
         l10nId: "address-capture-save-button",
-        callbackState: "edit",
+        callbackState: "save",
         confirmationHintId: "confirmation-hint-address-created",
       },
       secondaryActions: [
@@ -1235,9 +1309,15 @@ export let FormAutofillPrompter = {
     { descriptionIcon = null }
   ) {
     const telemetryType = AutofillTelemetry.CREDIT_CARD;
-    const isCapture = type.startsWith("add");
+    const telemetryObject = type.startsWith("add")
+      ? "capture_doorhanger"
+      : "update_doorhanger";
 
-    AutofillTelemetry.recordDoorhangerShown(telemetryType, flowId, isCapture);
+    AutofillTelemetry.recordDoorhangerShown(
+      telemetryType,
+      telemetryObject,
+      flowId
+    );
 
     lazy.log.debug("show doorhanger with type:", type);
     return new Promise(resolve => {
@@ -1310,18 +1390,15 @@ export let FormAutofillPrompter = {
         ...AutofillDoorhanger.createActions(
           mainAction,
           secondaryActions,
-          resolve
+          resolve,
+          { type: telemetryType, object: telemetryObject, flowId }
         ),
         options
       );
     }).then(({ state, confirmationHintId }) => {
-      AutofillTelemetry.recordDoorhangerClicked(
-        telemetryType,
-        state,
-        flowId,
-        isCapture
-      );
-      showConfirmation(browser, confirmationHintId);
+      if (confirmationHintId) {
+        showConfirmation(browser, confirmationHintId);
+      }
       return state;
     });
   },
@@ -1389,11 +1466,11 @@ export let FormAutofillPrompter = {
       return { state: "cancel" };
     }
 
-    const telemetryType = AutofillTelemetry.ADDRESS;
-    const isSave = !Object.keys(oldRecord).length;
-    AutofillTelemetry.recordDoorhangerShown(telemetryType, flowId, isSave);
+    const createNewRecord = !Object.keys(oldRecord).length;
 
-    lazy.log.debug(`show address ${isSave ? "save" : "update"} doorhanger`);
+    lazy.log.debug(
+      `show address ${createNewRecord ? "save" : "update"} doorhanger`
+    );
     const { ownerGlobal: chromeWin } = browser;
     await chromeWin.ensureCustomElements("moz-support-link");
     chromeWin.MozXULElement.insertFTLIfNeeded(
@@ -1402,6 +1479,7 @@ export let FormAutofillPrompter = {
 
     let recordToSave = newRecord;
     return new Promise(resolve => {
+      let doorhanger;
       const editAddressCb = async event => {
         const { state, editedRecord } = await this._showAddressEditDoorhanger(
           browser,
@@ -1409,30 +1487,33 @@ export let FormAutofillPrompter = {
           newRecord
         );
 
-        if (state == "edit") {
+        if (state == "save") {
           // If users choose "save" in the edit address doorhanger, we don't need
           // to show the save/update doorhanger after the edit address doorhanger
           // is closed
           recordToSave = editedRecord;
           chromeWin.PopupNotifications.remove(this._addrSaveDoorhanger);
           resolve({
-            state: isSave ? "create" : "update",
-            confimationHintId: null,
+            state: doorhanger.ui.footer.mainAction.callbackState,
+            confirmationHintId:
+              doorhanger.ui.footer.mainAction.confirmationHintId,
           });
         }
       };
 
-      const doorhanger = isSave
+      doorhanger = createNewRecord
         ? new AddressSaveDoorhanger(
             browser,
             oldRecord,
             newRecord,
+            flowId,
             editAddressCb
           )
         : new AddressUpdateDoorhanger(
             browser,
             oldRecord,
             newRecord,
+            flowId,
             editAddressCb
           );
 
@@ -1442,13 +1523,9 @@ export let FormAutofillPrompter = {
         }
       });
     }).then(({ state, confirmationHintId }) => {
-      AutofillTelemetry.recordDoorhangerClicked(
-        telemetryType,
-        state,
-        flowId,
-        isSave
-      );
-      showConfirmation(browser, confirmationHintId);
+      if (confirmationHintId) {
+        showConfirmation(browser, confirmationHintId);
+      }
       return { state, recordToSave };
     });
   },
@@ -1472,7 +1549,7 @@ export let FormAutofillPrompter = {
       // PopupNotifications.show
       this._addrSaveDoorhanger.options.neverShow = true;
 
-      const doorhanger = new AddressEditDoorhanger(browser, record);
+      const doorhanger = new AddressEditDoorhanger(browser, record, flowId);
       this._addrEditDoorhanger = doorhanger.show(resolve, state => {
         if (state == "showing") {
           chromeWin.PopupNotifications.suppressWhileOpen(doorhanger.panel);

@@ -84,25 +84,19 @@ const test = new SearchConfigTest({
         // Amazon.com ships to all of these locales, excluding the ones where
         // we ship other items, but it does not matter that they are duplicated
         // in the available list.
-        locales: {
-          matches: amazondotcomLocales,
-        },
+        locales: amazondotcomLocales,
       },
       {
         // Amazon.in
         regions: ["in"],
-        locales: {
-          matches: ["bn", "gu-IN", "kn", "mr", "pa-IN", "ta", "te", "ur"],
-        },
+        locales: ["bn", "gu-IN", "kn", "mr", "pa-IN", "ta", "te", "ur"],
       },
     ],
     excluded: [
       {
         // Extra special case for cn as that only ships to the one locale.
         regions: ["in"],
-        locales: {
-          matches: amazondotcomLocales,
-        },
+        locales: amazondotcomLocales,
       },
     ],
   },
@@ -179,9 +173,7 @@ const test = new SearchConfigTest({
       aliases: ["@amazon"],
       included: [
         {
-          locales: {
-            matches: amazondotcomLocales,
-          },
+          locales: amazondotcomLocales,
         },
       ],
       excluded: [{ regions: mainShippedRegions }],
@@ -219,9 +211,7 @@ const test = new SearchConfigTest({
         },
         {
           regions: ["be"],
-          locales: {
-            matches: ["fr"],
-          },
+          locales: ["fr"],
         },
       ],
       noSuggestionsURL: true,
@@ -232,9 +222,7 @@ const test = new SearchConfigTest({
       aliases: ["@amazon"],
       included: [
         {
-          locales: {
-            matches: ["bn", "gu-IN", "kn", "mr", "pa-IN", "ta", "te", "ur"],
-          },
+          locales: ["bn", "gu-IN", "kn", "mr", "pa-IN", "ta", "te", "ur"],
           regions: ["in"],
         },
       ],
@@ -273,9 +261,7 @@ const test = new SearchConfigTest({
       ],
       excluded: [
         {
-          locales: {
-            matches: ["fr"],
-          },
+          locales: ["fr"],
         },
       ],
       noSuggestionsURL: true,
@@ -304,12 +290,22 @@ add_task(async function test_searchConfig_amazon() {
 });
 
 add_task(async function test_searchConfig_amazon_pre89() {
-  AddonTestUtils.createAppInfo(
-    "xpcshell@tests.mozilla.org",
-    "XPCShell",
-    "88.0",
-    "88.0"
-  );
+  const version = "88.0";
+  if (SearchUtils.newSearchConfigEnabled) {
+    updateAppInfo({
+      name: "XPCShell",
+      ID: "xpcshell@tests.mozilla.org",
+      version,
+      platformVersion: version,
+    });
+  } else {
+    AddonTestUtils.createAppInfo(
+      "xpcshell@tests.mozilla.org",
+      "XPCShell",
+      version,
+      version
+    );
+  }
   // For pre-89, Amazon has a slightly different config.
   let details = test._config.details.find(
     d => d.telemetryId == "amazondotcom-us"
@@ -323,9 +319,7 @@ add_task(async function test_searchConfig_amazon_pre89() {
   );
   availableIn.push({
     regions: ["be"],
-    locales: {
-      matches: ["fr"],
-    },
+    locales: ["fr"],
   });
   // Due to the way the exclusions work, no Amazon present in nl/be in the
   // dot com locales for pre-89.

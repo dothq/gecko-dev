@@ -2,8 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsString.h"
+#include "AuthrsBridge_ffi.h"
 #include "WebAuthnResult.h"
+#include "nsIWebAuthnAttObj.h"
+#include "nsCOMPtr.h"
+#include "nsString.h"
 
 #ifdef MOZ_WIDGET_ANDROID
 namespace mozilla::jni {
@@ -39,8 +42,11 @@ NS_IMPL_ISUPPORTS(WebAuthnRegisterResult, nsIWebAuthnRegisterResult)
 
 NS_IMETHODIMP
 WebAuthnRegisterResult::GetClientDataJSON(nsACString& aClientDataJSON) {
-  aClientDataJSON = mClientDataJSON;
-  return NS_OK;
+  if (mClientDataJSON.isSome()) {
+    aClientDataJSON = *mClientDataJSON;
+    return NS_OK;
+  }
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP
@@ -60,6 +66,15 @@ NS_IMETHODIMP
 WebAuthnRegisterResult::GetTransports(nsTArray<nsString>& aTransports) {
   aTransports.Assign(mTransports);
   return NS_OK;
+}
+
+NS_IMETHODIMP
+WebAuthnRegisterResult::GetHmacCreateSecret(bool* aHmacCreateSecret) {
+  if (mHmacCreateSecret.isSome()) {
+    *aHmacCreateSecret = mHmacCreateSecret.ref();
+    return NS_OK;
+  }
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP
@@ -87,12 +102,36 @@ WebAuthnRegisterResult::GetAuthenticatorAttachment(
   return NS_ERROR_NOT_AVAILABLE;
 }
 
+nsresult WebAuthnRegisterResult::Anonymize() {
+  // The anonymize flag in the nsIWebAuthnAttObj constructor causes the
+  // attestation statement to be removed during deserialization. It also
+  // causes the AAGUID to be zeroed out. If we can't deserialize the
+  // existing attestation, then we can't ensure that it is anonymized, so we
+  // act as though the user denied consent and we return NotAllowed.
+  nsCOMPtr<nsIWebAuthnAttObj> anonymizedAttObj;
+  nsresult rv = authrs_webauthn_att_obj_constructor(
+      mAttestationObject,
+      /* anonymize */ true, getter_AddRefs(anonymizedAttObj));
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  mAttestationObject.Clear();
+  rv = anonymizedAttObj->GetAttestationObject(mAttestationObject);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+  return NS_OK;
+}
+
 NS_IMPL_ISUPPORTS(WebAuthnSignResult, nsIWebAuthnSignResult)
 
 NS_IMETHODIMP
 WebAuthnSignResult::GetClientDataJSON(nsACString& aClientDataJSON) {
-  aClientDataJSON = mClientDataJSON;
-  return NS_OK;
+  if (mClientDataJSON.isSome()) {
+    aClientDataJSON = *mClientDataJSON;
+    return NS_OK;
+  }
+  return NS_ERROR_NOT_AVAILABLE;
 }
 
 NS_IMETHODIMP
@@ -127,7 +166,17 @@ WebAuthnSignResult::GetUserName(nsACString& aUserName) {
 
 NS_IMETHODIMP
 WebAuthnSignResult::GetUsedAppId(bool* aUsedAppId) {
-  return NS_ERROR_NOT_AVAILABLE;
+  if (mUsedAppId.isNothing()) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+  *aUsedAppId = mUsedAppId.ref();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+WebAuthnSignResult::SetUsedAppId(bool aUsedAppId) {
+  mUsedAppId = Some(aUsedAppId);
+  return NS_OK;
 }
 
 NS_IMETHODIMP

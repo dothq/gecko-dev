@@ -10,6 +10,7 @@
 #include "nsHyphenationManager.h"
 #include "nsHyphenator.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/intl/LineBreaker.h"  // for LineBreaker::ComputeBreakPositions
 #include "mozilla/intl/Locale.h"
@@ -251,7 +252,7 @@ nsresult nsLineBreaker::AppendText(nsAtom* aHyphenationLanguage,
     NS_ASSERTION(!mAfterBreakableSpace && !mBreakHere,
                  "These should not be set");
 
-    while (offset < aLength && !IsSpace(aText[offset])) {
+    while (offset < aLength && !IsSegmentSpace(aText[offset])) {
       mCurrentWord.AppendElement(aText[offset]);
       if (!mCurrentWordMightBeBreakable &&
           !IsNonBreakableChar<char16_t>(aText[offset], mLegacyBehavior)) {
@@ -305,7 +306,7 @@ nsresult nsLineBreaker::AppendText(nsAtom* aHyphenationLanguage,
     offset = aLength;
     while (offset > start) {
       --offset;
-      if (IsSpace(aText[offset])) {
+      if (IsSegmentSpace(aText[offset])) {
         break;
       }
     }
@@ -322,7 +323,7 @@ nsresult nsLineBreaker::AppendText(nsAtom* aHyphenationLanguage,
 
   for (;;) {
     char16_t ch = aText[offset];
-    bool isSpace = IsSpace(ch);
+    bool isSpace = IsSegmentSpace(ch);
     bool isBreakableSpace = isSpace && !(aFlags & BREAK_SUPPRESS_INSIDE);
 
     if (aSink && !noBreaksNeeded) {
@@ -441,7 +442,7 @@ nsresult nsLineBreaker::AppendText(nsAtom* aHyphenationLanguage,
     NS_ASSERTION(!mAfterBreakableSpace && !mBreakHere,
                  "These should not be set");
 
-    while (offset < aLength && !IsSpace(aText[offset])) {
+    while (offset < aLength && !IsSegmentSpace(aText[offset])) {
       mCurrentWord.AppendElement(aText[offset]);
       if (!mCurrentWordMightBeBreakable &&
           !IsNonBreakableChar<uint8_t>(aText[offset], mLegacyBehavior)) {
@@ -485,7 +486,7 @@ nsresult nsLineBreaker::AppendText(nsAtom* aHyphenationLanguage,
     offset = aLength;
     while (offset > start) {
       --offset;
-      if (IsSpace(aText[offset])) {
+      if (IsSegmentSpace(aText[offset])) {
         break;
       }
     }
@@ -495,7 +496,7 @@ nsresult nsLineBreaker::AppendText(nsAtom* aHyphenationLanguage,
 
   for (;;) {
     uint8_t ch = aText[offset];
-    bool isSpace = IsSpace(ch);
+    bool isSpace = IsSegmentSpace(ch);
     bool isBreakableSpace = isSpace && !(aFlags & BREAK_SUPPRESS_INSIDE);
 
     if (aSink) {
@@ -571,8 +572,24 @@ void nsLineBreaker::UpdateCurrentWordLanguage(nsAtom* aHyphenationLanguage) {
   if (mCurrentWordLanguage && mCurrentWordLanguage != aHyphenationLanguage) {
     mCurrentWordContainsMixedLang = true;
     mScriptIsChineseOrJapanese = false;
-  } else {
-    if (aHyphenationLanguage && !mCurrentWordLanguage) {
+    return;
+  }
+
+  if (aHyphenationLanguage && !mCurrentWordLanguage) {
+    static mozilla::StaticRefPtr<nsAtom> sLastHyphenationLanguage;
+    static bool sLastScriptIsChineseOrJapanese = false;
+    static bool sInit = false;
+
+    if (!sInit) {
+      mozilla::ClearOnShutdown(&sLastHyphenationLanguage);
+      sInit = true;
+    }
+
+    if (sLastHyphenationLanguage == aHyphenationLanguage) {
+      MOZ_ASSERT(nsAtomString(sLastHyphenationLanguage)
+                     .Equals(nsAtomString(aHyphenationLanguage)));
+      mScriptIsChineseOrJapanese = sLastScriptIsChineseOrJapanese;
+    } else {
       Locale loc;
       auto result =
           LocaleParser::TryParse(nsAtomCString(aHyphenationLanguage), loc);
@@ -586,9 +603,12 @@ void nsLineBreaker::UpdateCurrentWordLanguage(nsAtom* aHyphenationLanguage) {
       mScriptIsChineseOrJapanese =
           loc.Script().EqualTo("Hans") || loc.Script().EqualTo("Hant") ||
           loc.Script().EqualTo("Jpan") || loc.Script().EqualTo("Hrkt");
+
+      sLastHyphenationLanguage = aHyphenationLanguage;
+      sLastScriptIsChineseOrJapanese = mScriptIsChineseOrJapanese;
     }
-    mCurrentWordLanguage = aHyphenationLanguage;
   }
+  mCurrentWordLanguage = aHyphenationLanguage;
 }
 
 nsresult nsLineBreaker::AppendInvisibleWhitespace(uint32_t aFlags) {

@@ -61,6 +61,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.ListIterator;
+import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
@@ -121,7 +122,7 @@ public class GeckoSession {
 
     private final int mRank;
 
-    private State(final int rank) {
+    State(final int rank) {
       mRank = rank;
     }
 
@@ -751,6 +752,11 @@ public class GeckoSession {
                     url -> {
                       if (url == null) {
                         throw new IllegalArgumentException("abort");
+                      }
+                      final String lowerCasedUri = url.toLowerCase(Locale.ROOT);
+                      if (lowerCasedUri.startsWith("http") || lowerCasedUri.startsWith("https")) {
+                        throw new IllegalArgumentException(
+                            "Unsupported URI scheme for an error page");
                       }
                       return url;
                     }));
@@ -2037,11 +2043,7 @@ public class GeckoSession {
     }
 
     private static boolean equals(final Object a, final Object b) {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-        return Objects.equals(a, b);
-      }
-
-      return (a == b) || (a != null && a.equals(b));
+      return Objects.equals(a, b);
     }
 
     @Override
@@ -2710,18 +2712,12 @@ public class GeckoSession {
           return false;
         }
 
-        if (mIndex >= mState.getHistoryEntries().length) {
-          return false;
-        }
-        return true;
+        return mIndex < mState.getHistoryEntries().length;
       }
 
       @Override /* ListIterator */
       public boolean hasPrevious() {
-        if (mIndex <= 0) {
-          return false;
-        }
-        return true;
+        return mIndex > 0;
       }
 
       @Override /* ListIterator */
@@ -3049,6 +3045,32 @@ public class GeckoSession {
     final GeckoBundle bundle = new GeckoBundle(1);
     bundle.putString("url", url);
     return mEventDispatcher.queryString("GeckoView:PollForAnalysisCompleted", bundle);
+  }
+
+  /**
+   * Send a click event to the Ad Attribution API.
+   *
+   * @param aid Ad id of the recommended product.
+   * @return a {@link GeckoResult} result of whether or not sending the event was successful.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<Boolean> sendClickAttributionEvent(@NonNull final String aid) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("aid", aid);
+    return mEventDispatcher.queryBoolean("GeckoView:SendClickAttributionEvent", bundle);
+  }
+
+  /**
+   * Send an impression event to the Ad Attribution API.
+   *
+   * @param aid Ad id of the recommended product.
+   * @return a {@link GeckoResult} result of whether or not sending the event was successful.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<Boolean> sendImpressionAttributionEvent(@NonNull final String aid) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("aid", aid);
+    return mEventDispatcher.queryBoolean("GeckoView:SendImpressionAttributionEvent", bundle);
   }
 
   /**
@@ -3426,7 +3448,7 @@ public class GeckoSession {
 
   public interface ProgressDelegate {
     /** Class representing security information for a site. */
-    public class SecurityInformation {
+    class SecurityInformation {
       @Retention(RetentionPolicy.SOURCE)
       @IntDef({SECURITY_MODE_UNKNOWN, SECURITY_MODE_IDENTIFIED, SECURITY_MODE_VERIFIED})
       public @interface SecurityMode {}
@@ -3625,6 +3647,9 @@ public class GeckoSession {
     /** Boolean indicating if the page is not supported. */
     public final boolean pageNotSupported;
 
+    /** Boolean indicating if there are not enough reviews. */
+    public final boolean notEnoughReviews;
+
     /** Object containing highlights for product. */
     @Nullable public final Highlight highlights;
 
@@ -3644,6 +3669,7 @@ public class GeckoSession {
       adjustedRating = message.getDoubleObject("adjusted_rating");
       needsAnalysis = message.getBoolean("needs_analysis");
       pageNotSupported = message.getBoolean("page_not_supported");
+      notEnoughReviews = message.getBoolean("not_enough_reviews");
       if (message.getBundle("highlights") == null) {
         highlights = null;
       } else {
@@ -3666,6 +3692,7 @@ public class GeckoSession {
       grade = builder.mGrade;
       needsAnalysis = builder.mNeedsAnalysis;
       pageNotSupported = builder.mPageNotSupported;
+      notEnoughReviews = builder.mNotEnoughReviews;
       highlights = builder.mHighlights;
       lastAnalysisTime = builder.mLastAnalysisTime;
       deletedProduct = builder.mDeletedProduct;
@@ -3680,6 +3707,7 @@ public class GeckoSession {
       /* package */ Double mAdjustedRating = 0.0;
       /* package */ Boolean mNeedsAnalysis = false;
       /* package */ Boolean mPageNotSupported = false;
+      /* package */ Boolean mNotEnoughReviews = false;
       /* package */ Highlight mHighlights = new Highlight();
       /* package */ long mLastAnalysisTime = 0;
       /* package */ Boolean mDeletedProductReported = false;
@@ -3768,6 +3796,19 @@ public class GeckoSession {
       }
 
       /**
+       * Set the flag that indicates whether there are not enough reviews
+       *
+       * @param notEnoughReviews indicates whether there are not enough reviews
+       * @return This Builder instance.
+       */
+      @AnyThread
+      public @NonNull ReviewAnalysis.Builder notEnoughReviews(
+          final @NonNull Boolean notEnoughReviews) {
+        mNotEnoughReviews = notEnoughReviews;
+        return this;
+      }
+
+      /**
        * Set an empty highlights object for the product
        *
        * @param highlight A Highlight object (can be null) to overwrite the default empty Highlight
@@ -3846,7 +3887,7 @@ public class GeckoSession {
         quality = message.getStringArray("quality");
         price = message.getStringArray("price");
         shipping = message.getStringArray("shipping");
-        appearance = message.getStringArray("appearance");
+        appearance = message.getStringArray("packaging/appearance");
         competitiveness = message.getStringArray("competitiveness");
       }
 
@@ -4145,7 +4186,7 @@ public class GeckoSession {
     default void onProductUrl(@NonNull final GeckoSession session) {}
 
     /** Element details for onContextMenu callbacks. */
-    public static class ContextElement {
+    class ContextElement {
       @Retention(RetentionPolicy.SOURCE)
       @IntDef({TYPE_NONE, TYPE_IMAGE, TYPE_VIDEO, TYPE_AUDIO})
       public @interface Type {}
@@ -4415,48 +4456,48 @@ public class GeckoSession {
 
   public interface SelectionActionDelegate {
     /** The selection is collapsed at a single position. */
-    final int FLAG_IS_COLLAPSED = 1 << 0;
+    int FLAG_IS_COLLAPSED = 1 << 0;
 
     /**
      * The selection is inside editable content such as an input element or contentEditable node.
      */
-    final int FLAG_IS_EDITABLE = 1 << 1;
+    int FLAG_IS_EDITABLE = 1 << 1;
 
     /** The selection is inside a password field. */
-    final int FLAG_IS_PASSWORD = 1 << 2;
+    int FLAG_IS_PASSWORD = 1 << 2;
 
     /** Hide selection actions and cause {@link #onHideAction} to be called. */
-    final String ACTION_HIDE = "org.mozilla.geckoview.HIDE";
+    String ACTION_HIDE = "org.mozilla.geckoview.HIDE";
 
     /** Copy onto the clipboard then delete the selected content. Selection must be editable. */
-    final String ACTION_CUT = "org.mozilla.geckoview.CUT";
+    String ACTION_CUT = "org.mozilla.geckoview.CUT";
 
     /** Copy the selected content onto the clipboard. */
-    final String ACTION_COPY = "org.mozilla.geckoview.COPY";
+    String ACTION_COPY = "org.mozilla.geckoview.COPY";
 
     /** Delete the selected content. Selection must be editable. */
-    final String ACTION_DELETE = "org.mozilla.geckoview.DELETE";
+    String ACTION_DELETE = "org.mozilla.geckoview.DELETE";
 
     /** Replace the selected content with the clipboard content. Selection must be editable. */
-    final String ACTION_PASTE = "org.mozilla.geckoview.PASTE";
+    String ACTION_PASTE = "org.mozilla.geckoview.PASTE";
 
     /**
      * Replace the selected content with the clipboard content as plain text. Selection must be
      * editable.
      */
-    final String ACTION_PASTE_AS_PLAIN_TEXT = "org.mozilla.geckoview.PASTE_AS_PLAIN_TEXT";
+    String ACTION_PASTE_AS_PLAIN_TEXT = "org.mozilla.geckoview.PASTE_AS_PLAIN_TEXT";
 
     /** Select the entire content of the document or editor. */
-    final String ACTION_SELECT_ALL = "org.mozilla.geckoview.SELECT_ALL";
+    String ACTION_SELECT_ALL = "org.mozilla.geckoview.SELECT_ALL";
 
     /** Clear the current selection. Selection must not be editable. */
-    final String ACTION_UNSELECT = "org.mozilla.geckoview.UNSELECT";
+    String ACTION_UNSELECT = "org.mozilla.geckoview.UNSELECT";
 
     /** Collapse the current selection to its start position. Selection must be editable. */
-    final String ACTION_COLLAPSE_TO_START = "org.mozilla.geckoview.COLLAPSE_TO_START";
+    String ACTION_COLLAPSE_TO_START = "org.mozilla.geckoview.COLLAPSE_TO_START";
 
     /** Collapse the current selection to its end position. Selection must be editable. */
-    final String ACTION_COLLAPSE_TO_END = "org.mozilla.geckoview.COLLAPSE_TO_END";
+    String ACTION_COLLAPSE_TO_END = "org.mozilla.geckoview.COLLAPSE_TO_END";
 
     /** Represents attributes of a selection. */
     class Selection {
@@ -4666,20 +4707,20 @@ public class GeckoSession {
         @NonNull final GeckoSession session, @NonNull final Selection selection) {}
 
     /** Actions are no longer available due to the user clearing the selection. */
-    final int HIDE_REASON_NO_SELECTION = 0;
+    int HIDE_REASON_NO_SELECTION = 0;
 
     /**
      * Actions are no longer available due to the user moving the selection out of view. Previous
      * actions are still available after a callback with this reason.
      */
-    final int HIDE_REASON_INVISIBLE_SELECTION = 1;
+    int HIDE_REASON_INVISIBLE_SELECTION = 1;
 
     /**
      * Actions are no longer available due to the user actively changing the selection. {@link
      * #onShowActionRequest} may be called again once the user has set a selection, if the new
      * selection has available actions.
      */
-    final int HIDE_REASON_ACTIVE_SELECTION = 2;
+    int HIDE_REASON_ACTIVE_SELECTION = 2;
 
     /**
      * Actions are no longer available due to the user actively scrolling the page. {@link
@@ -4687,7 +4728,7 @@ public class GeckoSession {
      * the selection is still visible. Until then, previous actions are still available after a
      * callback with this reason.
      */
-    final int HIDE_REASON_ACTIVE_SCROLL = 3;
+    int HIDE_REASON_ACTIVE_SCROLL = 3;
 
     /**
      * Previous actions are no longer available due to the user interacting with the page.
@@ -4708,7 +4749,7 @@ public class GeckoSession {
     int PERMISSION_CLIPBOARD_READ = 1;
 
     /** Represents attributes of a clipboard permission. */
-    public class ClipboardPermission {
+    class ClipboardPermission {
       /** The URI associated with this content permission. */
       public final @NonNull String uri;
 
@@ -4832,16 +4873,16 @@ public class GeckoSession {
     @UiThread
     default void onCanGoForward(@NonNull final GeckoSession session, final boolean canGoForward) {}
 
-    public static final int TARGET_WINDOW_NONE = 0;
-    public static final int TARGET_WINDOW_CURRENT = 1;
-    public static final int TARGET_WINDOW_NEW = 2;
+    int TARGET_WINDOW_NONE = 0;
+    int TARGET_WINDOW_CURRENT = 1;
+    int TARGET_WINDOW_NEW = 2;
 
     // Match with nsIWebNavigation.idl.
     /** The load request was triggered by an HTTP redirect. */
-    static final int LOAD_REQUEST_IS_REDIRECT = 0x800000;
+    int LOAD_REQUEST_IS_REDIRECT = 0x800000;
 
     /** Load request details. */
-    public static class LoadRequest {
+    class LoadRequest {
       /* package */ LoadRequest(
           @NonNull final String uri,
           @Nullable final String triggerUri,
@@ -4982,9 +5023,9 @@ public class GeckoSession {
      * @param session The GeckoSession that initiated the callback.
      * @param uri The URI that failed to load.
      * @param error A WebRequestError containing details about the error
-     * @return A URI to display as an error. Returning null will halt the load entirely. The
-     *     following special methods are made available to the URI: -
-     *     document.addCertException(isTemporary), returns Promise -
+     * @return A URI to display as an error (cannot be http/https). Returning null or http/https URL
+     *     will halt the load entirely. The following special methods are made available to the URI:
+     *     - document.addCertException(isTemporary), returns Promise -
      *     document.getFailedCertSecurityInfo(), returns FailedCertSecurityInfo -
      *     document.getNetErrorInfo(), returns NetErrorInfo document.reloadWithHttpsOnlyException()
      * @see <a
@@ -5017,7 +5058,7 @@ public class GeckoSession {
    */
   public interface PromptDelegate {
     /** PromptResponse is an opaque class created upon confirming or dismissing a prompt. */
-    public class PromptResponse {
+    class PromptResponse {
       private final BasePrompt mPrompt;
 
       /* package */ PromptResponse(@NonNull final BasePrompt prompt) {
@@ -5061,7 +5102,7 @@ public class GeckoSession {
     }
 
     // Prompt classes.
-    public class BasePrompt {
+    class BasePrompt {
       private boolean mIsCompleted;
       private boolean mIsConfirmed;
       private GeckoBundle mResult;
@@ -5225,7 +5266,7 @@ public class GeckoSession {
      * AlertPrompt contains the information necessary to represent a JavaScript alert() call from
      * content; it can only be dismissed, not confirmed.
      */
-    public class AlertPrompt extends BasePrompt {
+    class AlertPrompt extends BasePrompt {
       /** The message to be displayed with this alert; may be null. */
       public final @Nullable String message;
 
@@ -5240,7 +5281,7 @@ public class GeckoSession {
     }
 
     /** Contains all the Identity credential prompts (FedCM) */
-    public final class IdentityCredential {
+    final class IdentityCredential {
       /**
        * ProviderSelectorPrompt contains the information necessary to represent a prompt that allows
        * the user to select the identity credential provider they would like to use.
@@ -5558,7 +5599,7 @@ public class GeckoSession {
      * ButtonPrompt contains the information necessary to represent a JavaScript confirm() call from
      * content.
      */
-    public class ButtonPrompt extends BasePrompt {
+    class ButtonPrompt extends BasePrompt {
       @Retention(RetentionPolicy.SOURCE)
       @IntDef({Type.POSITIVE, Type.NEGATIVE})
       public @interface ButtonType {}
@@ -5603,7 +5644,7 @@ public class GeckoSession {
      * TextPrompt contains the information necessary to represent a Javascript prompt() call from
      * content.
      */
-    public class TextPrompt extends BasePrompt {
+    class TextPrompt extends BasePrompt {
       /** The message to be displayed with this prompt; may be null. */
       public final @Nullable String message;
 
@@ -5639,7 +5680,7 @@ public class GeckoSession {
      * AuthPrompt contains the information necessary to represent an HTML authorization prompt
      * generated by content.
      */
-    public class AuthPrompt extends BasePrompt {
+    class AuthPrompt extends BasePrompt {
       public static class AuthOptions {
         @Retention(RetentionPolicy.SOURCE)
         @IntDef(
@@ -5775,7 +5816,7 @@ public class GeckoSession {
      * ChoicePrompt contains the information necessary to display a menu or list prompt generated by
      * content.
      */
-    public class ChoicePrompt extends BasePrompt {
+    class ChoicePrompt extends BasePrompt {
       public static class Choice {
         /**
          * A boolean indicating if the item is disabled. Item should not be selectable if this is
@@ -5945,7 +5986,7 @@ public class GeckoSession {
      * ColorPrompt contains the information necessary to represent a prompt for color input
      * generated by content.
      */
-    public class ColorPrompt extends BasePrompt {
+    class ColorPrompt extends BasePrompt {
       /** The default value supplied by content. */
       public final @Nullable String defaultValue;
 
@@ -5981,7 +6022,7 @@ public class GeckoSession {
      * DateTimePrompt contains the information necessary to represent a prompt for date and/or time
      * input generated by content.
      */
-    public class DateTimePrompt extends BasePrompt {
+    class DateTimePrompt extends BasePrompt {
       @Retention(RetentionPolicy.SOURCE)
       @IntDef({Type.DATE, Type.MONTH, Type.WEEK, Type.TIME, Type.DATETIME_LOCAL})
       public @interface DatetimeType {}
@@ -6066,7 +6107,7 @@ public class GeckoSession {
      * FilePrompt contains the information necessary to represent a prompt for a file or files
      * generated by content.
      */
-    public class FilePrompt extends BasePrompt {
+    class FilePrompt extends BasePrompt {
       @Retention(RetentionPolicy.SOURCE)
       @IntDef({Type.SINGLE, Type.MULTIPLE})
       public @interface FileType {}
@@ -6210,7 +6251,7 @@ public class GeckoSession {
     }
 
     /** PopupPrompt contains the information necessary to represent a popup blocking request. */
-    public class PopupPrompt extends BasePrompt {
+    class PopupPrompt extends BasePrompt {
       /** The target URI for the popup; may be null. */
       public final @Nullable String targetUri;
 
@@ -6231,17 +6272,14 @@ public class GeckoSession {
        */
       @UiThread
       public @NonNull PromptResponse confirm(@NonNull final AllowOrDeny response) {
-        boolean res = false;
-        if (AllowOrDeny.ALLOW == response) {
-          res = true;
-        }
+        final boolean res = AllowOrDeny.ALLOW == response;
         ensureResult().putBoolean("response", res);
         return super.confirm();
       }
     }
 
     /** SharePrompt contains the information necessary to represent a (v1) WebShare request. */
-    public class SharePrompt extends BasePrompt {
+    class SharePrompt extends BasePrompt {
       @Retention(RetentionPolicy.SOURCE)
       @IntDef({Result.SUCCESS, Result.FAILURE, Result.ABORT})
       public @interface ShareResult {}
@@ -6304,7 +6342,7 @@ public class GeckoSession {
     }
 
     /** Request containing information required to resolve Autocomplete prompt requests. */
-    public class AutocompleteRequest<T extends Autocomplete.Option<?>> extends BasePrompt {
+    class AutocompleteRequest<T extends Autocomplete.Option<?>> extends BasePrompt {
       /**
        * The Autocomplete options for this request. This can contain a single or multiple entries.
        */
@@ -6926,8 +6964,8 @@ public class GeckoSession {
     int PERMISSION_TRACKING = 7;
 
     /**
-     * Permission for third party frames to access first party cookies and storage. May be granted
-     * heuristically in some cases.
+     * Permission for third party frames to access first party cookies. May be granted heuristically
+     * in some cases.
      */
     int PERMISSION_STORAGE_ACCESS = 8;
 
@@ -6999,6 +7037,11 @@ public class GeckoSession {
           // Storage access permissions are stored with the key "3rdPartyStorage^https://foo.com"
           // where the third party origin is "https://foo.com".
           this.thirdPartyOrigin = permission.substring(16);
+        } else if (permission.startsWith("3rdPartyFrameStorage^")) {
+          // Storage access permissions may also be stored with the key
+          // "3rdPartyFrameStorage^https://foo.com" where the third party
+          // origin is "https://foo.com".
+          this.thirdPartyOrigin = permission.substring(21);
         } else {
           this.thirdPartyOrigin = bundle.getString("thirdPartyOrigin");
         }
@@ -7056,7 +7099,9 @@ public class GeckoSession {
           return PERMISSION_MEDIA_KEY_SYSTEM_ACCESS;
         } else if ("trackingprotection".equals(type) || "trackingprotection-pb".equals(type)) {
           return PERMISSION_TRACKING;
-        } else if ("storage-access".equals(type) || type.startsWith("3rdPartyStorage^")) {
+        } else if ("storage-access".equals(type)
+            || type.startsWith("3rdPartyStorage^")
+            || type.startsWith("3rdPartyFrameStorage^")) {
           return PERMISSION_STORAGE_ACCESS;
         } else {
           return -1;
@@ -7863,7 +7908,7 @@ public class GeckoSession {
   /** An interface for recording new history visits and fetching the visited status for links. */
   public interface HistoryDelegate {
     /** A representation of an entry in browser history. */
-    public interface HistoryItem {
+    interface HistoryItem {
       /**
        * Get the URI of this history element.
        *
@@ -7890,7 +7935,7 @@ public class GeckoSession {
      * A representation of browser history, accessible as a `List`. The list itself and its entries
      * are immutable; any attempt to mutate will result in an `UnsupportedOperationException`.
      */
-    public interface HistoryList extends List<HistoryItem> {
+    interface HistoryList extends List<HistoryItem> {
       /**
        * Get the current index in browser history.
        *
@@ -7908,22 +7953,22 @@ public class GeckoSession {
     // should be kept in sync with `GeckoViewHistory::GeckoViewVisitFlags`.
 
     /** The URL was visited a top-level window. */
-    final int VISIT_TOP_LEVEL = 1 << 0;
+    int VISIT_TOP_LEVEL = 1 << 0;
 
     /** The URL is the target of a temporary redirect. */
-    final int VISIT_REDIRECT_TEMPORARY = 1 << 1;
+    int VISIT_REDIRECT_TEMPORARY = 1 << 1;
 
     /** The URL is the target of a permanent redirect. */
-    final int VISIT_REDIRECT_PERMANENT = 1 << 2;
+    int VISIT_REDIRECT_PERMANENT = 1 << 2;
 
     /** The URL is temporarily redirected to another URL. */
-    final int VISIT_REDIRECT_SOURCE = 1 << 3;
+    int VISIT_REDIRECT_SOURCE = 1 << 3;
 
     /** The URL is permanently redirected to another URL. */
-    final int VISIT_REDIRECT_SOURCE_PERMANENT = 1 << 4;
+    int VISIT_REDIRECT_SOURCE_PERMANENT = 1 << 4;
 
     /** The URL failed to load due to a client or server error. */
-    final int VISIT_UNRECOVERABLE_ERROR = 1 << 5;
+    int VISIT_UNRECOVERABLE_ERROR = 1 << 5;
 
     /**
      * Records a visit to a page.

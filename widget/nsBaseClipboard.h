@@ -40,21 +40,19 @@ class nsBaseClipboard : public nsIClipboard {
   NS_IMETHOD SetData(nsITransferable* aTransferable, nsIClipboardOwner* aOwner,
                      int32_t aWhichClipboard) override final;
   NS_IMETHOD AsyncSetData(int32_t aWhichClipboard,
-                          nsIAsyncSetClipboardDataCallback* aCallback,
+                          nsIAsyncClipboardRequestCallback* aCallback,
                           nsIAsyncSetClipboardData** _retval) override final;
   NS_IMETHOD GetData(nsITransferable* aTransferable,
                      int32_t aWhichClipboard) override final;
+  NS_IMETHOD AsyncGetData(
+      const nsTArray<nsCString>& aFlavorList, int32_t aWhichClipboard,
+      nsIAsyncClipboardGetCallback* aCallback) override final;
   NS_IMETHOD EmptyClipboard(int32_t aWhichClipboard) override final;
   NS_IMETHOD HasDataMatchingFlavors(const nsTArray<nsCString>& aFlavorList,
                                     int32_t aWhichClipboard,
                                     bool* aOutResult) override final;
   NS_IMETHOD IsClipboardTypeSupported(int32_t aWhichClipboard,
                                       bool* aRetval) override final;
-  RefPtr<mozilla::GenericPromise> AsyncGetData(
-      nsITransferable* aTransferable, int32_t aWhichClipboard) override final;
-  RefPtr<DataFlavorsPromise> AsyncHasDataMatchingFlavors(
-      const nsTArray<nsCString>& aFlavorList,
-      int32_t aWhichClipboard) override final;
 
   using GetDataCallback = mozilla::MoveOnlyFunction<void(nsresult)>;
   using HasMatchingFlavorsCallback = mozilla::MoveOnlyFunction<void(
@@ -91,7 +89,7 @@ class nsBaseClipboard : public nsIClipboard {
     NS_DECL_NSIASYNCSETCLIPBOARDDATA
 
     AsyncSetClipboardData(int32_t aClipboardType, nsBaseClipboard* aClipboard,
-                          nsIAsyncSetClipboardDataCallback* aCallback);
+                          nsIAsyncClipboardRequestCallback* aCallback);
 
    private:
     virtual ~AsyncSetClipboardData() = default;
@@ -110,7 +108,34 @@ class nsBaseClipboard : public nsIClipboard {
     nsBaseClipboard* mClipboard;
     // mCallback will be nullified once the callback is notified to ensure the
     // callback is only notified once.
-    nsCOMPtr<nsIAsyncSetClipboardDataCallback> mCallback;
+    nsCOMPtr<nsIAsyncClipboardRequestCallback> mCallback;
+  };
+
+  class AsyncGetClipboardData final : public nsIAsyncGetClipboardData {
+   public:
+    AsyncGetClipboardData(int32_t aClipboardType, int32_t aSequenceNumber,
+                          nsTArray<nsCString>&& aFlavors, bool aFromCache,
+                          nsBaseClipboard* aClipboard);
+
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIASYNCGETCLIPBOARDDATA
+
+   private:
+    virtual ~AsyncGetClipboardData() = default;
+    bool IsValid();
+
+    // The clipboard type defined in nsIClipboard.
+    const int32_t mClipboardType;
+    // The sequence number associated with the clipboard content for this
+    // request. If it doesn't match with the current sequence number in system
+    // clipboard, this request targets stale data and is deemed invalid.
+    const int32_t mSequenceNumber;
+    // List of available data types for clipboard content.
+    const nsTArray<nsCString> mFlavors;
+    // Data should be read from cache.
+    const bool mFromCache;
+    // This is also used to indicate whether this request is still valid.
+    RefPtr<nsBaseClipboard> mClipboard;
   };
 
   class ClipboardCache final {
@@ -136,12 +161,18 @@ class nsBaseClipboard : public nsIClipboard {
     nsITransferable* GetTransferable() const { return mTransferable; }
     nsIClipboardOwner* GetClipboardOwner() const { return mClipboardOwner; }
     int32_t GetSequenceNumber() const { return mSequenceNumber; }
+    nsresult GetData(nsITransferable* aTransferable) const;
 
    private:
     nsCOMPtr<nsITransferable> mTransferable;
     nsCOMPtr<nsIClipboardOwner> mClipboardOwner;
     int32_t mSequenceNumber = -1;
   };
+
+  void MaybeRetryGetAvailableFlavors(const nsTArray<nsCString>& aFlavorList,
+                                     int32_t aWhichClipboard,
+                                     nsIAsyncClipboardGetCallback* aCallback,
+                                     int32_t aRetryCount);
 
   // Return clipboard cache if the cached data is valid, otherwise clear the
   // cached data and returns null.

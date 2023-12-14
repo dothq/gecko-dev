@@ -44,7 +44,7 @@ skip-if = ["os != 'mac'"] # Mac-only functionality
 ["browser_bookmarkProperties_speculativeConnection.js"]
 
 ["browser_bookmarkProperties_xulStore.js"]
-fail-if = ["a11y_checks"] # Bug 1854443 tree#bookmarks-view may not be labeled
+skip-if = ["a11y_checks"] # Bugs 1854443 and 1858041 to investigate intermittent a11y_checks results
 
 ["browser_bookmark_add_tags.js"]
 https_first_disabled = true
@@ -216,7 +216,6 @@ fail-if = ["a11y_checks"] # Bug 1854443 tree#bookmarks-view and tree#historyTree
 ["browser_stayopenmenu.js"]
 
 ["browser_toolbar_drop_bookmarklet.js"]
-skip-if = ["a11y_checks"] # Bug 1849230 for causing crashes
 
 ["browser_toolbar_drop_multiple_flavors.js"]
 

@@ -21,6 +21,11 @@
 
 pref("browser.hiddenWindowChromeURL", "chrome://browser/content/hiddenWindowMac.xhtml");
 
+// Set add-ons abuse report related prefs specific to Firefox Desktop.
+pref("extensions.abuseReport.enabled", true);
+pref("extensions.abuseReport.amWebAPI.enabled", true);
+pref("extensions.abuseReport.amoFormEnabled", true);
+
 // Enables some extra Extension System Logging (can reduce performance)
 pref("extensions.logging.enabled", false);
 
@@ -293,6 +298,9 @@ pref("browser.shell.checkDefaultPDF.silencedByUser", false);
 // URL to navigate to when launching Firefox after accepting the Windows Default
 // Browser Agent "Set Firefox as default" call to action.
 pref("browser.shell.defaultBrowserAgent.thanksURL", "https://www.mozilla.org/%LOCALE%/firefox/set-as-default/thanks/");
+// Whether or not we want to run through the early startup idle task
+// which registers the firefox and firefox-private registry keys.
+pref("browser.shell.customProtocolsRegistered", false);
 #endif
 
 
@@ -471,6 +479,18 @@ pref("browser.urlbar.suggest.quicksuggest.sponsored", false, sticky);
 // with their various default-branch values, the user is enrolled in over time.
 pref("browser.urlbar.quicksuggest.dataCollection.enabled", false, sticky);
 
+// Whether the Firefox Suggest contextual opt-in result is enabled. If true,
+// this implicitly disables shouldShowOnboardingDialog.
+pref("browser.urlbar.quicksuggest.contextualOptIn", false);
+
+// Controls which variant of the copy is used for the Firefox Suggest
+// contextual opt-in result.
+pref("browser.urlbar.quicksuggest.contextualOptIn.sayHello", false);
+
+// Controls whether the Firefox Suggest contextual opt-in result appears at
+// the top of results or at the bottom, after one-off buttons.
+pref("browser.urlbar.quicksuggest.contextualOptIn.topPosition", true);
+
 // Whether the quick suggest feature in the urlbar is enabled.
 pref("browser.urlbar.quicksuggest.enabled", false);
 
@@ -518,7 +538,11 @@ pref("browser.urlbar.maxCharsForSearchSuggestions", 100);
 
 pref("browser.urlbar.trimURLs", true);
 
+#ifdef NIGHTLY_BUILD
+pref("browser.urlbar.trimHttps", true);
+#else
 pref("browser.urlbar.trimHttps", false);
+#endif
 
 // If changed to true, copying the entire URL from the location bar will put the
 // human readable (percent-decoded) URL on the clipboard.
@@ -744,7 +768,7 @@ pref("browser.shopping.experience2023.ads.enabled", false);
 // Activates the ad card in the shopping sidebar.
 // Unlike `browser.shopping.experience2023.ads.enabled`, this pref is controlled by users
 // using the visible toggle.
-pref("browser.shopping.experience2023.ads.userEnabled", false);
+pref("browser.shopping.experience2023.ads.userEnabled", true);
 
 // Saves if shopping survey is enabled.
 pref("browser.shopping.experience2023.survey.enabled", true);
@@ -1020,7 +1044,7 @@ pref("privacy.panicButton.enabled",         true);
 // Time until temporary permissions expire, in ms
 pref("privacy.temporary_permission_expire_time_ms",  3600000);
 
-// Enables protection mechanism against password spoofing for cross domain auh requests
+// Enables protection mechanism against password spoofing for cross domain auth requests
 // See bug 791594
 pref("privacy.authPromptSpoofingProtection",         true);
 
@@ -1583,11 +1607,7 @@ pref("browser.topsites.contile.enabled", true);
 pref("browser.topsites.contile.endpoint", "https://contile.services.mozilla.com/v1/tiles");
 
 // Whether to enable the Share-of-Voice feature for Sponsored Topsites via Contile.
-#if defined(EARLY_BETA_OR_EARLIER)
-  pref("browser.topsites.contile.sov.enabled", true);
-#else
-  pref("browser.topsites.contile.sov.enabled", false);
-#endif
+pref("browser.topsites.contile.sov.enabled", true);
 
 // The base URL for the Quick Suggest anonymizing proxy. To make a request to
 // the proxy, include a campaign ID in the path.
@@ -1779,8 +1799,13 @@ pref("security.app_menu.recordEventTelemetry", true);
 pref("security.mixed_content.block_active_content", true);
 
 // Show "Not Secure" text for http pages; disabled for now
+#ifdef NIGHTLY_BUILD
+pref("security.insecure_connection_text.enabled", true);
+pref("security.insecure_connection_text.pbmode.enabled", true);
+#else
 pref("security.insecure_connection_text.enabled", false);
 pref("security.insecure_connection_text.pbmode.enabled", false);
+#endif
 
 // If this turns true, Moz*Gesture events are not called stopPropagation()
 // before content.
@@ -1854,6 +1879,11 @@ pref("identity.fxaccounts.commands.missed.fetch_interval", 86400);
 #ifdef MOZ_WIDEVINE_EME
   pref("media.gmp-widevinecdm.visible", true);
   pref("media.gmp-widevinecdm.enabled", true);
+#ifdef MOZ_WMF_CDM
+  pref("media.gmp-widevinecdm-l1.visible", false);
+  pref("media.gmp-widevinecdm-l1.enabled", false);
+  pref("media.gmp-widevinecdm-l1.forceInstall", false);
+#endif
 #endif
 
 pref("media.gmp-gmpopenh264.visible", true);
@@ -1913,8 +1943,6 @@ pref("privacy.trackingprotection.fingerprinting.enabled", true);
 pref("privacy.trackingprotection.cryptomining.enabled", true);
 
 pref("browser.contentblocking.database.enabled", true);
-
-pref("dom.storage_access.frame_only", true);
 
 // Enable URL query stripping in Nightly.
 #ifdef NIGHTLY_BUILD
@@ -2026,8 +2054,7 @@ pref("browser.vpn_promo.enabled", true);
 // Only show vpn card to certain regions. Comma separated string of two letter ISO 3166-1 country codes.
 // The most recent list of supported countries can be found at https://support.mozilla.org/en-US/kb/mozilla-vpn-countries-available-subscribe
 // The full list of supported country codes can also be found at https://github.com/mozilla/bedrock/search?q=VPN_COUNTRY_CODES
-pref("browser.contentblocking.report.vpn_regions", "as,at,be,ca,ch,de,es,fi,fr,gb,gg,ie,im,io,it,je,mp,my,nl,nz,pr,se,sg,uk,um,us,vg,vi"
-);
+pref("browser.contentblocking.report.vpn_regions", "ca,my,nz,sg,gb,gg,im,io,je,uk,vg,as,mp,pr,um,us,vi,de,fr,at,be,ch,es,it,ie,nl,se,fi,bg,cy,cz,dk,ee,hr,hu,lt,lu,lv,mt,pl,pt,ro,si,sk");
 
 // Avoid advertising Focus in certain regions.  Comma separated string of two letter
 // ISO 3166-1 country codes.
@@ -2116,6 +2143,12 @@ pref("privacy.webrtc.deviceGracePeriodTimeoutMs", 3600000);
 
 // Enable Fingerprinting Protection in private windows..
 pref("privacy.fingerprintingProtection.pbmode", true);
+
+// Enable including the content in the window title.
+// PBM users might want to disable this to avoid a possible source of disk
+// leaks.
+pref("privacy.exposeContentTitleInWindow", true);
+pref("privacy.exposeContentTitleInWindow.pbm", true);
 
 // Start the browser in e10s mode
 pref("browser.tabs.remote.autostart", true);
@@ -2812,6 +2845,8 @@ pref("browser.firefox-view.feature-tour", "{\"screen\":\"FIREFOX_VIEW_SPOTLIGHT\
 pref("browser.firefox-view.view-count", 0);
 // Maximum number of rows to show on the "History" page.
 pref("browser.firefox-view.max-history-rows", 300);
+// Enables search functionality in Firefox View.
+pref("browser.firefox-view.search.enabled", false);
 
 // If the user has seen the pdf.js feature tour this value reflects the tour
 // message id, the id of the last screen they saw, and whether they completed the tour
@@ -2821,7 +2856,6 @@ pref("browser.pdfjs.feature-tour", "{\"screen\":\"\",\"complete\":false}");
 // StaticPrefList.yaml for a description of the prefs.
 #ifdef NIGHTLY_BUILD
   pref("cookiebanners.service.mode.privateBrowsing", 1);
-  pref("cookiebanners.service.enableGlobalRules", true);
 #endif
 
 #if defined(EARLY_BETA_OR_EARLIER)
@@ -2866,6 +2900,21 @@ pref("cookiebanners.ui.desktop.cfrVariant", 0);
   pref("dom.security.credentialmanagement.identity.enabled", true);
 #endif
 
+#if defined(NIGHTLY_BUILD)
+pref("ui.new-webcompat-reporter.enabled", true);
+#else
+pref("ui.new-webcompat-reporter.enabled", false);
+#endif
+
+#if defined(EARLY_BETA_OR_EARLIER)
+pref("ui.new-webcompat-reporter.send-more-info-link", true);
+#else
+pref("ui.new-webcompat-reporter.send-more-info-link", false);
+#endif
+
+# 0 = disabled, 1 = reason optional, 2 = reason required.
+pref("ui.new-webcompat-reporter.reason-dropdown", 0);
+
 // Reset Private Browsing Session feature
 #if defined(NIGHTLY_BUILD)
   pref("browser.privatebrowsing.resetPBM.enabled", true);
@@ -2880,3 +2929,11 @@ pref("browser.privatebrowsing.resetPBM.showConfirmationDialog", true);
 #ifdef XP_MACOSX
   pref("browser.attribution.macos.enabled", false);
 #endif
+
+// the preferences related to the Nimbus experiment, to activate and deactivate
+// the the entire rollout or deactivate only the OS prompt (see: bug 1864216)
+pref("browser.mailto.dualPrompt", false);
+pref("browser.mailto.dualPrompt.os", false);
+// When visiting a site which uses registerProtocolHandler: Ask the user to set Firefox as
+// default mailto handler.
+pref("browser.mailto.prompt.os", true);

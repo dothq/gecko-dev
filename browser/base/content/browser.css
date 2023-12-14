@@ -956,13 +956,15 @@ browser[tabmodalPromptShowing], browser[tabDialogShowing] {
   direction: ltr;
 }
 
-#statuspanel[inactive] {
+#statuspanel[inactive],
+:root[inDOMFullscreen] #statuspanel:not([type=overLink]) {
   transition: none;
   opacity: 0;
   visibility: hidden;
 }
 
-#statuspanel[inactive][previoustype=overLink] {
+#statuspanel[inactive][previoustype=overLink],
+:root[inDOMFullscreen] #statuspanel:not([type=overLink])[previoustype=overLink] {
   transition: opacity 200ms ease-out, visibility 200ms;
 }
 
@@ -1148,15 +1150,6 @@ toolbarpaletteitem[dragover] {
   flex-wrap: wrap;
 }
 
-#customization-toolbar-visibility-button > .box-inherit > .button-menu-dropmarker {
-  display: flex;
-}
-
-#customization-lwtheme-button > .box-inherit > .button-menu-dropmarker,
-#customization-uidensity-button > .box-inherit > .button-menu-dropmarker {
-  display: flex;
-}
-
 toolbarpaletteitem[place="palette"] {
   flex-direction: column;
   width: 7em;
@@ -1259,12 +1252,6 @@ toolbarpaletteitem:not([place="palette"]) > #stop-reload-button {
 #UITourHighlight[active="color"] {
   animation-name: uitour-color;
   animation-duration: 2s;
-}
-
-/* Combined context-menu items */
-#context-navigation > .menuitem-iconic > .menu-iconic-text,
-#context-navigation > .menuitem-iconic > .menu-accel-container {
-  display: none;
 }
 
 .popup-notification-invalid-input {

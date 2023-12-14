@@ -42,10 +42,11 @@
 #include "jit/JitSpewer.h"
 #include "js/CallAndConstruct.h"  // JS::IsCallable
 #include "js/CharacterEncoding.h"
-#include "js/ColumnNumber.h"  // JS::TaggedColumnNumberZeroOrigin, JS::ColumnNumberZeroOrigin, JS::ColumnNumberOneOrigin
+#include "js/ColumnNumber.h"  // JS::TaggedColumnNumberOneOrigin, JS::ColumnNumberOneOrigin
 #include "js/CompileOptions.h"
 #include "js/ContextOptions.h"  // JS::ContextOptions{,Ref}
 #include "js/Conversions.h"
+#include "js/Date.h"  // JS::GetReduceMicrosecondTimePrecisionCallback
 #include "js/ErrorInterceptor.h"
 #include "js/ErrorReport.h"           // JSErrorBase
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
@@ -1761,6 +1762,11 @@ const JS::RealmBehaviors& JS::RealmBehaviorsRef(JSContext* cx) {
 
 void JS::SetRealmNonLive(Realm* realm) { realm->setNonLive(); }
 
+void JS::SetRealmReduceTimerPrecisionCallerType(Realm* realm,
+                                                JS::RTPCallerTypeToken type) {
+  realm->setReduceTimerPrecisionCallerType(type);
+}
+
 JS_PUBLIC_API JSObject* JS_NewGlobalObject(JSContext* cx, const JSClass* clasp,
                                            JSPrincipals* principals,
                                            JS::OnNewGlobalHookOption hookOption,
@@ -1817,7 +1823,18 @@ JS_PUBLIC_API void JS_FireOnNewGlobalObject(JSContext* cx,
   // This infallibility will eat OOM and slow script, but if that happens
   // we'll likely run up into them again soon in a fallible context.
   cx->check(global);
+
   Rooted<js::GlobalObject*> globalObject(cx, &global->as<GlobalObject>());
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  if (JS::GetReduceMicrosecondTimePrecisionCallback()) {
+    MOZ_DIAGNOSTIC_ASSERT(globalObject->realm()
+                              ->behaviors()
+                              .reduceTimerPrecisionCallerType()
+                              .isSome(),
+                          "Trying to create a global without setting an "
+                          "explicit RTPCallerType!");
+  }
+#endif
   DebugAPI::onNewGlobalObject(cx, globalObject);
   cx->runtime()->ensureRealmIsRecordingAllocations(globalObject);
 }
@@ -2291,12 +2308,33 @@ JS_PUBLIC_API JSFunction* JS::NewFunctionFromSpec(JSContext* cx,
 
 JS_PUBLIC_API JSObject* JS_GetFunctionObject(JSFunction* fun) { return fun; }
 
-JS_PUBLIC_API JSString* JS_GetFunctionId(JSFunction* fun) {
-  return fun->explicitName();
+JS_PUBLIC_API bool JS_GetFunctionId(JSContext* cx, JS::Handle<JSFunction*> fun,
+                                    JS::MutableHandle<JSString*> name) {
+  JS::Rooted<JSAtom*> atom(cx);
+  if (!fun->getExplicitName(cx, &atom)) {
+    return false;
+  }
+  name.set(atom);
+  return true;
 }
 
-JS_PUBLIC_API JSString* JS_GetFunctionDisplayId(JSFunction* fun) {
-  return fun->displayAtom();
+JS_PUBLIC_API JSString* JS_GetMaybePartialFunctionId(JSFunction* fun) {
+  return fun->maybePartialExplicitName();
+}
+
+JS_PUBLIC_API bool JS_GetFunctionDisplayId(JSContext* cx,
+                                           JS::Handle<JSFunction*> fun,
+                                           JS::MutableHandle<JSString*> name) {
+  JS::Rooted<JSAtom*> atom(cx);
+  if (!fun->getDisplayAtom(cx, &atom)) {
+    return false;
+  }
+  name.set(atom);
+  return true;
+}
+
+JS_PUBLIC_API JSString* JS_GetMaybePartialFunctionDisplayId(JSFunction* fun) {
+  return fun->maybePartialDisplayAtom();
 }
 
 JS_PUBLIC_API uint16_t JS_GetFunctionArity(JSFunction* fun) {
@@ -4578,7 +4616,7 @@ const char* AutoFilename::get() const {
 
 JS_PUBLIC_API bool DescribeScriptedCaller(JSContext* cx, AutoFilename* filename,
                                           uint32_t* lineno,
-                                          JS::ColumnNumberZeroOrigin* column) {
+                                          JS::ColumnNumberOneOrigin* column) {
   if (filename) {
     filename->reset();
   }
@@ -4586,7 +4624,7 @@ JS_PUBLIC_API bool DescribeScriptedCaller(JSContext* cx, AutoFilename* filename,
     *lineno = 0;
   }
   if (column) {
-    *column = JS::ColumnNumberZeroOrigin::zero();
+    *column = JS::ColumnNumberOneOrigin();
   }
 
   if (!cx->compartment()) {
@@ -4620,15 +4658,15 @@ JS_PUBLIC_API bool DescribeScriptedCaller(JSContext* cx, AutoFilename* filename,
   }
 
   if (lineno) {
-    JS::TaggedColumnNumberZeroOrigin columnNumber;
+    JS::TaggedColumnNumberOneOrigin columnNumber;
     *lineno = i.computeLine(&columnNumber);
     if (column) {
-      *column = JS::ColumnNumberZeroOrigin(columnNumber.zeroOriginValue());
+      *column = JS::ColumnNumberOneOrigin(columnNumber.oneOriginValue());
     }
   } else if (column) {
-    JS::TaggedColumnNumberZeroOrigin columnNumber;
+    JS::TaggedColumnNumberOneOrigin columnNumber;
     i.computeLine(&columnNumber);
-    *column = JS::ColumnNumberZeroOrigin(columnNumber.zeroOriginValue());
+    *column = JS::ColumnNumberOneOrigin(columnNumber.oneOriginValue());
   }
 
   return true;

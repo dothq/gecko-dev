@@ -2914,29 +2914,6 @@ void BrowserChild::DidComposite(mozilla::layers::TransactionId aTransactionId,
   }
 }
 
-void BrowserChild::DidRequestComposite(const TimeStamp& aCompositeReqStart,
-                                       const TimeStamp& aCompositeReqEnd) {
-  nsCOMPtr<nsIDocShell> docShellComPtr = do_GetInterface(WebNavigation());
-  if (!docShellComPtr) {
-    return;
-  }
-
-  nsDocShell* docShell = static_cast<nsDocShell*>(docShellComPtr.get());
-
-  if (TimelineConsumers::HasConsumer(docShell)) {
-    // Since we're assuming that it's impossible for content JS to directly
-    // trigger a synchronous paint, we can avoid capturing a stack trace here,
-    // which means we won't run into JS engine reentrancy issues like bug
-    // 1310014.
-    TimelineConsumers::AddMarkerForDocShell(
-        docShell, "CompositeForwardTransaction", aCompositeReqStart,
-        MarkerTracingType::START, MarkerStackRequest::NO_STACK);
-    TimelineConsumers::AddMarkerForDocShell(
-        docShell, "CompositeForwardTransaction", aCompositeReqEnd,
-        MarkerTracingType::END, MarkerStackRequest::NO_STACK);
-  }
-}
-
 void BrowserChild::ClearCachedResources() {
   MOZ_ASSERT(mPuppetWidget);
   RefPtr<WebRenderLayerManager> lm =
@@ -3676,7 +3653,10 @@ void BrowserChild::NotifyContentBlockingEvent(
     const nsTArray<nsCString>& aTrackingFullHashes,
     const Maybe<
         mozilla::ContentBlockingNotifier::StorageAccessPermissionGrantedReason>&
-        aReason) {
+        aReason,
+    const Maybe<ContentBlockingNotifier::CanvasFingerprinter>&
+        aCanvasFingerprinter,
+    const Maybe<bool> aCanvasFingerprinterKnownText) {
   if (!IPCOpen()) {
     return;
   }
@@ -3685,7 +3665,8 @@ void BrowserChild::NotifyContentBlockingEvent(
   if (NS_SUCCEEDED(PrepareRequestData(aChannel, requestData))) {
     Unused << SendNotifyContentBlockingEvent(
         aEvent, requestData, aBlocked, PromiseFlatCString(aTrackingOrigin),
-        aTrackingFullHashes, aReason);
+        aTrackingFullHashes, aReason, aCanvasFingerprinter,
+        aCanvasFingerprinterKnownText);
   }
 }
 
@@ -3735,7 +3716,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(BrowserChildMessageManager)
   NS_INTERFACE_MAP_ENTRY(nsIMessageSender)
-  NS_INTERFACE_MAP_ENTRY(ContentFrameMessageManager)
+  NS_INTERFACE_MAP_ENTRY_CONCRETE(ContentFrameMessageManager)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 

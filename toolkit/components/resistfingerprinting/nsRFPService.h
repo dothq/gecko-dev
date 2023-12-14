@@ -11,8 +11,10 @@
 #include "ErrorList.h"
 #include "PLDHashTable.h"
 #include "mozilla/BasicEvents.h"
+#include "mozilla/ContentBlockingLog.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/TypedEnumBits.h"
+#include "js/RealmOptions.h"
 #include "nsHashtablesFwd.h"
 #include "nsICookieJarSettings.h"
 #include "nsIFingerprintingWebCompatService.h"
@@ -72,7 +74,8 @@ namespace mozilla {
 class WidgetKeyboardEvent;
 namespace dom {
 class Document;
-}
+enum class CanvasContextType : uint8_t;
+}  // namespace dom
 
 enum KeyboardLang { EN = 0x01 };
 
@@ -138,11 +141,47 @@ enum class RTPCallerType : uint8_t {
   CrossOriginIsolated = (1 << 2)
 };
 
+inline JS::RTPCallerTypeToken RTPCallerTypeToToken(RTPCallerType aType) {
+  return JS::RTPCallerTypeToken{uint8_t(aType)};
+}
+
+inline RTPCallerType RTPCallerTypeFromToken(JS::RTPCallerTypeToken aToken) {
+  MOZ_RELEASE_ASSERT(
+      aToken.value == uint8_t(RTPCallerType::Normal) ||
+      aToken.value == uint8_t(RTPCallerType::SystemPrincipal) ||
+      aToken.value == uint8_t(RTPCallerType::ResistFingerprinting) ||
+      aToken.value == uint8_t(RTPCallerType::CrossOriginIsolated));
+  return static_cast<RTPCallerType>(aToken.value);
+}
+
 enum TimerPrecisionType {
   DangerouslyNone = 1,
   UnconditionalAKAHighRes = 2,
   Normal = 3,
   RFP = 4,
+};
+
+// ============================================================================
+
+enum class CanvasFeatureUsage : uint8_t {
+  None = 0,
+  KnownFingerprintText = 1 << 0,
+  SetFont = 1 << 1,
+  FillRect = 1 << 2,
+  LineTo = 1 << 3,
+  Stroke = 1 << 4
+};
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(CanvasFeatureUsage);
+
+class CanvasUsage {
+ public:
+  nsIntSize mSize;
+  dom::CanvasContextType mType;
+  CanvasFeatureUsage mFeatureUsage;
+
+  CanvasUsage(nsIntSize aSize, dom::CanvasContextType aType,
+              CanvasFeatureUsage aFeatureUsage)
+      : mSize(aSize), mType(aType), mFeatureUsage(aFeatureUsage) {}
 };
 
 // ============================================================================
@@ -197,10 +236,6 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
   static double ReduceTimePrecisionAsSecsRFPOnly(double aTime,
                                                  int64_t aContextMixin,
                                                  RTPCallerType aRTPCallerType);
-
-  // Used by the JS Engine, as it doesn't know about the TimerPrecisionType enum
-  static double ReduceTimePrecisionAsUSecsWrapper(double aTime, JSContext* aCx);
-
   // Public only for testing purposes
   static double ReduceTimePrecisionImpl(double aTime, TimeScale aTimeScale,
                                         double aResolutionUSec,
@@ -315,6 +350,21 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
 
   // --------------------------------------------------------------------------
 
+  static void MaybeReportCanvasFingerprinter(nsTArray<CanvasUsage>& aUses,
+                                             nsIChannel* aChannel,
+                                             nsACString& aOriginNoSuffix);
+
+  static void MaybeReportFontFingerprinter(nsIChannel* aChannel,
+                                           nsACString& aOriginNoSuffix);
+
+  // --------------------------------------------------------------------------
+
+  // A helper function to check if there is a suspicious fingerprinting
+  // activity from given content blocking origin logs. It returns true if we
+  // detect suspicious fingerprinting activities.
+  static bool CheckSuspiciousFingerprintingActivity(
+      nsTArray<ContentBlockingLog::LogEntry>& aLogs);
+
  private:
   nsresult Init();
 
@@ -347,6 +397,10 @@ class nsRFPService final : public nsIObserver, public nsIRFPService {
       sSpoofingKeyboardCodes;
 
   // --------------------------------------------------------------------------
+
+  // Used by the JS Engine
+  static double ReduceTimePrecisionAsUSecsWrapper(
+      double aTime, JS::RTPCallerTypeToken aCallerType, JSContext* aCx);
 
   static TimerPrecisionType GetTimerPrecisionType(RTPCallerType aRTPCallerType);
 

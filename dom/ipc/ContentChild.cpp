@@ -24,6 +24,7 @@
 #include "imgLoader.h"
 #include "ScrollingMetrics.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/ClipboardReadRequestChild.h"
 #include "mozilla/Components.h"
 #include "mozilla/HangDetails.h"
 #include "mozilla/LoadInfo.h"
@@ -75,7 +76,6 @@
 #include "mozilla/dom/JSProcessActorChild.h"
 #include "mozilla/dom/LSObject.h"
 #include "mozilla/dom/MemoryReportRequest.h"
-#include "mozilla/dom/PLoginReputationChild.h"
 #include "mozilla/dom/PSessionStorageObserverChild.h"
 #include "mozilla/dom/PostMessageEvent.h"
 #include "mozilla/dom/PushNotifier.h"
@@ -1988,6 +1988,12 @@ PRemotePrintJobChild* ContentChild::AllocPRemotePrintJobChild() {
 #endif
 }
 
+already_AddRefed<PClipboardReadRequestChild>
+ContentChild::AllocPClipboardReadRequestChild(
+    const nsTArray<nsCString>& aTypes) {
+  return MakeAndAddRef<ClipboardReadRequestChild>(aTypes);
+}
+
 media::PMediaChild* ContentChild::AllocPMediaChild() {
   return media::AllocPMediaChild();
 }
@@ -3396,16 +3402,6 @@ PURLClassifierLocalChild* ContentChild::AllocPURLClassifierLocalChild(
 
 bool ContentChild::DeallocPURLClassifierLocalChild(
     PURLClassifierLocalChild* aActor) {
-  MOZ_ASSERT(aActor);
-  delete aActor;
-  return true;
-}
-
-PLoginReputationChild* ContentChild::AllocPLoginReputationChild(nsIURI* aUri) {
-  return new PLoginReputationChild();
-}
-
-bool ContentChild::DeallocPLoginReputationChild(PLoginReputationChild* aActor) {
   MOZ_ASSERT(aActor);
   delete aActor;
   return true;

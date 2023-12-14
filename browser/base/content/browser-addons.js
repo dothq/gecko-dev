@@ -14,6 +14,7 @@ const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AMBrowserExtensionsImport: "resource://gre/modules/AddonManager.sys.mjs",
+  AbuseReporter: "resource://gre/modules/AbuseReporter.sys.mjs",
   ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
   ExtensionPermissions: "resource://gre/modules/ExtensionPermissions.sys.mjs",
   OriginControls: "resource://gre/modules/ExtensionPermissions.sys.mjs",
@@ -288,31 +289,6 @@ function buildNotificationAction(msg, callback) {
 }
 
 var gXPInstallObserver = {
-  _findChildShell(aDocShell, aSoughtShell) {
-    if (aDocShell == aSoughtShell) {
-      return aDocShell;
-    }
-
-    var node = aDocShell.QueryInterface(Ci.nsIDocShellTreeItem);
-    for (var i = 0; i < node.childCount; ++i) {
-      var docShell = node.getChildAt(i);
-      docShell = this._findChildShell(docShell, aSoughtShell);
-      if (docShell == aSoughtShell) {
-        return docShell;
-      }
-    }
-    return null;
-  },
-
-  _getBrowser(aDocShell) {
-    for (let browser of gBrowser.browsers) {
-      if (this._findChildShell(browser.docShell, aDocShell)) {
-        return browser;
-      }
-    }
-    return null;
-  },
-
   pendingInstalls: new WeakMap(),
 
   showInstallConfirmation(browser, installInfo, height = undefined) {
@@ -781,12 +757,7 @@ var gXPInstallObserver = {
           // from product about how to approach this for extensions.
           declineActions.push(
             buildNotificationAction(neverAllowAndReportMsg, () => {
-              AMTelemetry.recordEvent({
-                method: "reportSuspiciousSite",
-                object: "suspiciousSite",
-                value: displayURI?.displayHost ?? "(unknown)",
-                extra: {},
-              });
+              AMTelemetry.recordSuspiciousSiteEvent({ displayURI });
               neverAllowCallback();
             })
           );
@@ -1126,6 +1097,18 @@ var BrowserAddonUI = {
   async reportAddon(addonId, reportEntryPoint) {
     let addon = addonId && (await AddonManager.getAddonByID(addonId));
     if (!addon) {
+      return;
+    }
+
+    // Do not open an additional about:addons tab if the abuse report should be
+    // opened in its own tab.
+    if (lazy.AbuseReporter.amoFormEnabled) {
+      const amoUrl = lazy.AbuseReporter.getAMOFormURL({ addonId });
+      window.openTrustedLinkIn(amoUrl, "tab", {
+        // Make sure the newly open tab is going to be focused, independently
+        // from general user prefs.
+        forceForeground: true,
+      });
       return;
     }
 

@@ -99,6 +99,7 @@ urlbar:
           `bookmark`,
           `calc`,
           `clipboard`,
+          `fxsuggest_data_sharing_opt_in`,
           `history`,
           `intervention_clear`,
           `intervention_refresh`,
@@ -227,6 +228,7 @@ urlbar:
           `calc`,
           `clipboard`,
           `experimental_addon`,
+          `fxsuggest_data_sharing_opt_in`,
           `history`,
           `input_field`,
           `intervention_clear`,
@@ -344,6 +346,7 @@ urlbar:
           `bookmark`,
           `calc`,
           `clipboard`,
+          `fxsuggest_data_sharing_opt_in`,
           `history`,
           `intervention_clear`,
           `intervention_refresh`,
@@ -487,6 +490,7 @@ urlbar:
           `bookmark`,
           `calc`,
           `clipboard`,
+          `fxsuggest_data_sharing_opt_in`,
           `history`,
           `intervention_clear`,
           `intervention_refresh`,
@@ -557,6 +561,35 @@ urlbar:
     notification_emails:
       - fx-search-telemetry@mozilla.com
     expires: never
+
+  quick_suggest_contextual_opt_in:
+    type: event
+    description: >
+      Recorded when the contextual opt-in UI is shown or interacted with.
+    extra_keys:
+      interaction:
+        description: >
+          The type of interaction. Possible values: `impression`, `dismiss`,
+          `allow`, `learn_more`.
+        type: string
+      top_position:
+        description: >
+          Whether the opt-in result appeared at the very top of results or at
+          the bottom, after one-off buttons.
+        type: boolean
+      say_hello:
+        description: >
+          Whether the alternative copy was used for the opt-in result.
+        type: boolean
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1852058
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1852058#c2
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - fx-search-telemetry@mozilla.com
+    expires: 123
 
   pref_max_results:
     lifetime: application
@@ -695,7 +728,6 @@ quick_suggest:
 
   suggested_index:
     type: string
-    unit: QuickSuggest bi-directional index
     description: >
       A stringified integer value that is the intended index of the suggestion
       being interacted with. If `suggested_index_relative_to_group` is true, the

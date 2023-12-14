@@ -100,11 +100,7 @@ menucaption {
   }
 
   @media (-moz-platform: macos) {
-    appearance: auto;
-    -moz-default-appearance: menuitem;
-    -moz-font-smoothing-background-color: -moz-mac-menuitem;
     padding: 2px 21px;
-    border-radius: 0;
   }
 }
 
@@ -113,13 +109,11 @@ menuitem {
   &:where([disabled="true"]) {
     color: var(--panel-disabled-color);
     text-shadow: none;
-    -moz-font-smoothing-background-color: -moz-mac-menuitem;
   }
 
   &:where([_moz-menuactive]:not([disabled="true"])) {
     color: -moz-menuhovertext;
     background-color: -moz-menuhover;
-    -moz-font-smoothing-background-color: -moz-mac-active-menuitem;
   }
 
   &:where([_moz-menuactive="true"][disabled="true"]) {

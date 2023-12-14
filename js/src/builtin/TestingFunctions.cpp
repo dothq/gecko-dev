@@ -57,8 +57,8 @@
 #include "frontend/BytecodeCompiler.h"  // frontend::{CompileGlobalScriptToExtensibleStencil,ParseModuleToExtensibleStencil}
 #include "frontend/CompilationStencil.h"  // frontend::CompilationStencil
 #include "frontend/FrontendContext.h"     // AutoReportFrontendContext
-#include "gc/Allocator.h"
 #include "gc/GC.h"
+#include "gc/GCEnum.h"
 #include "gc/GCLock.h"
 #include "gc/Zone.h"
 #include "jit/BaselineJIT.h"
@@ -1779,6 +1779,9 @@ static bool DisassembleNative(JSContext* cx, unsigned argc, Value* vp) {
       jit_end = baseline->method()->rawEnd();
     }
   } else {
+    JS_ReportErrorASCII(cx,
+                        "The function hasn't been warmed up, hence no JIT code "
+                        "to disassemble.");
     return false;
   }
 
@@ -3531,24 +3534,30 @@ static bool NewString(JSContext* cx, unsigned argc, Value* vp) {
         JS_ReportErrorASCII(cx, "Cannot set capacity of empty string");
         return false;
       }
-      if (stable.isLatin1()) {
-        auto news = cx->make_pod_arena_array<JS::Latin1Char>(
-            js::StringBufferArena, capacity);
-        if (!news) {
-          return false;
+
+      auto createLinearString = [&](const auto* chars) -> JSLinearString* {
+        using CharT =
+            std::remove_const_t<std::remove_pointer_t<decltype(chars)>>;
+
+        if (JSInlineString::lengthFits<CharT>(len)) {
+          JS_ReportErrorASCII(cx, "Cannot create small non-inline strings");
+          return nullptr;
         }
-        mozilla::PodCopy(news.get(), stable.latin1Chars(), len);
-        dest = JSLinearString::newValidLength<CanGC>(cx, std::move(news), len,
-                                                     heap);
-      } else {
+
         auto news =
-            cx->make_pod_arena_array<char16_t>(js::StringBufferArena, capacity);
+            cx->make_pod_arena_array<CharT>(js::StringBufferArena, capacity);
         if (!news) {
-          return false;
+          return nullptr;
         }
-        mozilla::PodCopy(news.get(), stable.twoByteChars(), len);
-        dest = JSLinearString::newValidLength<CanGC>(cx, std::move(news), len,
+        mozilla::PodCopy(news.get(), chars, len);
+        return JSLinearString::newValidLength<CanGC>(cx, std::move(news), len,
                                                      heap);
+      };
+
+      if (stable.isLatin1()) {
+        dest = createLinearString(stable.latin1Chars());
+      } else {
+        dest = createLinearString(stable.twoByteChars());
       }
       if (dest) {
         dest->asLinear().makeExtensible(capacity);
@@ -3610,6 +3619,19 @@ static bool NewRope(JSContext* cx, unsigned argc, Value* vp) {
   if (left->empty() || right->empty()) {
     JS_ReportErrorASCII(cx, "rope child mustn't be the empty string");
     return false;
+  }
+
+  // Disallow creating ropes which fit into inline strings.
+  if (left->hasLatin1Chars() && right->hasLatin1Chars()) {
+    if (JSInlineString::lengthFits<JS::Latin1Char>(length)) {
+      JS_ReportErrorASCII(cx, "Cannot create small non-inline ropes");
+      return false;
+    }
+  } else {
+    if (JSInlineString::lengthFits<char16_t>(length)) {
+      JS_ReportErrorASCII(cx, "Cannot create small non-inline ropes");
+      return false;
+    }
   }
 
   auto* str = JSRope::new_<CanGC>(cx, left, right, length, heap);
@@ -4620,7 +4642,10 @@ static bool DisplayName(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   JSFunction* fun = &args[0].toObject().as<JSFunction>();
-  JSString* str = fun->displayAtom();
+  JS::Rooted<JSAtom*> str(cx);
+  if (!fun->getDisplayAtom(cx, &str)) {
+    return false;
+  }
   args.rval().setString(str ? str : cx->runtime()->emptyString.ref());
   return true;
 }
@@ -7141,12 +7166,16 @@ static bool EvalStencil(JSContext* cx, uint32_t argc, Value* vp) {
   }
 
   /* Prepare the input byte array. */
-  if (!args[0].isObject() || !args[0].toObject().is<js::StencilObject>()) {
-    JS_ReportErrorASCII(cx, "evalStencil: Stencil object expected");
+  if (!args[0].isObject()) {
+    JS_ReportErrorASCII(cx, "evalStencil: Object expected");
     return false;
   }
   Rooted<js::StencilObject*> stencilObj(
-      cx, &args[0].toObject().as<js::StencilObject>());
+      cx, args[0].toObject().maybeUnwrapIf<js::StencilObject>());
+  if (!stencilObj) {
+    JS_ReportErrorASCII(cx, "evalStencil: Stencil expected");
+    return false;
+  }
 
   if (stencilObj->stencil()->isModule()) {
     JS_ReportErrorASCII(cx,
@@ -7847,6 +7876,62 @@ static bool GetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
   return true;
 }
 
+/*
+ * Validate time zone input. Accepts the following formats:
+ *  - "America/Chicago" (raw time zone)
+ *  - ":America/Chicago"
+ *  - "/this-part-is-ignored/zoneinfo/America/Chicago"
+ *  - ":/this-part-is-ignored/zoneinfo/America/Chicago"
+ *  - "/etc/localtime"
+ *  - ":/etc/localtime"
+ * Once the raw time zone is parsed out of the string, it is checked
+ * against the time zones from GetAvailableTimeZones(). Throws an
+ * Error if the time zone is invalid.
+ */
+#if defined(JS_HAS_INTL_API) && !defined(__wasi__)
+static bool ValidateTimeZone(JSContext* cx, const char* timeZone) {
+  static constexpr char zoneInfo[] = "/zoneinfo/";
+  static constexpr size_t zoneInfoLength = sizeof(zoneInfo) - 1;
+
+  size_t i = 0;
+  if (timeZone[i] == ':') {
+    ++i;
+  }
+  const char* zoneInfoPtr = strstr(timeZone, zoneInfo);
+  const char* timeZonePart = timeZone[i] == '/' && zoneInfoPtr
+                                 ? zoneInfoPtr + zoneInfoLength
+                                 : timeZone + i;
+
+  if (!*timeZonePart) {
+    JS_ReportErrorASCII(cx, "Invalid time zone format");
+    return false;
+  }
+
+  if (!strcmp(timeZonePart, "/etc/localtime")) {
+    return true;
+  }
+
+  auto timeZones = mozilla::intl::TimeZone::GetAvailableTimeZones();
+  if (timeZones.isErr()) {
+    intl::ReportInternalError(cx, timeZones.unwrapErr());
+    return false;
+  }
+  for (auto timeZoneName : timeZones.unwrap()) {
+    if (timeZoneName.isErr()) {
+      intl::ReportInternalError(cx);
+      return false;
+    }
+
+    if (!strcmp(timeZonePart, timeZoneName.unwrap().data())) {
+      return true;
+    }
+  }
+
+  JS_ReportErrorASCII(cx, "Unsupported time zone name: %s", timeZonePart);
+  return false;
+}
+#endif
+
 static bool SetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   RootedObject callee(cx, &args.callee());
@@ -7896,7 +7981,14 @@ static bool SetTimeZone(JSContext* cx, unsigned argc, Value* vp) {
       return false;
     }
 
-    if (!setTimeZone(timeZone.get())) {
+    const char* timeZoneStr = timeZone.get();
+#  ifdef JS_HAS_INTL_API
+    if (!ValidateTimeZone(cx, timeZoneStr)) {
+      return false;
+    }
+#  endif
+
+    if (!setTimeZone(timeZoneStr)) {
       JS_ReportErrorASCII(cx, "Failed to set 'TZ' environment variable");
       return false;
     }
@@ -8343,9 +8435,8 @@ static bool EncodeAsUtf8InBuffer(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
-  size_t length;
+  mozilla::Span<uint8_t> span;
   bool isSharedMemory = false;
-  uint8_t* data = nullptr;
   {
     // The hazard analysis does not track the data pointer, so it can neither
     // tell that `data` is dead if ReportUsageErrorASCII is called, nor that
@@ -8354,12 +8445,12 @@ static bool EncodeAsUtf8InBuffer(JSContext* cx, unsigned argc, Value* vp) {
     // with a safer mechanism.
     JS::AutoCheckCannotGC nogc(cx);
     if (!view.isDetached()) {
-      data = view.get().getLengthAndData(&length, &isSharedMemory, nogc);
+      span = view.get().getData(&isSharedMemory, nogc);
     }
   }
 
   if (isSharedMemory ||  // exclude views of SharedArrayBuffers
-      !data) {           // exclude views of detached ArrayBuffers
+      !span.data()) {    // exclude views of detached ArrayBuffers
     ReportUsageErrorASCII(
         cx, callee,
         "Second argument must be an unshared, non-detached Uint8Array");
@@ -8368,7 +8459,7 @@ static bool EncodeAsUtf8InBuffer(JSContext* cx, unsigned argc, Value* vp) {
 
   Maybe<std::tuple<size_t, size_t>> amounts =
       JS_EncodeStringToUTF8BufferPartial(cx, args[0].toString(),
-                                         AsWritableChars(Span(data, length)));
+                                         AsWritableChars(span));
   if (!amounts) {
     ReportOutOfMemory(cx);
     return false;
@@ -9881,8 +9972,8 @@ static const JSFunctionSpecWithHelp FuzzingUnsafeTestingFunctions[] = {
     JS_FN_HELP("setTimeZone", SetTimeZone, 1, 0,
 "setTimeZone(tzname)",
 "  Set the 'TZ' environment variable to the given time zone and applies the new time zone.\n"
-"  An empty string or undefined resets the time zone to its default value.\n"
-"  NOTE: The input string is not validated and will be passed verbatim to setenv()."),
+"  The time zone given is validated according to the current environment.\n"
+"  An empty string or undefined resets the time zone to its default value."),
 
 JS_FN_HELP("setDefaultLocale", SetDefaultLocale, 1, 0,
 "setDefaultLocale(locale)",

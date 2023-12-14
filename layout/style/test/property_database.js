@@ -12131,6 +12131,25 @@ gCSSProperties["text-justify"] = {
   invalid_values: [],
 };
 
+if (IsCSSPropertyPrefEnabled("layout.css.text-indent-keywords.enabled")) {
+  gCSSProperties["text-indent"].other_values.push(
+    "2em hanging",
+    "5% each-line",
+    "-10px hanging each-line",
+    "hanging calc(2px)",
+    "each-line calc(-2px)",
+    "each-line calc(50%) hanging",
+    "hanging calc(3*25px) each-line",
+    "each-line hanging calc(25px*3)"
+  );
+  gCSSProperties["text-indent"].invalid_values.push(
+    "hanging",
+    "each-line",
+    "-10px hanging hanging",
+    "each-line calc(2px) each-line"
+  );
+}
+
 if (IsCSSPropertyPrefEnabled("layout.css.font-variations.enabled")) {
   gCSSProperties["font-variation-settings"] = {
     domProp: "fontVariationSettings",
@@ -13437,15 +13456,6 @@ if (false) {
       "fill, default",
       "2px",
     ],
-  };
-
-  gCSSProperties["-moz-font-smoothing-background-color"] = {
-    // domProp: "MozFontSmoothingBackgroundColor",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: ["transparent"],
-    other_values: ["green", "#fc3"],
-    invalid_values: ["000000", "ff00ff"],
   };
 }
 

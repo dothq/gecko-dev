@@ -590,5 +590,4 @@ support-files = [
 ]
 
 ["test_zoom_restore_bfcache.html"]
-skip-if = ["fission && os == 'android'"] # Bug 1827329
 support-files = ["file_zoom_restore_bfcache.html"]

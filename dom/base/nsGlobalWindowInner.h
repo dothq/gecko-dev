@@ -363,6 +363,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
 
   // Inner windows only.
   void RefreshRealmPrincipal();
+  void RefreshReduceTimerPrecisionCallerType();
 
   // For accessing protected field mFullscreen
   friend class FullscreenTransitionTask;
@@ -735,7 +736,7 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   already_AddRefed<mozilla::dom::MediaQueryList> MatchMedia(
       const nsACString& aQuery, mozilla::dom::CallerType aCallerType,
       mozilla::ErrorResult& aError);
-  nsScreen* GetScreen(mozilla::ErrorResult& aError);
+  nsScreen* Screen();
   void MoveTo(int32_t aXPos, int32_t aYPos,
               mozilla::dom::CallerType aCallerType,
               mozilla::ErrorResult& aError);
@@ -1096,6 +1097,10 @@ class nsGlobalWindowInner final : public mozilla::dom::EventTarget,
   // Get the client principal, returns null if the clientSource is not
   // available.
   nsIPrincipal* GetClientPrincipal();
+
+  // Whether the chrome window is currently in a full screen transition. This
+  // flag is updated from FullscreenTransitionTask.
+  bool IsInFullScreenTransition();
 
   // This method is called if this window loads a 3rd party tracking resource
   // and the storage is just been changed. The window can reset the partitioned

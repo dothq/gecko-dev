@@ -218,6 +218,11 @@ class FragmentOrElement : public nsIContent {
     UniquePtr<PopoverData> mPopoverData;
 
     /**
+     * CustomStates for the element.
+     */
+    nsTArray<RefPtr<nsAtom>> mCustomStates;
+
+    /**
      * RadioGroupContainer for radio buttons grouped under this disconnected
      * element.
      */
@@ -241,6 +246,12 @@ class FragmentOrElement : public nsIContent {
      * the purposes of `content-visibility: auto.
      */
     Maybe<bool> mVisibleForContentVisibility;
+
+    /**
+     * Whether content-visibility: auto is temporarily visible for
+     * the purposes of the descendant of scrollIntoView.
+     */
+    bool mTemporarilyVisibleForScrolledIntoViewDescendant = false;
 
     /**
      * Explicitly set attr-elements, see

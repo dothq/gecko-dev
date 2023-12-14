@@ -223,7 +223,7 @@ void StackTrace::Fill() {
   PNT_TIB pTib = reinterpret_cast<PNT_TIB>(NtCurrentTeb());
   void* stackEnd = static_cast<void*>(pTib->StackBase);
   FramePointerStackWalk(StackWalkCallback, kMaxFrames, this, fp, stackEnd);
-#elif defined(XP_MACOSX)
+#elif defined(XP_DARWIN)
   // This avoids MozStackWalk(), which has become unusably slow on Mac due to
   // changes in libunwind.
   //
@@ -293,7 +293,7 @@ using Delay = uint32_t;  // A time duration.
 // on ARM processors. For the latter we make an exception because the minimum
 // page size supported is 16KiB so there's no way to go below that.
 static const size_t kPageSize =
-#if defined(XP_MACOSX) && defined(__aarch64__)
+#if defined(XP_DARWIN) && defined(__aarch64__)
     16384
 #else
     4096
@@ -1696,6 +1696,10 @@ inline void* MozJemallocPHC::moz_arena_memalign(arena_id_t aArenaId,
 namespace mozilla::phc {
 
 bool IsPHCAllocation(const void* aPtr, AddrInfo* aOut) {
+  if (!maybe_init()) {
+    return false;
+  }
+
   PtrKind pk = gConst->PtrKind(aPtr);
   if (pk.IsNothing()) {
     return false;
@@ -1760,6 +1764,11 @@ bool IsPHCEnabledOnCurrentThread() {
 }
 
 void PHCMemoryUsage(MemoryUsage& aMemoryUsage) {
+  if (!maybe_init()) {
+    aMemoryUsage = MemoryUsage();
+    return;
+  }
+
   aMemoryUsage.mMetadataBytes = metadata_size();
   if (gMut) {
     MutexAutoLock lock(GMut::sMutex);
@@ -1770,15 +1779,23 @@ void PHCMemoryUsage(MemoryUsage& aMemoryUsage) {
 }
 
 void GetPHCStats(PHCStats& aStats) {
-  if (gMut) {
-    MutexAutoLock lock(GMut::sMutex);
-
-    aStats = gMut->GetPageStats(lock);
+  if (!maybe_init()) {
+    aStats = PHCStats();
+    return;
   }
+
+  MutexAutoLock lock(GMut::sMutex);
+
+  aStats = gMut->GetPageStats(lock);
 }
 
 // Enable or Disable PHC at runtime.  If PHC is disabled it will still trap
 // bad uses of previous allocations, but won't track any new allocations.
-void SetPHCState(PHCState aState) { gMut->SetState(aState); }
+void SetPHCState(PHCState aState) {
+  if (!maybe_init()) {
+    return;
+  }
 
+  gMut->SetState(aState);
+}
 }  // namespace mozilla::phc

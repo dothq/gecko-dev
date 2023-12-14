@@ -18,14 +18,13 @@ const { WEATHER_RS_DATA, WEATHER_SUGGESTION } = MerinoTestUtils;
 
 add_task(async function init() {
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
-    remoteSettingsResults: [
+    remoteSettingsRecords: [
       {
         type: "weather",
         weather: WEATHER_RS_DATA,
       },
     ],
   });
-  UrlbarPrefs.set("quicksuggest.enabled", true);
 
   await MerinoTestUtils.initWeather();
 
@@ -110,6 +109,9 @@ async function doBasicDisableAndEnableTest(pref) {
     client: QuickSuggest.weather._test_merino,
   });
 
+  // Wait for keywords to be re-synced from remote settings.
+  await QuickSuggestTestUtils.forceSync();
+
   // The suggestion should be returned for a search.
   context = createContext(MerinoTestUtils.WEATHER_KEYWORD, {
     providers: [UrlbarProviderWeather.name],
@@ -130,7 +132,7 @@ add_task(async function keywordsNotDefined() {
   });
 
   // Set RS data without any keywords. Fetching should immediately stop.
-  await QuickSuggestTestUtils.setRemoteSettingsResults([
+  await QuickSuggestTestUtils.setRemoteSettingsRecords([
     {
       type: "weather",
       weather: {},
@@ -154,7 +156,7 @@ add_task(async function keywordsNotDefined() {
   // Set keywords. Fetching should immediately start.
   info("Setting keywords");
   let fetchPromise = QuickSuggest.weather.waitForFetches();
-  await QuickSuggestTestUtils.setRemoteSettingsResults([
+  await QuickSuggestTestUtils.setRemoteSettingsRecords([
     {
       type: "weather",
       weather: MerinoTestUtils.WEATHER_RS_DATA,
@@ -246,6 +248,10 @@ add_task(async function disableAndEnable_immediate1() {
   fetchPromise = QuickSuggest.weather.waitForFetches();
   UrlbarPrefs.set("weather.featureGate", true);
   await fetchPromise;
+
+  // Wait for keywords to be re-synced from remote settings.
+  await QuickSuggestTestUtils.forceSync();
+
   assertEnabled({
     message: "On cleanup",
     hasSuggestion: true,
@@ -312,6 +318,9 @@ add_task(async function disableAndEnable_immediate2() {
     hasSuggestion: true,
     pendingFetchCount: 0,
   });
+
+  // Wait for keywords to be re-synced from remote settings.
+  await QuickSuggestTestUtils.forceSync();
 });
 
 // A fetch that doesn't return a suggestion should cause the last-fetched
@@ -752,6 +761,10 @@ add_task(async function block() {
   let fetchPromise = QuickSuggest.weather.waitForFetches();
   UrlbarPrefs.set("suggest.weather", true);
   await fetchPromise;
+
+  // Wait for keywords to be re-synced from remote settings.
+  await QuickSuggestTestUtils.forceSync();
+
   assertEnabled({
     message: "On cleanup",
     hasSuggestion: true,
@@ -1231,7 +1244,7 @@ add_task(async function vpn() {
 });
 
 // When a Nimbus experiment is installed, it should override the remote settings
-// config.
+// weather record.
 add_task(async function nimbusOverride() {
   // Sanity check initial state.
   assertEnabled({
@@ -1240,7 +1253,8 @@ add_task(async function nimbusOverride() {
     pendingFetchCount: 0,
   });
 
-  // Verify a search works as expected with the default remote settings config.
+  // Verify a search works as expected with the default remote settings weather
+  // record (which was added in the init task).
   await check_results({
     context: createContext(MerinoTestUtils.WEATHER_KEYWORD, {
       providers: [UrlbarProviderWeather.name],

@@ -1,4 +1,3 @@
-Cu.importGlobalProperties(["URLSearchParams"]);
 const SJS = "referrer_test_server.sjs?";
 const SHARED_KEY = SJS;
 
@@ -94,6 +93,5 @@ function handleRequest(request, response) {
     setSharedState(SHARED_KEY, JSON.stringify(result));
 
     response.write("'hello world'");
-    return;
   }
 }

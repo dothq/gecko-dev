@@ -14,6 +14,11 @@ prefs = [
 
 ["browser_UrlbarInput_formatValue.js"]
 
+["browser_UrlbarInput_formatValue_strikeout.js"]
+support-files = [
+  "mixed_active.html",
+]
+
 ["browser_UrlbarInput_formatValue_detachedTab.js"]
 skip-if = [
   "apple_catalina", # Bug 1756585
@@ -278,7 +283,10 @@ support-files = [
 
 ["browser_locationBarCommand.js"]
 https_first_disabled = true
-skip-if = ["os == 'linux' && bits == 64 && !debug"] # Bug 1787020
+skip-if = [
+  "os == 'linux' && bits == 64 && !debug", # Bug 1787020
+  "a11y_checks", # Bugs 1858041 and 1854661 to investigate intermittent a11y_checks results
+]
 
 ["browser_locationBarExternalLoad.js"]
 fail-if = ["a11y_checks"] # Bug 1854660 clicked element may not be focusable and/or labeled
@@ -307,7 +315,10 @@ support-files = [
 ]
 
 ["browser_oneOffs_heuristicRestyle.js"]
-skip-if = ["os == 'linux' && bits == 64 && !debug"] # Bug 1775811
+skip-if = [
+  "os == 'linux' && bits == 64 && !debug", # Bug 1775811
+  "a11y_checks", # Bugs 1858041 and 1854661 to investigate intermittent a11y_checks results
+]
 
 ["browser_oneOffs_keyModifiers.js"]
 support-files = [
@@ -468,7 +479,7 @@ skip-if = [
 
 ["browser_searchMode_setURI.js"]
 https_first_disabled = true
-fail-if = ["a11y_checks"] # Bug 1854660 clicked element may not be focusable and/or labeled
+fail-if = ["a11y_checks"] # Bug 1854660 clicked button.searchbar-engine-one-off-item may not be focusable
 
 ["browser_searchMode_suggestions.js"]
 support-files = [
@@ -538,6 +549,8 @@ support-files = [
   "add_search_engine_1.xml",
 ]
 fail-if = ["a11y_checks"] # Bug 1854660 clicked element may not be focusable and/or labeled
+
+["browser_slow_heuristic.js"]
 
 ["browser_speculative_connect.js"]
 support-files = [

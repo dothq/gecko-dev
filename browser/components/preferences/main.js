@@ -130,6 +130,7 @@ Preferences.addAll([
   { id: "general.autoScroll", type: "bool" },
   { id: "general.smoothScroll", type: "bool" },
   { id: "widget.gtk.overlay-scrollbars.enabled", type: "bool", inverted: true },
+  { id: "layout.css.always_underline_links", type: "bool" },
   { id: "layout.spellcheckDefault", type: "int" },
   { id: "accessibility.tabfocus", type: "int" },
 
@@ -3594,7 +3595,7 @@ var gMainPane = {
         // so if those are in use just display them. On other platforms
         // only do so if the folder matches the localized name.
         if (
-          AppConstants.platform == "mac" ||
+          AppConstants.platform == "macosx" ||
           leafName == firefoxLocalizedName
         ) {
           return { file, folderDisplayName: firefoxLocalizedName };

@@ -190,6 +190,7 @@ include = [
   "TextTransform",
   "TextJustify",
   "TextOverflow",
+  "TextIndent",
   "MozControlCharacterVisibility",
   "RubyPosition",
   "Owned",
@@ -761,6 +762,13 @@ renaming_overrides_prefixing = true
       sides_are_logical(true) {}
 """
 
+"GenericTextIndent" = """
+  StyleGenericTextIndent()
+    : length(StyleLengthPercentage::Zero()),
+      hanging(false),
+      each_line(false) {}
+"""
+
 "UrlExtraData" = """
   StyleUrlExtraData() = delete;
 
@@ -815,6 +823,9 @@ renaming_overrides_prefixing = true
 "GenericGradient" = """
   inline bool Repeating() const;
   bool IsOpaque() const;
+
+  // Return the color interpolation method of the gradient.
+  inline const StyleColorInterpolationMethod& ColorInterpolationMethod() const;
 """
 
 "GenericGridLine" = """
@@ -865,11 +876,7 @@ renaming_overrides_prefixing = true
   //
   // The resolution is in dppx, and should be used to impact the intrinsic
   // size of the image.
-  ImageResolution GetResolution() const;
-
-  // Returns the intrinsic size of the image, if there's one, accounting for
-  // resolution as needed.
-  Maybe<CSSIntSize> GetIntrinsicSize() const;
+  ImageResolution GetResolution(const ComputedStyle&) const;
 
   // If this is an image-set(), the final image we've selected, otherwise it
   // returns *this.
@@ -961,6 +968,8 @@ renaming_overrides_prefixing = true
 
 "Zoom" = """
  SERVO_FIXED_POINT_HELPERS(StyleZoom, uint16_t, StyleZOOM_FRACTION_BITS);
+ inline float Zoom(float) const;
+ inline float Unzoom(float) const;
 """
 
 "AnimationName" = """

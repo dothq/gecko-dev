@@ -29,6 +29,7 @@
 #include "mozilla/EventStateManager.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_signon.h"
 #include "mozilla/TextUtils.h"
 #include "mozilla/Try.h"
 #include "nsAttrValueInlines.h"
@@ -1414,10 +1415,15 @@ void HTMLInputElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
       aNameSpaceID, aName, aValue, aOldValue, aSubjectPrincipal, aNotify);
 }
 
-void HTMLInputElement::BeforeSetForm(bool aBindToTree) {
+void HTMLInputElement::BeforeSetForm(HTMLFormElement* aForm, bool aBindToTree) {
   // No need to remove from radio group if we are just binding to tree.
   if (mType == FormControlType::InputRadio && !aBindToTree) {
     RemoveFromRadioGroup();
+  }
+
+  // Dispatch event when <input> @form is set
+  if (!aBindToTree) {
+    MaybeDispatchLoginManagerEvents(aForm);
   }
 }
 
@@ -3125,8 +3131,7 @@ bool HTMLInputElement::CheckActivationBehaviorPreconditions(
       if (outerActivateEvent) {
         aVisitor.mItemFlags |= NS_OUTER_ACTIVATE_EVENT;
       }
-      return outerActivateEvent &&
-             !aVisitor.mEvent->mFlags.mMultiplePreActionsPrevented;
+      return outerActivateEvent;
     }
     default:
       return false;
@@ -3148,19 +3153,6 @@ void HTMLInputElement::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
 
   if (CheckActivationBehaviorPreconditions(aVisitor)) {
     aVisitor.mWantsActivationBehavior = true;
-
-    if ((mType == FormControlType::InputSubmit ||
-         mType == FormControlType::InputImage) &&
-        mForm) {
-      // Make sure other submit elements don't try to trigger submission.
-      aVisitor.mItemFlags |= NS_IN_SUBMIT_CLICK;
-      aVisitor.mItemData = static_cast<Element*>(mForm);
-      // tell the form that we are about to enter a click handler.
-      // that means that if there are scripted submissions, the
-      // latest one will be deferred until after the exit point of the
-      // handler.
-      mForm->OnSubmitClickBegin(this);
-    }
   }
 
   // We must cache type because mType may change during JS event (bug 2369)
@@ -3282,6 +3274,9 @@ void HTMLInputElement::LegacyPreActivationBehavior(
   // and legacy-canceled-activation behavior in HTML.
   //
 
+  // Assert mType didn't change after GetEventTargetParent
+  MOZ_ASSERT(NS_CONTROL_TYPE(aVisitor.mItemFlags) == uint8_t(mType));
+
   bool originalCheckedValue = false;
   mCheckedIsToggled = false;
 
@@ -3316,6 +3311,19 @@ void HTMLInputElement::LegacyPreActivationBehavior(
 
   if (originalCheckedValue) {
     aVisitor.mItemFlags |= NS_ORIGINAL_CHECKED_VALUE;
+  }
+
+  // out-of-spec legacy pre-activation behavior needed because of bug 1803805
+  if ((mType == FormControlType::InputSubmit ||
+       mType == FormControlType::InputImage) &&
+      mForm) {
+    aVisitor.mItemFlags |= NS_IN_SUBMIT_CLICK;
+    aVisitor.mItemData = static_cast<Element*>(mForm);
+    // tell the form that we are about to enter a click handler.
+    // that means that if there are scripted submissions, the
+    // latest one will be deferred until after the exit point of the
+    // handler.
+    mForm->OnSubmitClickBegin(this);
   }
 }
 
@@ -3650,7 +3658,6 @@ nsresult HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
   }
 
   nsresult rv = NS_OK;
-  bool outerActivateEvent = !!(aVisitor.mItemFlags & NS_OUTER_ACTIVATE_EVENT);
   auto oldType = FormControlType(NS_CONTROL_TYPE(aVisitor.mItemFlags));
 
   // Ideally we would make the default action for click and space just dispatch
@@ -3990,50 +3997,17 @@ nsresult HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
           break;
       }
 
-      // Bug 1459231: should be in ActivationBehavior(). blocked by 1803805
-      if (outerActivateEvent) {
-        switch (mType) {
-          case FormControlType::InputReset:
-          case FormControlType::InputSubmit:
-          case FormControlType::InputImage:
-            if (mForm) {
-              // Hold a strong ref while dispatching
-              RefPtr<HTMLFormElement> form(mForm);
-              if (mType == FormControlType::InputReset) {
-                form->MaybeReset(this);
-              } else {
-                form->MaybeSubmit(this);
-              }
-              aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
-            }
-            break;
-
-          default:
-            break;
-        }  // switch
-        if (IsButtonControl()) {
-          HandlePopoverTargetAction();
-        }
-      }  // click or outer activate event
+      // Bug 1459231: Temporarily needed till links respect activation target
+      // Then also remove NS_OUTER_ACTIVATE_EVENT
+      if ((aVisitor.mItemFlags & NS_OUTER_ACTIVATE_EVENT) &&
+          (mType == FormControlType::InputReset ||
+           mType == FormControlType::InputSubmit ||
+           mType == FormControlType::InputImage) &&
+          mForm) {
+        aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+      }
     }
   }  // if
-  if ((aVisitor.mItemFlags & NS_IN_SUBMIT_CLICK) &&
-      (oldType == FormControlType::InputSubmit ||
-       oldType == FormControlType::InputImage)) {
-    nsCOMPtr<nsIContent> content(do_QueryInterface(aVisitor.mItemData));
-    RefPtr<HTMLFormElement> form = HTMLFormElement::FromNodeOrNull(content);
-    MOZ_ASSERT(form);
-    // Tell the form that we are about to exit a click handler,
-    // so the form knows not to defer subsequent submissions.
-    // The pending ones that were created during the handler
-    // will be flushed or forgotten.
-    form->OnSubmitClickEnd();
-    // tell the form to flush a possible pending submission.
-    // the reason is that the script returned false (the event was
-    // not ignored) so if there is a stored submission, it needs to
-    // be submitted immediately.
-    form->FlushPendingSubmission();
-  }
 
   if (NS_SUCCEEDED(rv) && mType == FormControlType::InputRange) {
     PostHandleEventForRangeThumb(aVisitor);
@@ -4045,6 +4019,26 @@ nsresult HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
   return NS_OK;
 }
 
+void EndSubmitClick(EventChainPostVisitor& aVisitor) {
+  auto oldType = FormControlType(NS_CONTROL_TYPE(aVisitor.mItemFlags));
+  if ((aVisitor.mItemFlags & NS_IN_SUBMIT_CLICK) &&
+      (oldType == FormControlType::InputSubmit ||
+       oldType == FormControlType::InputImage)) {
+    nsCOMPtr<nsIContent> content(do_QueryInterface(aVisitor.mItemData));
+    RefPtr<HTMLFormElement> form = HTMLFormElement::FromNodeOrNull(content);
+    // Tell the form that we are about to exit a click handler,
+    // so the form knows not to defer subsequent submissions.
+    // The pending ones that were created during the handler
+    // will be flushed or forgotten.
+    form->OnSubmitClickEnd();
+    // tell the form to flush a possible pending submission.
+    // the reason is that the script returned false (the event was
+    // not ignored) so if there is a stored submission, it needs to
+    // be submitted immediately.
+    form->FlushPendingSubmission();
+  }
+}
+
 void HTMLInputElement::ActivationBehavior(EventChainPostVisitor& aVisitor) {
   auto oldType = FormControlType(NS_CONTROL_TYPE(aVisitor.mItemFlags));
 
@@ -4054,6 +4048,7 @@ void HTMLInputElement::ActivationBehavior(EventChainPostVisitor& aVisitor) {
     // listeners. Checkboxes and radio buttons should still process clicks for
     // web compat. See:
     // https://html.spec.whatwg.org/multipage/input.html#the-input-element:activation-behaviour
+    EndSubmitClick(aVisitor);
     return;
   }
 
@@ -4083,6 +4078,35 @@ void HTMLInputElement::ActivationBehavior(EventChainPostVisitor& aVisitor) {
     }
 #endif
   }
+
+  switch (mType) {
+    case FormControlType::InputReset:
+    case FormControlType::InputSubmit:
+    case FormControlType::InputImage:
+      if (mForm) {
+        // Hold a strong ref while dispatching
+        RefPtr<HTMLFormElement> form(mForm);
+        if (mType == FormControlType::InputReset) {
+          form->MaybeReset(this);
+        } else {
+          form->MaybeSubmit(this);
+        }
+        aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
+      }
+      break;
+
+    default:
+      break;
+  }  // switch
+  if (IsButtonControl()) {
+    if (!GetInvokeTargetElement()) {
+      HandlePopoverTargetAction();
+    } else {
+      HandleInvokeTargetAction();
+    }
+  }
+
+  EndSubmitClick(aVisitor);
 }
 
 void HTMLInputElement::LegacyCanceledActivationBehavior(
@@ -4115,6 +4139,9 @@ void HTMLInputElement::LegacyCanceledActivationBehavior(
       DoSetChecked(originalCheckedValue, true, true);
     }
   }
+
+  // Relevant for bug 242494: submit button with "submit(); return false;"
+  EndSubmitClick(aVisitor);
 }
 
 enum class RadioButtonMove { Back, Forward, None };
@@ -4324,20 +4351,59 @@ nsresult HTMLInputElement::BindToTree(BindContext& aContext, nsINode& aParent) {
     AttachAndSetUAShadowRoot(NotifyUAWidgetSetup::Yes, DelegatesFocus::Yes);
   }
 
-  if (mType == FormControlType::InputPassword) {
-    if (IsInComposedDoc()) {
-      AsyncEventDispatcher* dispatcher =
-          new AsyncEventDispatcher(this, u"DOMInputPasswordAdded"_ns,
-                                   CanBubble::eYes, ChromeOnlyDispatch::eYes);
-      dispatcher->PostDOMEvent();
-    }
-
-#ifdef EARLY_BETA_OR_EARLIER
-    Telemetry::Accumulate(Telemetry::PWMGR_PASSWORD_INPUT_IN_FORM, !!mForm);
-#endif
-  }
+  MaybeDispatchLoginManagerEvents(mForm);
 
   return rv;
+}
+
+void HTMLInputElement::MaybeDispatchLoginManagerEvents(HTMLFormElement* aForm) {
+  // Don't disptach the event if the <input> is disconnected
+  // or belongs to a disconnected form
+  if (!IsInComposedDoc()) {
+    return;
+  }
+
+  nsString eventType;
+  Element* target = nullptr;
+
+  if (mType == FormControlType::InputPassword) {
+    // Don't fire another event if we have a pending event.
+    if (aForm && aForm->mHasPendingPasswordEvent) {
+      return;
+    }
+
+    // TODO(Bug 1864404): Use one event for formless and form inputs.
+    eventType = aForm ? u"DOMFormHasPassword"_ns : u"DOMInputPasswordAdded"_ns;
+
+    target = aForm ? static_cast<Element*>(aForm) : this;
+
+    if (aForm) {
+      aForm->mHasPendingPasswordEvent = true;
+    }
+
+  } else if (mType == FormControlType::InputEmail ||
+             mType == FormControlType::InputText) {
+    // Don't fire a username event if:
+    // - <input> is not part of a form
+    // - we have a pending event
+    // - username only forms are not supported
+    if (!aForm || aForm->mHasPendingPossibleUsernameEvent ||
+        !StaticPrefs::signon_usernameOnlyForm_enabled()) {
+      return;
+    }
+
+    eventType = u"DOMFormHasPossibleUsername"_ns;
+    target = aForm;
+
+    aForm->mHasPendingPossibleUsernameEvent = true;
+
+  } else {
+    return;
+  }
+
+  RefPtr<AsyncEventDispatcher> dispatcher = new AsyncEventDispatcher(
+      target, eventType, CanBubble::eYes, ChromeOnlyDispatch::eYes);
+  dispatcher->PostDOMEvent();
 }
 
 void HTMLInputElement::UnbindFromTree(bool aNullParent) {
@@ -4600,12 +4666,7 @@ void HTMLInputElement::HandleTypeChange(FormControlType aNewType,
     }
   }
 
-  if (mType == FormControlType::InputPassword && IsInComposedDoc()) {
-    AsyncEventDispatcher* dispatcher =
-        new AsyncEventDispatcher(this, u"DOMInputPasswordAdded"_ns,
-                                 CanBubble::eYes, ChromeOnlyDispatch::eYes);
-    dispatcher->PostDOMEvent();
-  }
+  MaybeDispatchLoginManagerEvents(mForm);
 
   if (IsInComposedDoc()) {
     if (CreatesDateTimeWidget(oldType)) {
@@ -5759,13 +5820,23 @@ void HTMLInputElement::ShowPicker(ErrorResult& aRv) {
     return;
   }
 
-  if (CreatesDateTimeWidget() && IsInComposedDoc()) {
-    if (RefPtr<Element> dateTimeBoxElement = GetDateTimeBoxElement()) {
-      // Event is dispatched to closed-shadow tree and doesn't bubble.
-      RefPtr<Document> doc = dateTimeBoxElement->OwnerDoc();
-      nsContentUtils::DispatchTrustedEvent(doc, dateTimeBoxElement,
-                                           u"MozDateTimeShowPickerForJS"_ns,
-                                           CanBubble::eNo, Cancelable::eNo);
+  if (!IsInComposedDoc()) {
+    return;
+  }
+
+  if (IsDateTimeTypeSupported(mType)) {
+    if (CreatesDateTimeWidget()) {
+      if (RefPtr<Element> dateTimeBoxElement = GetDateTimeBoxElement()) {
+        // Event is dispatched to closed-shadow tree and doesn't bubble.
+        RefPtr<Document> doc = dateTimeBoxElement->OwnerDoc();
+        nsContentUtils::DispatchTrustedEvent(doc, dateTimeBoxElement,
+                                             u"MozDateTimeShowPickerForJS"_ns,
+                                             CanBubble::eNo, Cancelable::eNo);
+      }
+    } else {
+      DateTimeValue value;
+      GetDateTimeInputBoxValue(value);
+      OpenDateTimePicker(value);
     }
   }
 }

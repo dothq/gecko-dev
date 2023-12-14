@@ -7,8 +7,11 @@
 @namespace html url("http://www.w3.org/1999/xhtml");
 
 :root {
-  --autocomplete-popup-highlight-background: SelectedItem;
-  --autocomplete-popup-highlight-color: SelectedItemText;
+  --urlbarView-hover-background: var(--arrowpanel-dimmed);
+  --urlbarView-separator-color: color-mix(in srgb, currentColor 14%, transparent);
+
+  --urlbarView-highlight-background: SelectedItem;
+  --urlbarView-highlight-color: SelectedItemText;
 
   --urlbarView-secondary-text-color: color-mix(in srgb, currentColor 73%, transparent);
 
@@ -20,6 +23,7 @@
   --urlbarView-small-font-size: 0.85em;
 
   --urlbarView-item-inline-padding: var(--urlbar-icon-padding);
+  --urlbarView-item-block-padding: 6px;
   --urlbarView-favicon-width: 16px;
   --urlbarView-icon-margin-start: 0px;
   --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline));
@@ -39,23 +43,15 @@
 
   &:-moz-lwtheme {
     --urlbarView-action-color: light-dark(rgb(91, 91, 102), rgb(191, 191, 201));
-    /* Fallback colors for when themes don't specify popup_highlight / popup_highlight_text. */
-    --autocomplete-popup-highlight-background: light-dark(rgb(0, 99, 255), rgb(0, 99, 225));
-    --autocomplete-popup-highlight-color: white;
+    --urlbarView-highlight-background: light-dark(rgb(0, 99, 255), rgb(0, 99, 225));
+    --urlbarView-highlight-color: white;
   }
 
   @media (prefers-contrast) {
+    --urlbarView-separator-color: color-mix(in srgb, currentColor 86%, transparent);
     --urlbarView-result-button-background-opacity: 100%;
     --urlbarView-secondary-text-color: currentColor;
   }
-}
-
-/* Align the favicons and titles of rows with standard 16px icons with those
-   of rich suggestions. */
-#urlbar[richSuggestionsEnabled] .urlbarView-row:not([rich-suggestion]),
-#urlbar[richSuggestionsEnabled] .urlbarView-row[rich-suggestion][icon-size="16"] {
-  --urlbarView-icon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2);
-  --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2));
 }
 
 .urlbarView {
@@ -76,7 +72,7 @@
   margin-inline: calc(-1 * var(--urlbarView-row-gutter));
 
   #urlbar[open] > .urlbarView > .urlbarView-body-outer > & {
-    border-top: 1px solid var(--autocomplete-popup-separator-color);
+    border-top: 1px solid var(--urlbarView-separator-color);
   }
 }
 
@@ -93,6 +89,17 @@
 .urlbarView-row {
   --urlbarView-second-line-indent: calc(var(--urlbarView-icon-margin-start) + var(--urlbarView-icon-margin-end) + var(--urlbarView-favicon-width));
 
+  /* Align the favicons and titles of rows with standard 16px icons with those
+     of rich suggestions. */
+  /* stylelint-disable-next-line media-query-no-invalid */
+  @media (-moz-bool-pref: "browser.urlbar.richSuggestions.featureGate") {
+    &:not([rich-suggestion]),
+    &[rich-suggestion][icon-size="16"] {
+      --urlbarView-icon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2);
+      --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2));
+    }
+  }
+
   display: flex;
   align-items: center;
   fill: currentColor;
@@ -106,12 +113,12 @@
   background-clip: padding-box;
 
   &[row-selectable]:not([selected]):hover {
-    background-color: var(--autocomplete-popup-hover-background);
+    background-color: var(--urlbarView-hover-background);
   }
 
   &[selected] {
-    background-color: var(--autocomplete-popup-highlight-background);
-    color: var(--autocomplete-popup-highlight-color);
+    background-color: var(--urlbarView-highlight-background);
+    color: var(--urlbarView-highlight-color);
   }
 
   :root:not([uidensity=compact]) &:not([type=tip], [type=dynamic]) {
@@ -135,7 +142,7 @@
   flex: 1 1;
   overflow: hidden;
   padding-inline: var(--urlbarView-item-inline-padding);
-  padding-block: 6px;
+  padding-block: var(--urlbarView-item-block-padding);
 
   :root:not([uidensity=compact]) & {
     min-height: 20px; /* row min-height 32px - (2 * padding-block 6px) */
@@ -320,7 +327,7 @@
 
   &[selected] {
     outline: var(--focus-outline);
-    outline-color: var(--autocomplete-popup-highlight-color);
+    outline-color: var(--urlbarView-highlight-color);
     outline-offset: 1px;
   }
 
@@ -377,12 +384,13 @@
 .urlbarView-button:not(:empty) {
   &:not(.urlbarView-button-menu) {
     border-radius: var(--toolbarbutton-border-radius);
-    padding: 7px;
+    padding: .5em 1em;
+    margin-inline-end: 1.4em;
     font-size: 0.93em;
-    font-weight: 600;
+    font-weight: var(--font-weight-bold);
     background-clip: padding-box;
     min-height: 16px;
-    min-width: 8.75em;
+    min-width: 6em;
     text-align: center;
     flex-basis: initial;
     flex-shrink: 0;
@@ -391,29 +399,20 @@
       background-color: var(--button-bgcolor);
     }
 
-    &[selected] {
+    &:is([selected], [primary]) {
       color: var(--button-primary-color);
       background-color: var(--button-primary-bgcolor);
+      outline-color: var(--button-primary-bgcolor);
       outline-offset: var(--focus-outline-offset);
-    }
 
-    &[selected]:hover {
-      background-color: var(--button-primary-hover-bgcolor);
-    }
+      &:hover {
+        background-color: var(--button-primary-hover-bgcolor);
+      }
 
-    &[selected]:hover:active {
-      background-color: var(--button-primary-active-bgcolor);
+      &:hover:active {
+        background-color: var(--button-primary-active-bgcolor);
+      }
     }
-
-    &:last-child {
-      /* Add space between a labeled button and the trailing edge of the panel. */
-      margin-inline-end: 1.8em;
-    }
-  }
-
-  + .urlbarView-button:empty {
-    /* Add space between a labeled button followed by an unlabeled button. */
-    margin-inline-start: 1.8em;
   }
 }
 
@@ -424,12 +423,12 @@
   border-radius: 0;
 
   &:not(:last-child) {
-    border-bottom: 1px solid var(--autocomplete-popup-separator-color);
+    border-bottom: 1px solid var(--urlbarView-separator-color);
     margin-bottom: 4px;
   }
 
   &:not(:first-child) {
-    border-top: 1px solid var(--autocomplete-popup-separator-color);
+    border-top: 1px solid var(--urlbarView-separator-color);
     margin-top: 4px;
   }
 
@@ -832,7 +831,7 @@
 }
 
 .urlbarView:not([noresults]) > .search-one-offs:not([hidden]) {
-  border-top: 1px solid var(--autocomplete-popup-separator-color);
+  border-top: 1px solid var(--urlbarView-separator-color);
 }
 
 :root[uidensity=touch] #urlbar .search-one-offs:not([hidden]) {
@@ -942,6 +941,6 @@
 }
 
 #PopupSearchAutoComplete .autocomplete-richlistitem[selected] {
-  background: var(--autocomplete-popup-highlight-background);
-  color: var(--autocomplete-popup-highlight-color);
+  background: var(--urlbarView-highlight-background);
+  color: var(--urlbarView-highlight-color);
 }

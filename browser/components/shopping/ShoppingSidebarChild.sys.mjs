@@ -60,6 +60,7 @@ export class ShoppingSidebarChild extends RemotePageChild {
     this._destroyed = true;
     super.didDestroy?.();
     gAllActors.delete(this);
+    this.#product?.off("analysis-progress", this.#onAnalysisProgress);
     this.#product?.uninit();
   }
 
@@ -129,12 +130,12 @@ export class ShoppingSidebarChild extends RemotePageChild {
         break;
       case "AdClicked":
         aid = event.detail.aid;
-        this.#product.sendAttributionEvent("click", aid);
+        ShoppingProduct.sendAttributionEvent("click", aid);
         Glean.shopping.surfaceAdsClicked.record();
         break;
       case "AdImpression":
         aid = event.detail.aid;
-        this.#product.sendAttributionEvent("impression", aid);
+        ShoppingProduct.sendAttributionEvent("impression", aid);
         Glean.shopping.surfaceAdsImpression.record();
         break;
     }
@@ -222,6 +223,7 @@ export class ShoppingSidebarChild extends RemotePageChild {
       }
       return currentURI && currentURI == this.#productURI;
     };
+    this.#product?.off("analysis-progress", this.#onAnalysisProgress);
     this.#product?.uninit();
     // We are called either because the URL has changed or because the opt-in
     // state has changed. In both cases, we want to clear out content
@@ -255,6 +257,11 @@ export class ShoppingSidebarChild extends RemotePageChild {
 
       let uri = this.#productURI;
       this.#product = new ShoppingProduct(uri);
+      this.#product.on(
+        "analysis-progress",
+        this.#onAnalysisProgress.bind(this)
+      );
+
       let data;
       let isAnalysisInProgress;
 
@@ -282,14 +289,38 @@ export class ShoppingSidebarChild extends RemotePageChild {
               isAnalysisInProgress,
             });
           }
-          await this.#product.pollForAnalysisCompleted({
-            pollInitialWait: analysisStatus == "in_progress" ? 0 : undefined,
-          });
+          analysisStatusResponse = await this.#product.pollForAnalysisCompleted(
+            {
+              pollInitialWait: analysisStatus == "in_progress" ? 0 : undefined,
+            }
+          );
+          analysisStatus = analysisStatusResponse?.status;
           isAnalysisInProgress = false;
         }
-        data = await this.#product.requestAnalysis();
+
+        // Use the analysis status instead of re-requesting unnecessarily,
+        // or throw if the status from the last analysis was an error.
+        switch (analysisStatus) {
+          case "not_analyzable":
+          case "page_not_supported":
+            data = { page_not_supported: true };
+            break;
+          case "not_enough_reviews":
+            data = { not_enough_reviews: true };
+            break;
+          case "unprocessable":
+          case "stale":
+            throw new Error(analysisStatus, { cause: analysisStatus });
+          default:
+          // Status is "completed" or "not_found" (no analysis status),
+          // so we should request the analysis data.
+        }
+
         if (!data) {
-          throw new Error("request failed");
+          data = await this.#product.requestAnalysis();
+          if (!data) {
+            throw new Error("request failed");
+          }
         }
       } catch (err) {
         console.error("Failed to fetch product analysis data", err);
@@ -417,5 +448,11 @@ export class ShoppingSidebarChild extends RemotePageChild {
 
   async reportProductAvailable() {
     await this.#product.sendReport();
+  }
+
+  #onAnalysisProgress(eventName, progress) {
+    this.sendToContent("UpdateAnalysisProgress", {
+      progress,
+    });
   }
 }

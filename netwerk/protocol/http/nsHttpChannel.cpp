@@ -2290,6 +2290,7 @@ nsresult nsHttpChannel::ContinueProcessResponse1() {
     if (!mAuthRetryPending) {
       rv = mAuthProvider->CheckForSuperfluousAuth();
       if (NS_FAILED(rv)) {
+        mStatus = rv;
         LOG(("  CheckForSuperfluousAuth failed (%08x)",
              static_cast<uint32_t>(rv)));
       }
@@ -2502,6 +2503,7 @@ nsresult nsHttpChannel::ContinueProcessResponse3(nsresult rv) {
         if (!mAuthRetryPending) {
           rv = mAuthProvider->CheckForSuperfluousAuth();
           if (NS_FAILED(rv)) {
+            mStatus = rv;
             LOG(("CheckForSuperfluousAuth failed [rv=%x]\n",
                  static_cast<uint32_t>(rv)));
           }
@@ -7430,6 +7432,7 @@ nsresult nsHttpChannel::ContinueOnStartRequest4(nsresult result) {
     if (httpStatus != 401 && httpStatus != 407) {
       nsresult rv = mAuthProvider->CheckForSuperfluousAuth();
       if (NS_FAILED(rv)) {
+        mStatus = rv;
         LOG(("  CheckForSuperfluousAuth failed (%08x)",
              static_cast<uint32_t>(rv)));
       }
@@ -7828,13 +7831,16 @@ nsresult nsHttpChannel::ContinueOnStopRequestAfterAuthRetry(
     if (mListener) {
       MOZ_ASSERT(!LoadOnStartRequestCalled(),
                  "We should not call OnStartRequest twice.");
-      nsCOMPtr<nsIStreamListener> listener(mListener);
-      StoreOnStartRequestCalled(true);
-      listener->OnStartRequest(this);
+      if (!LoadOnStartRequestCalled()) {
+        nsCOMPtr<nsIStreamListener> listener(mListener);
+        StoreOnStartRequestCalled(true);
+        listener->OnStartRequest(this);
+      }
     } else {
       StoreOnStartRequestCalled(true);
       NS_WARNING("OnStartRequest skipped because of null listener");
     }
+    mAuthRetryPending = false;
   }
 
   // if this transaction has been replaced, then bail.
@@ -8113,13 +8119,25 @@ nsresult nsHttpChannel::ContinueOnStopRequest(nsresult aStatus, bool aIsFromNet,
 
   if (mAuthRetryPending &&
       StaticPrefs::network_auth_use_redirect_for_retries()) {
-    MOZ_ASSERT(mRedirectChannel);
     nsresult rv = OpenRedirectChannel(aStatus);
     LOG(("Opening redirect channel for auth retry %x",
          static_cast<uint32_t>(rv)));
-    mRedirectChannel = nullptr;
+    if (NS_FAILED(rv)) {
+      if (mListener) {
+        MOZ_ASSERT(!LoadOnStartRequestCalled(),
+                   "We should not call OnStartRequest twice.");
+        if (!LoadOnStartRequestCalled()) {
+          nsCOMPtr<nsIStreamListener> listener(mListener);
+          StoreOnStartRequestCalled(true);
+          listener->OnStartRequest(this);
+        }
+      } else {
+        StoreOnStartRequestCalled(true);
+        NS_WARNING("OnStartRequest skipped because of null listener");
+      }
+    }
+    mAuthRetryPending = false;
   }
-
   if (mListener) {
     LOG(("nsHttpChannel %p calling OnStopRequest\n", this));
     MOZ_ASSERT(LoadOnStartRequestCalled(),
@@ -8135,6 +8153,8 @@ nsresult nsHttpChannel::ContinueOnStopRequest(nsresult aStatus, bool aIsFromNet,
   mDNSPrefetch = nullptr;
 
   mTransactionSticky = nullptr;
+
+  mRedirectChannel = nullptr;
 
   // notify "http-on-stop-connect" observers
   gHttpHandler->OnStopRequest(this);
@@ -8403,6 +8423,18 @@ nsHttpChannel::CheckListenerChain() {
     rv = retargetableListener->CheckListenerChain();
   }
   return rv;
+}
+
+NS_IMETHODIMP
+nsHttpChannel::OnDataFinished(nsresult aStatus) {
+  nsCOMPtr<nsIThreadRetargetableStreamListener> listener =
+      do_QueryInterface(mListener);
+
+  if (listener) {
+    return listener->OnDataFinished(aStatus);
+  }
+
+  return NS_OK;
 }
 
 //-----------------------------------------------------------------------------
