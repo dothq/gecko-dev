@@ -1,0 +1,45 @@
+name: "Pull from upstream"
+
+on:
+    schedule:
+        - cron: "0 */12 * * *" # every 12 hours
+    workflow_dispatch:
+        inputs:
+            skip_version_check:
+                description: "Skip checking upstream version"
+                required: true
+                type: boolean
+
+jobs:
+    pull:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v3
+              with:
+                repository: 'dothq/gecko-dev-scripts'
+
+            - name: Install dependencies
+              run: npm install
+
+            - name: Compare versions
+              run: |
+                ROBOT_TOKEN=${{ secrets.ROBOT_TOKEN }} node src/compare-versions.js ${{ inputs.skip_version_check == false && vars.PREV_CHECK_VERSION || '1.0.0' }}
+
+            - name: Store current version
+              if: ${{ inputs.skip_version_check == false }}
+              env:
+                  GH_TOKEN: ${{ secrets.ROBOT_TOKEN }}
+              run: |
+                CURRENT_VERSION=$(cat current_version.txt)
+                gh api --method POST \
+                    -H "Accept: application/vnd.github+json" \
+                    -H "X-GitHub-Api-Version: 2022-11-28" \
+                    /repos/dothq/gecko-dev/actions/variables \
+                    -f name='PREV_CHECK_VERSION' \
+                    -f value="$CURRENT_VERSION" || true
+                gh api --method PATCH \
+                    -H "Accept: application/vnd.github+json" \
+                    -H "X-GitHub-Api-Version: 2022-11-28" \
+                    /repos/dothq/gecko-dev/actions/variables/PREV_CHECK_VERSION \
+                    -f name='PREV_CHECK_VERSION' \
+                    -f value="$CURRENT_VERSION"
