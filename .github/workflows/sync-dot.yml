@@ -11,7 +11,7 @@ jobs:
               uses: actions/checkout@v4
               with:
                 ref: ${{ github.base_ref }}
-                fetch-depth: 0
+                fetch-depth: 1000
 
             - name: Checkout desktop repo
               uses: actions/checkout@v4
@@ -22,6 +22,9 @@ jobs:
             - name: Initialise mach
               working-directory: ./dot
               run: |
+                git config --local user.email "github-action@users.noreply.github.com"
+                git config --local user.name "GitHub Action"
+
                 ./scripts/install_mach_commands.py
 
             - name: Bump the revision file
