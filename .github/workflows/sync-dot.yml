@@ -22,8 +22,8 @@ jobs:
             - name: Initialise mach
               working-directory: ./dot
               run: |
-                git config --local user.email "github-action@users.noreply.github.com"
-                git config --local user.name "GitHub Action"
+                git config --global user.email "github-action@users.noreply.github.com"
+                git config --global user.name "GitHub Action"
 
                 ./scripts/install_mach_commands.py
 
