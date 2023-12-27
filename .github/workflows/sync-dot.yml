@@ -1,0 +1,35 @@
+name: "Synchronise browser-desktop"
+
+on:
+    pull_request:
+
+jobs:
+    sync:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                ref: ${{ github.base_ref }}
+                fetch-depth: 0
+
+            - name: Checkout desktop repo
+              uses: actions/checkout@v4
+              with:
+                repository: dothq/browser-desktop
+                path: dot
+
+            - name: Initialise mach
+              working-directory: ./dot
+              run: |
+                ./scripts/install_mach_commands.py
+
+            - name: Bump the revision file
+              working-directory: ./dot
+              run: |
+                echo "${{ github.server_url }}/${{ github.repository }}.git ${{ github.sha }} ${{ github.base_ref }}" > REVISION
+
+            - name: Synchronise repositories
+              working-directory: ./dot
+              run: |
+                ./mach sync
