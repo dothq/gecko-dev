@@ -581,6 +581,10 @@ pocketNewtab:
       type: string
       fallbackPref: browser.newtabpage.activity-stream.discoverystream.spoc-topsites-positions
       description: CSV string of spoc position indexes on newtab topsites section
+    contileTopsitesPositions:
+      type: string
+      fallbackPref: browser.newtabpage.activity-stream.discoverystream.contile-topsites-positions
+      description: CSV string of contile position indexes on newtab topsites section
     spocAdTypes:
       type: string
       fallbackPref: browser.newtabpage.activity-stream.discoverystream.spocAdTypes
@@ -1460,6 +1464,12 @@ fxaButtonVisibility:
       description: True if the Firefox Accounts toolbar button should be visible when not signed in.
       type: boolean
       setPref: identity.fxaccounts.toolbar.defaultVisible
+    pxiToolbarEnabled:
+      description: >-
+        True if we're enabling the PXI dropdown menu for the FxA toolbar button instead of
+        taking the user straight to login
+      type: boolean
+      setPref: identity.fxaccounts.toolbar.pxiToolbarEnabled
 
 legacyHeartbeat:
   description: Normandy Heartbeat exposed to Nimbus
