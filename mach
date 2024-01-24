@@ -29,6 +29,8 @@ def check_and_get_mach(dir_path, args):
     initialize_paths = (
         # Run Thunderbird's mach_initialize.py if it exists
         "comm/build/mach_initialize.py",
+        # Run Dot's mach_initialize.py if it exists
+        "dot/build/mach_initialize.py",
         "build/mach_initialize.py",
         # test package initialize
         "tools/mach_initialize.py",
