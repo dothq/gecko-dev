@@ -821,6 +821,7 @@ var gSync = {
       // we should show the PXI panel instead of taking the user
       // straight to FxA sign-in
       if (this.PXI_TOOLBAR_ENABLED) {
+        this.updateFxAPanel(UIState.get());
         this.updateCTAPanel();
         PanelUI.showSubView("PanelUI-fxa", anchor, aEvent);
       } else {
@@ -1231,8 +1232,10 @@ var gSync = {
         this.openFxAEmailFirstPageFromFxaMenu(panel);
         break;
       case UIState.STATUS_LOGIN_FAILED:
-      case UIState.STATUS_NOT_VERIFIED:
         this.openPrefsFromFxaMenu("sync_settings", panel);
+        break;
+      case UIState.STATUS_NOT_VERIFIED:
+        this.openFxAEmailFirstPage("fxa_app_menu_reverify");
         break;
       case UIState.STATUS_SIGNED_IN:
         this.openFxAManagePageFromFxaMenu(panel);

@@ -1316,12 +1316,12 @@ void BaseCompiler::shuffleStackResultsBeforeBranch(StackHeight srcHeight,
   fr.popStackBeforeBranch(destHeight, stackResultBytes);
 }
 
-bool BaseCompiler::insertLeaveFrame() {
+bool BaseCompiler::insertDebugCollapseFrame() {
   if (!compilerEnv_.debugEnabled()) {
     return true;
   }
-  insertBreakablePoint(CallSiteDesc::LeaveFrame);
-  return createStackMap("debug: leave-frame breakpoint",
+  insertBreakablePoint(CallSiteDesc::CollapseFrame);
+  return createStackMap("debug: collapse-frame breakpoint",
                         HasDebugFrameWithLiveRefs::Maybe);
 }
 
@@ -4858,7 +4858,7 @@ bool BaseCompiler::emitReturnCall() {
   }
 
   sync();
-  if (!insertLeaveFrame()) {
+  if (!insertDebugCollapseFrame()) {
     return false;
   }
 
@@ -4978,7 +4978,7 @@ bool BaseCompiler::emitReturnCallIndirect() {
   }
 
   sync();
-  if (!insertLeaveFrame()) {
+  if (!insertDebugCollapseFrame()) {
     return false;
   }
 
@@ -5087,7 +5087,7 @@ bool BaseCompiler::emitReturnCallRef() {
   }
 
   sync();
-  if (!insertLeaveFrame()) {
+  if (!insertDebugCollapseFrame()) {
     return false;
   }
 
@@ -6982,6 +6982,83 @@ bool BaseCompiler::emitGcArraySet(RegRef object, RegPtr data, RegI32 index,
   return true;
 }
 
+// Emits allocation code for a GC struct. The struct may have an out-of-line
+// data area; if so, `isOutlineStruct` will be true and `outlineBase` will be
+// allocated and must be freed.
+template <bool ZeroFields>
+bool BaseCompiler::emitStructAlloc(uint32_t typeIndex, RegRef* object,
+                                   bool* isOutlineStruct, RegPtr* outlineBase) {
+  const TypeDef& typeDef = (*moduleEnv_.types)[typeIndex];
+  const StructType& structType = typeDef.structType();
+  gc::AllocKind allocKind = WasmStructObject::allocKindForTypeDef(&typeDef);
+
+  *isOutlineStruct = WasmStructObject::requiresOutlineBytes(structType.size_);
+
+  // Reserve this register early if we will need it so that it is not taken by
+  // any register used in this function.
+  needPtr(RegPtr(PreBarrierReg));
+
+  *object = RegRef();
+
+  // Allocate an uninitialized struct. This requires the type definition
+  // for the struct to be pushed on the stack. This will trap on OOM.
+  if (*isOutlineStruct) {
+    pushPtr(loadTypeDefInstanceData(typeIndex));
+    if (!emitInstanceCall(ZeroFields ? SASigStructNewOOL_true
+                                     : SASigStructNewOOL_false)) {
+      return false;
+    }
+    *object = popRef();
+  } else {
+    // We eagerly sync the value stack to the machine stack here so as not to
+    // confuse things with the conditional instance call below.
+    sync();
+
+    RegPtr instance;
+    *object = RegRef(ReturnReg);
+    needRef(*object);
+#  ifndef RABALDR_PIN_INSTANCE
+    // We reuse the result register for the instance.
+    instance = RegPtr(ReturnReg);
+    fr.loadInstancePtr(instance);
+#  else
+    // We can use the pinned instance register.
+    instance = RegPtr(InstanceReg);
+#  endif
+
+    RegPtr typeDefData = loadTypeDefInstanceData(typeIndex);
+    RegPtr temp1 = needPtr();
+    RegPtr temp2 = needPtr();
+
+    Label success;
+    Label fail;
+    masm.wasmNewStructObject(instance, *object, typeDefData, temp1, temp2,
+                             &fail, allocKind, ZeroFields);
+    freePtr(temp1);
+    freePtr(temp2);
+    masm.jump(&success);
+
+    masm.bind(&fail);
+    freeRef(*object);
+    pushPtr(typeDefData);
+    if (!emitInstanceCall(ZeroFields ? SASigStructNewIL_true
+                                     : SASigStructNewIL_false)) {
+      return false;
+    }
+    *object = popRef();
+    MOZ_ASSERT(*object == RegRef(ReturnReg));
+
+    masm.bind(&success);
+  }
+
+  *outlineBase = *isOutlineStruct ? needPtr() : RegPtr();
+
+  // Free the barrier reg for later use
+  freePtr(RegPtr(PreBarrierReg));
+
+  return true;
+}
+
 bool BaseCompiler::emitStructNew() {
   uint32_t typeIndex;
   BaseNothingVector args{};
@@ -6993,19 +7070,14 @@ bool BaseCompiler::emitStructNew() {
     return true;
   }
 
-  const StructType& structType = (*moduleEnv_.types)[typeIndex].structType();
+  const TypeDef& typeDef = (*moduleEnv_.types)[typeIndex];
+  const StructType& structType = typeDef.structType();
 
-  // Figure out whether we need an OOL storage area, and hence which routine
-  // to call.
-  SymbolicAddressSignature calleeSASig =
-      WasmStructObject::requiresOutlineBytes(structType.size_)
-          ? SASigStructNewOOL_false
-          : SASigStructNewIL_false;
-
-  // Allocate an uninitialized struct. This requires the type definition
-  // for the struct to be pushed on the stack. This will trap on OOM.
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  if (!emitInstanceCall(calleeSASig)) {
+  RegRef object;
+  RegPtr outlineBase;
+  bool isOutlineStruct;
+  if (!emitStructAlloc<false>(typeIndex, &object, &isOutlineStruct,
+                              &outlineBase)) {
     return false;
   }
 
@@ -7014,18 +7086,6 @@ bool BaseCompiler::emitStructNew() {
   // really only need to pop the stack once at the end, not for every element,
   // but to do better we need a bit more machinery to load elements off the
   // stack into registers.
-
-  bool isOutlineStruct = structType.size_ > WasmStructObject_MaxInlineBytes;
-
-  // Reserve this register early if we will need it so that it is not taken by
-  // any register used in this function.
-  needPtr(RegPtr(PreBarrierReg));
-
-  RegRef object = popRef();
-  RegPtr outlineBase = isOutlineStruct ? needPtr() : RegPtr();
-
-  // Free the barrier reg after we've allocated all registers
-  freePtr(RegPtr(PreBarrierReg));
 
   // Optimization opportunity: when the value being stored is a known
   // zero/null we need store nothing.  This case may be somewhat common
@@ -7098,19 +7158,20 @@ bool BaseCompiler::emitStructNewDefault() {
     return true;
   }
 
-  const StructType& structType = (*moduleEnv_.types)[typeIndex].structType();
+  RegRef object;
+  bool isOutlineStruct;
+  RegPtr outlineBase;
+  if (!emitStructAlloc<true>(typeIndex, &object, &isOutlineStruct,
+                             &outlineBase)) {
+    return false;
+  }
 
-  // Figure out whether we need an OOL storage area, and hence which routine
-  // to call.
-  SymbolicAddressSignature calleeSASig =
-      WasmStructObject::requiresOutlineBytes(structType.size_)
-          ? SASigStructNewOOL_true
-          : SASigStructNewIL_true;
+  if (isOutlineStruct) {
+    freePtr(outlineBase);
+  }
+  pushRef(object);
 
-  // Allocate a default initialized struct. This requires the type definition
-  // for the struct to be pushed on the stack. This will trap on OOM.
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  return emitInstanceCall(calleeSASig);
+  return true;
 }
 
 bool BaseCompiler::emitStructGet(FieldWideningOp wideningOp) {
@@ -8097,15 +8158,15 @@ bool BaseCompiler::emitBrOnCast(bool onSuccess) {
                             sourceType, destType);
 }
 
-bool BaseCompiler::emitExternInternalize() {
-  // extern.internalize is a no-op because anyref and extern share the same
+bool BaseCompiler::emitAnyConvertExtern() {
+  // any.convert_extern is a no-op because anyref and extern share the same
   // representation
   Nothing nothing;
   return iter_.readRefConversion(RefType::extern_(), RefType::any(), &nothing);
 }
 
-bool BaseCompiler::emitExternExternalize() {
-  // extern.externalize is a no-op because anyref and extern share the same
+bool BaseCompiler::emitExternConvertAny() {
+  // extern.convert_any is a no-op because anyref and extern share the same
   // representation
   Nothing nothing;
   return iter_.readRefConversion(RefType::any(), RefType::extern_(), &nothing);
@@ -9358,13 +9419,13 @@ bool BaseCompiler::emitVectorLaneSelect() {
 
 //////////////////////////////////////////////////////////////////////////////
 //
-// "Intrinsics" - magically imported functions for internal use.
+// "Builtin module funcs" - magically imported functions for internal use.
 
-bool BaseCompiler::emitIntrinsic() {
-  const Intrinsic* intrinsic;
+bool BaseCompiler::emitCallBuiltinModuleFunc() {
+  const BuiltinModuleFunc* builtinModuleFunc;
 
   BaseNothingVector params;
-  if (!iter_.readIntrinsic(&intrinsic, &params)) {
+  if (!iter_.readCallBuiltinModuleFunc(&builtinModuleFunc, &params)) {
     return false;
   }
 
@@ -9372,11 +9433,13 @@ bool BaseCompiler::emitIntrinsic() {
     return true;
   }
 
-  // The final parameter of an intrinsic is implicitly the heap base
-  pushHeapBase(0);
+  if (builtinModuleFunc->usesMemory) {
+    // The final parameter of an builtinModuleFunc is implicitly the heap base
+    pushHeapBase(0);
+  }
 
-  // Call the intrinsic
-  return emitInstanceCall(intrinsic->signature);
+  // Call the builtinModuleFunc
+  return emitInstanceCall(builtinModuleFunc->signature);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -10293,10 +10356,10 @@ bool BaseCompiler::emitBody() {
             CHECK_NEXT(emitBrOnCast(/*onSuccess=*/true));
           case uint32_t(GcOp::BrOnCastFail):
             CHECK_NEXT(emitBrOnCast(/*onSuccess=*/false));
-          case uint16_t(GcOp::ExternInternalize):
-            CHECK_NEXT(emitExternInternalize());
-          case uint16_t(GcOp::ExternExternalize):
-            CHECK_NEXT(emitExternExternalize());
+          case uint16_t(GcOp::AnyConvertExtern):
+            CHECK_NEXT(emitAnyConvertExtern());
+          case uint16_t(GcOp::ExternConvertAny):
+            CHECK_NEXT(emitExternConvertAny());
           default:
             break;
         }  // switch (op.b1)
@@ -11214,12 +11277,12 @@ bool BaseCompiler::emitBody() {
 
       // asm.js and other private operations
       case uint16_t(Op::MozPrefix): {
-        if (op.b1 != uint32_t(MozOp::Intrinsic) ||
-            !moduleEnv_.intrinsicsEnabled()) {
+        if (op.b1 != uint32_t(MozOp::CallBuiltinModuleFunc) ||
+            !moduleEnv_.isBuiltinModule()) {
           return iter_.unrecognizedOpcode(&op);
         }
-        // private intrinsic operations
-        CHECK_NEXT(emitIntrinsic());
+        // Call a private builtin module func
+        CHECK_NEXT(emitCallBuiltinModuleFunc());
       }
 
       default:

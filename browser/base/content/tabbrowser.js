@@ -1000,6 +1000,7 @@
       browser.mIconURL = aIconURL;
 
       if (aIconURL != aTab.getAttribute("image")) {
+        aTab.removeAttribute("image");
         if (aIconURL) {
           if (aLoadingPrincipal) {
             aTab.setAttribute("iconloadingprincipal", aLoadingPrincipal);
@@ -1008,7 +1009,6 @@
           }
           aTab.setAttribute("image", aIconURL);
         } else {
-          aTab.removeAttribute("image");
           aTab.removeAttribute("iconloadingprincipal");
         }
         this._tabAttrModified(aTab, ["image"]);
@@ -3056,7 +3056,7 @@
         // Unless we know for sure we're not inheriting principals,
         // force the about:blank viewer to have the right principal:
         if (!uri || doGetProtocolFlags(uri) & URI_INHERITS_SECURITY_CONTEXT) {
-          browser.createAboutBlankContentViewer(
+          browser.createAboutBlankDocumentViewer(
             originPrincipal,
             originStoragePrincipal
           );
@@ -4599,6 +4599,10 @@
         aOtherTab.dispatchEvent(event);
       }
 
+      if (otherBrowser.isDistinctProductPageVisit) {
+        ourBrowser.isDistinctProductPageVisit = true;
+      }
+
       SitePermissions.copyTemporaryPermissions(otherBrowser, ourBrowser);
 
       // If the other tab is pending (i.e. has not been restored, yet)
@@ -5143,8 +5147,6 @@
       if (!createLazyBrowser) {
         // Stop the about:blank load.
         newBrowser.stop();
-        // Make sure it has a docshell.
-        newBrowser.docShell;
       }
 
       if (!this.swapBrowsersAndCloseOther(newTab, aTab)) {

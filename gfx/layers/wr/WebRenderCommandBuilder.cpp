@@ -2210,6 +2210,20 @@ void WebRenderCommandBuilder::PopOverrideForASR(
   mClipManager.PopOverrideForASR(aASR);
 }
 
+static wr::WrRotation ToWrRotation(VideoRotation aRotation) {
+  switch (aRotation) {
+    case VideoRotation::kDegree_0:
+      return wr::WrRotation::Degree0;
+    case VideoRotation::kDegree_90:
+      return wr::WrRotation::Degree90;
+    case VideoRotation::kDegree_180:
+      return wr::WrRotation::Degree180;
+    case VideoRotation::kDegree_270:
+      return wr::WrRotation::Degree270;
+  }
+  return wr::WrRotation::Degree0;
+}
+
 Maybe<wr::ImageKey> WebRenderCommandBuilder::CreateImageKey(
     nsDisplayItem* aItem, ImageContainer* aContainer,
     mozilla::wr::DisplayListBuilder& aBuilder,
@@ -2229,8 +2243,9 @@ Maybe<wr::ImageKey> WebRenderCommandBuilder::CreateImageKey(
     // We appear to be using the image bridge for a lot (most/all?) of
     // layers-free image handling and that breaks frame consistency.
     imageData->CreateAsyncImageWebRenderCommands(
-        aBuilder, aContainer, aSc, rect, scBounds, aContainer->GetRotation(),
-        aRendering, wr::MixBlendMode::Normal, !aItem->BackfaceIsHidden());
+        aBuilder, aContainer, aSc, rect, scBounds,
+        ToWrRotation(aContainer->GetRotation()), aRendering,
+        wr::MixBlendMode::Normal, !aItem->BackfaceIsHidden());
     return Nothing();
   }
 

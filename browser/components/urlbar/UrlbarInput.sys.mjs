@@ -24,6 +24,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
   UrlbarEventBufferer: "resource:///modules/UrlbarEventBufferer.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarQueryContext: "resource:///modules/UrlbarUtils.sys.mjs",
+  UrlbarProviderOpenTabs: "resource:///modules/UrlbarProviderOpenTabs.sys.mjs",
   UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.sys.mjs",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.sys.mjs",
   UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
@@ -283,6 +284,10 @@ export class UrlbarInput {
 
     this.editor.newlineHandling =
       Ci.nsIEditor.eNewlinesStripSurroundingWhitespace;
+
+    ChromeUtils.defineLazyGetter(this, "logger", () =>
+      lazy.UrlbarUtils.getLogger({ prefix: "Input" })
+    );
   }
 
   /**
@@ -420,6 +425,8 @@ export class UrlbarInput {
           uri = Services.io.createExposableURI(uri);
         } catch (e) {}
 
+        let isInitialPageControlledByWebContent = false;
+
         // Replace initial page URIs with an empty string
         // only if there's no opener (bug 370555).
         if (
@@ -431,6 +438,8 @@ export class UrlbarInput {
         ) {
           value = "";
         } else {
+          isInitialPageControlledByWebContent = true;
+
           // We should deal with losslessDecodeURI throwing for exotic URIs
           try {
             value = losslessDecodeURI(uri);
@@ -444,7 +453,8 @@ export class UrlbarInput {
         valid =
           !dueToSessionRestore &&
           (!this.window.isBlankPageURL(uri.spec) ||
-            uri.schemeIs("moz-extension"));
+            uri.schemeIs("moz-extension") ||
+            isInitialPageControlledByWebContent);
       }
     } else if (
       this.window.isInitialPage(value) &&
@@ -875,6 +885,9 @@ export class UrlbarInput {
    */
   pickElement(element, event) {
     let result = this.view.getResultFromElement(element);
+    this.logger.debug(
+      `pickElement ${element} with event ${event?.type}, result: ${result}`
+    );
     if (!result) {
       return;
     }
@@ -1070,7 +1083,7 @@ export class UrlbarInput {
 
         let switched = this.window.switchToTabHavingURI(
           Services.io.newURI(url),
-          false,
+          true,
           loadOpts,
           lazy.UrlbarPrefs.get("switchTabs.searchAllContainers")
             ? result.payload.userContextId
@@ -1085,6 +1098,18 @@ export class UrlbarInput {
           // the load. Just reportError it.
           lazy.UrlbarUtils.addToInputHistory(url, searchString).catch(
             console.error
+          );
+        }
+
+        // TODO (Bug 1865757): We should not show a "switchtotab" result for
+        // tabs that are not currently open. Find out why tabs are not being
+        // properly unregistered when they are being closed.
+        if (!switched) {
+          console.error(`Tried to switch to non existant tab: ${url}`);
+          lazy.UrlbarProviderOpenTabs.unregisterOpenTab(
+            url,
+            result.payload.userContextId,
+            this.isPrivate
           );
         }
 
@@ -2762,12 +2787,18 @@ export class UrlbarInput {
   ) {
     // No point in setting these because we'll handleRevert() a few rows below.
     if (openUILinkWhere == "current") {
+      // Make sure URL is formatted properly (don't show punycode).
+      let formattedURL = url;
+      try {
+        formattedURL = losslessDecodeURI(new URL(url).URI);
+      } catch {}
+
       this.value =
         lazy.UrlbarPrefs.get("showSearchTermsFeatureGate") &&
         lazy.UrlbarPrefs.get("showSearchTerms.enabled") &&
         resultDetails?.searchTerm
           ? resultDetails.searchTerm
-          : url;
+          : formattedURL;
       browser.userTypedValue = this.value;
     }
 
@@ -3260,6 +3291,7 @@ export class UrlbarInput {
   }
 
   _on_blur(event) {
+    this.logger.debug("Blur Event");
     // We cannot count every blur events after a missed engagement as abandoment
     // because the user may have clicked on some view element that executes
     // a command causing a focus change. For example opening preferences from
@@ -3375,6 +3407,7 @@ export class UrlbarInput {
   }
 
   _on_focus(event) {
+    this.logger.debug("Focus Event");
     if (!this._hideFocus) {
       this.setAttribute("focused", "true");
     }

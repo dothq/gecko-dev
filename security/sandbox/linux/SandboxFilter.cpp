@@ -882,8 +882,11 @@ class SandboxPolicyCommon : public SandboxPolicyBase {
       // In the absence of a broker we still need to handle the
       // fstat-equivalent subset of fstatat; see bug 1673770.
       switch (sysno) {
-      CASES_FOR_fstatat:
-        return Trap(StatAtTrap, nullptr);
+        // statx may be used for fstat (bug 1867673)
+        case __NR_statx:
+          return Error(ENOSYS);
+        CASES_FOR_fstatat:
+          return Trap(StatAtTrap, nullptr);
       }
     }
 
@@ -1454,10 +1457,14 @@ class ContentSandboxPolicy : public SandboxPolicyCommon {
         // FIXME(bug 1510861) are we using any hints that aren't allowed
         // in SandboxPolicyCommon now?
       case __NR_madvise:
-        // libc's realloc uses mremap (Bug 1286119); wasm does too (bug
-        // 1342385).
-      case __NR_mremap:
         return Allow();
+
+        // wasm uses mremap (always with zero flags)
+      case __NR_mremap: {
+        Arg<int> flags(3);
+        return If(flags == 0, Allow())
+            .Else(SandboxPolicyCommon::EvaluateSyscall(sysno));
+      }
 
         // Bug 1462640: Mesa libEGL uses mincore to test whether values
         // are pointers, for reasons.

@@ -92,13 +92,25 @@ class MOZ_NON_TEMPORARY_CLASS ExternalStringCache {
     inlineEntries_ = {};
   }
 
+  MOZ_ALWAYS_INLINE JSExternalString* lookupExternal(
+      const JS::Latin1Char* chars, size_t len) const;
   MOZ_ALWAYS_INLINE JSExternalString* lookupExternal(const char16_t* chars,
                                                      size_t len) const;
   MOZ_ALWAYS_INLINE void putExternal(JSExternalString* s);
 
+  MOZ_ALWAYS_INLINE JSInlineString* lookupInline(const JS::Latin1Char* chars,
+                                                 size_t len) const;
   MOZ_ALWAYS_INLINE JSInlineString* lookupInline(const char16_t* chars,
                                                  size_t len) const;
   MOZ_ALWAYS_INLINE void putInline(JSInlineString* s);
+
+ private:
+  template <typename CharT>
+  MOZ_ALWAYS_INLINE JSExternalString* lookupExternalImpl(const CharT* chars,
+                                                         size_t len) const;
+  template <typename CharT>
+  MOZ_ALWAYS_INLINE JSInlineString* lookupInlineImpl(const CharT* chars,
+                                                     size_t len) const;
 };
 
 class MOZ_NON_TEMPORARY_CLASS FunctionToStringCache {
@@ -533,7 +545,11 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
     }
   }
   bool allocNurseryObjects() const { return allocNurseryObjects_; }
+
+  // Note that this covers both allocating JSStrings themselves in the nursery,
+  // as well as (possibly) the character data.
   bool allocNurseryStrings() const { return allocNurseryStrings_; }
+
   bool allocNurseryBigInts() const { return allocNurseryBigInts_; }
 
   js::gc::Heap minHeapToTenure(JS::TraceKind kind) const {

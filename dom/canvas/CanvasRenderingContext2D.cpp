@@ -4179,22 +4179,24 @@ void CanvasRenderingContext2D::FillText(const nsAString& aText, double aX,
     mFillTextCalls++;
   }
 
-  DebugOnly<TextMetrics*> metrics = DrawOrMeasureText(
+  DebugOnly<UniquePtr<TextMetrics>> metrics = DrawOrMeasureText(
       aText, aX, aY, aMaxWidth, TextDrawOperation::FILL, aError);
-  MOZ_ASSERT(!metrics);  // drawing operation never returns TextMetrics
+  MOZ_ASSERT(
+      !metrics.inspect());  // drawing operation never returns TextMetrics
 }
 
 void CanvasRenderingContext2D::StrokeText(const nsAString& aText, double aX,
                                           double aY,
                                           const Optional<double>& aMaxWidth,
                                           ErrorResult& aError) {
-  DebugOnly<TextMetrics*> metrics = DrawOrMeasureText(
+  DebugOnly<UniquePtr<TextMetrics>> metrics = DrawOrMeasureText(
       aText, aX, aY, aMaxWidth, TextDrawOperation::STROKE, aError);
-  MOZ_ASSERT(!metrics);  // drawing operation never returns TextMetrics
+  MOZ_ASSERT(
+      !metrics.inspect());  // drawing operation never returns TextMetrics
 }
 
-TextMetrics* CanvasRenderingContext2D::MeasureText(const nsAString& aRawText,
-                                                   ErrorResult& aError) {
+UniquePtr<TextMetrics> CanvasRenderingContext2D::MeasureText(
+    const nsAString& aRawText, ErrorResult& aError) {
   Optional<double> maxWidth;
   return DrawOrMeasureText(aRawText, 0, 0, maxWidth, TextDrawOperation::MEASURE,
                            aError);
@@ -4553,8 +4555,8 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
   bool mIgnoreSetText = false;
 };
 
-TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
-    const nsAString& aRawText, float aX, float aY,
+UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
+    const nsAString& aText, float aX, float aY,
     const Optional<double>& aMaxWidth, TextDrawOperation aOp,
     ErrorResult& aError) {
   RefPtr<gfxFontGroup> currentFontStyle = GetCurrentFontStyle();
@@ -4567,7 +4569,7 @@ TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
   RefPtr<Document> document = presShell ? presShell->GetDocument() : nullptr;
 
   // replace all the whitespace characters with U+0020 SPACE
-  nsAutoString textToDraw(aRawText);
+  nsAutoString textToDraw(aText);
   TextReplaceWhitespaceCharacters(textToDraw);
 
   // According to spec, the API should return an empty array if maxWidth was
@@ -4626,8 +4628,8 @@ TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
   if (currentFontStyle->GetStyle()->size == 0.0F) {
     aError = NS_OK;
     if (aOp == TextDrawOperation::MEASURE) {
-      return new TextMetrics(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                             0.0, 0.0);
+      return MakeUnique<TextMetrics>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                     0.0, 0.0, 0.0, 0.0);
     }
     return nullptr;
   }
@@ -4637,8 +4639,8 @@ TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
     // This may not be correct - what should TextMetrics contain in the case of
     // infinite width or height?
     if (aOp == TextDrawOperation::MEASURE) {
-      return new TextMetrics(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                             0.0, 0.0);
+      return MakeUnique<TextMetrics>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                     0.0, 0.0, 0.0, 0.0);
     }
     return nullptr;
   }
@@ -4805,7 +4807,7 @@ TextMetrics* CanvasRenderingContext2D::DrawOrMeasureText(
     double actualBoundingBoxDescent =
         processor.mBoundingBox.YMost() + baselineAnchor;
     auto baselines = font->GetBaselines(fontOrientation);
-    return new TextMetrics(
+    return MakeUnique<TextMetrics>(
         totalWidth, actualBoundingBoxLeft, actualBoundingBoxRight,
         fontMetrics.maxAscent - baselineAnchor,   // fontBBAscent
         fontMetrics.maxDescent + baselineAnchor,  // fontBBDescent
@@ -5207,19 +5209,19 @@ SurfaceFromElementResult CanvasRenderingContext2D::CachedSurfaceFromElement(
 }
 
 static void SwapScaleWidthHeightForRotation(gfx::Rect& aRect,
-                                            VideoInfo::Rotation aDegrees) {
-  if (aDegrees == VideoInfo::Rotation::kDegree_90 ||
-      aDegrees == VideoInfo::Rotation::kDegree_270) {
+                                            VideoRotation aDegrees) {
+  if (aDegrees == VideoRotation::kDegree_90 ||
+      aDegrees == VideoRotation::kDegree_270) {
     std::swap(aRect.width, aRect.height);
   }
 }
 
 static Matrix ComputeRotationMatrix(gfxFloat aRotatedWidth,
                                     gfxFloat aRotatedHeight,
-                                    VideoInfo::Rotation aDegrees) {
+                                    VideoRotation aDegrees) {
   Matrix shiftVideoCenterToOrigin;
-  if (aDegrees == VideoInfo::Rotation::kDegree_90 ||
-      aDegrees == VideoInfo::Rotation::kDegree_270) {
+  if (aDegrees == VideoRotation::kDegree_90 ||
+      aDegrees == VideoRotation::kDegree_270) {
     shiftVideoCenterToOrigin =
         Matrix::Translation(-aRotatedHeight / 2.0, -aRotatedWidth / 2.0);
   } else {
@@ -5511,7 +5513,7 @@ void CanvasRenderingContext2D::DrawImage(const CanvasImageSource& aImage,
       return;
     }
 
-    VideoInfo::Rotation rotationDeg = VideoInfo::Rotation::kDegree_0;
+    VideoRotation rotationDeg = VideoRotation::kDegree_0;
     if (HTMLVideoElement* video = HTMLVideoElement::FromNodeOrNull(element)) {
       rotationDeg = video->RotationDegrees();
     }
@@ -5519,7 +5521,7 @@ void CanvasRenderingContext2D::DrawImage(const CanvasImageSource& aImage,
     gfx::Rect destRect(aDx, aDy, aDw, aDh);
 
     Matrix transform;
-    if (rotationDeg != VideoInfo::Rotation::kDegree_0) {
+    if (rotationDeg != VideoRotation::kDegree_0) {
       Matrix preTransform = ComputeRotationMatrix(aDw, aDh, rotationDeg);
       transform = preTransform * Matrix::Translation(aDx, aDy);
 
@@ -5978,17 +5980,15 @@ nsresult CanvasRenderingContext2D::GetImageDataArray(
   RefPtr<DataSourceSurface> readback = snapshot->GetDataSurface();
   mBufferProvider->ReturnSnapshot(snapshot.forget());
 
-  // Check for site-specific permission.  This check is not needed if the
-  // canvas was created with a docshell (that is only done for special
-  // internal uses).
-  bool usePlaceholder = false;
+  // Check for site-specific permission.
+  CanvasUtils::ImageExtraction permission =
+      CanvasUtils::ImageExtraction::Unrestricted;
   if (mCanvasElement) {
-    nsCOMPtr<Document> ownerDoc = mCanvasElement->OwnerDoc();
-    usePlaceholder = !CanvasUtils::IsImageExtractionAllowed(ownerDoc, aCx,
-                                                            aSubjectPrincipal);
+    permission = CanvasUtils::ImageExtractionResult(mCanvasElement, aCx,
+                                                    aSubjectPrincipal);
   } else if (mOffscreenCanvas) {
-    usePlaceholder = mOffscreenCanvas->ShouldResistFingerprinting(
-        RFPTarget::CanvasImageExtractionPrompt);
+    permission = CanvasUtils::ImageExtractionResult(mOffscreenCanvas, aCx,
+                                                    aSubjectPrincipal);
   }
 
   // Clone the data source surface if canvas randomization is enabled. We need
@@ -5997,10 +5997,7 @@ nsresult CanvasRenderingContext2D::GetImageDataArray(
   //
   // Note that we don't need to clone if we will use the place holder because
   // the place holder doesn't use actual image data.
-  bool needRandomizePixels = false;
-  if (!usePlaceholder &&
-      ShouldResistFingerprinting(RFPTarget::CanvasRandomization)) {
-    needRandomizePixels = true;
+  if (permission == CanvasUtils::ImageExtraction::Randomize) {
     if (readback) {
       readback = CreateDataSourceSurfaceByCloning(readback);
     }
@@ -6013,12 +6010,12 @@ nsresult CanvasRenderingContext2D::GetImageDataArray(
 
   do {
     uint8_t* randomData;
-    if (usePlaceholder) {
+    if (permission == CanvasUtils::ImageExtraction::Placeholder) {
       // Since we cannot call any GC-able functions (like requesting the RNG
       // service) after we call JS_GetUint8ClampedArrayData, we will
       // pre-generate the randomness required for GeneratePlaceholderCanvasData.
       randomData = TryToGenerateRandomDataForPlaceholderCanvasData();
-    } else if (needRandomizePixels) {
+    } else if (permission == CanvasUtils::ImageExtraction::Randomize) {
       // Apply the random noises if canvan randomization is enabled. We don't
       // need to calculate random noises if we are going to use the place
       // holder.
@@ -6034,7 +6031,7 @@ nsresult CanvasRenderingContext2D::GetImageDataArray(
     uint8_t* data = JS_GetUint8ClampedArrayData(darray, &isShared, nogc);
     MOZ_ASSERT(!isShared);  // Should not happen, data was created above
 
-    if (usePlaceholder) {
+    if (permission == CanvasUtils::ImageExtraction::Placeholder) {
       FillPlaceholderCanvas(randomData, len.value(), data);
       break;
     }

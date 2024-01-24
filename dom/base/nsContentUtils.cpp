@@ -279,12 +279,12 @@
 #include "nsIContentPolicy.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsIContentSink.h"
-#include "nsIContentViewer.h"
 #include "nsIDOMWindowUtils.h"
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocumentEncoder.h"
 #include "nsIDocumentLoaderFactory.h"
+#include "nsIDocumentViewer.h"
 #include "nsIDragService.h"
 #include "nsIDragSession.h"
 #include "nsIFile.h"
@@ -549,6 +549,13 @@ enum AutocompleteFieldContactHint : uint8_t {
 #undef AUTOCOMPLETE_FIELD_CONTACT_HINT
 };
 
+enum AutocompleteCredentialType : uint8_t {
+#define AUTOCOMPLETE_CREDENTIAL_TYPE(name_, value_) \
+  eAutocompleteCredentialType_##name_,
+#include "AutocompleteFieldList.h"
+#undef AUTOCOMPLETE_CREDENTIAL_TYPE
+};
+
 enum AutocompleteCategory {
 #define AUTOCOMPLETE_CATEGORY(name_, value_) eAutocompleteCategory_##name_,
 #include "AutocompleteFieldList.h"
@@ -603,6 +610,13 @@ static const nsAttrValue::EnumTable kAutocompleteContactFieldHintTable[] = {
   {value_, eAutocompleteFieldContactHint_##name_},
 #include "AutocompleteFieldList.h"
 #undef AUTOCOMPLETE_FIELD_CONTACT_HINT
+    {nullptr, 0}};
+
+static const nsAttrValue::EnumTable kAutocompleteCredentialTypeTable[] = {
+#define AUTOCOMPLETE_CREDENTIAL_TYPE(name_, value_) \
+  {value_, eAutocompleteCredentialType_##name_},
+#include "AutocompleteFieldList.h"
+#undef AUTOCOMPLETE_CREDENTIAL_TYPE
     {nullptr, 0}};
 
 namespace {
@@ -831,6 +845,19 @@ nsresult nsContentUtils::Init() {
 
   if (XRE_IsParentProcess()) {
     AsyncPrecreateStringBundles();
+
+#if defined(MOZ_WIDGET_ANDROID)
+    // On Android, at-shutdown ping submission isn't reliable
+    // (( because, on Android, we usually get killed, not shut down )).
+    // To have a chance at submitting the ping, aim for idle after startup.
+    nsresult rv = NS_DispatchToCurrentThreadQueue(
+        NS_NewRunnableFunction(
+            "AndroidUseCounterPingSubmitter",
+            []() { glean_pings::UseCounters.Submit("idle_startup"_ns); }),
+        EventQueuePriority::Idle);
+    // This is mostly best-effort, so if it goes awry, just log.
+    Unused << NS_WARN_IF(NS_FAILED(rv));
+#endif  // defined(MOZ_WIDGET_ANDROID)
 
     RunOnShutdown(
         [&] { glean_pings::UseCounters.Submit("app_shutdown_confirmed"_ns); },
@@ -1165,6 +1192,18 @@ nsContentUtils::SerializeAutocompleteAttribute(
       }
       aResult += info.mFieldName;
     }
+
+    // The autocomplete attribute value "webauthn" is interpreted as both a
+    // field name and a credential type. The corresponding IDL-exposed autofill
+    // value is "webauthn", not "webauthn webauthn".
+    if (!info.mCredentialType.IsEmpty() &&
+        !(info.mCredentialType.Equals(u"webauthn"_ns) &&
+          info.mCredentialType.Equals(aResult))) {
+      if (!aResult.IsEmpty()) {
+        aResult += ' ';
+      }
+      aResult += info.mCredentialType;
+    }
   }
 
   return state;
@@ -1198,7 +1237,7 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(
   }
 
   uint32_t numTokens = aAttrVal->GetAtomCount();
-  if (!numTokens) {
+  if (!numTokens || numTokens > INT32_MAX) {
     return eAutocompleteAttrState_Invalid;
   }
 
@@ -1206,6 +1245,46 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(
   nsString tokenString = nsDependentAtomString(aAttrVal->AtomAt(index));
   AutocompleteCategory category;
   nsAttrValue enumValue;
+  nsAutoString credentialTypeStr;
+
+  bool result = enumValue.ParseEnumValue(
+      tokenString, kAutocompleteCredentialTypeTable, false);
+  if (result) {
+    if (!enumValue.Equals(u"webauthn"_ns, eIgnoreCase) || numTokens > 5) {
+      return eAutocompleteAttrState_Invalid;
+    }
+    enumValue.ToString(credentialTypeStr);
+    ASCIIToLower(credentialTypeStr);
+    // category is Credential and the indexth token is "webauthn"
+    if (index == 0) {
+      aInfo.mFieldName.Assign(credentialTypeStr);
+      aInfo.mCredentialType.Assign(credentialTypeStr);
+      return eAutocompleteAttrState_Valid;
+    }
+
+    --index;
+    tokenString = nsDependentAtomString(aAttrVal->AtomAt(index));
+
+    // Only the Normal and Contact categories are allowed with webauthn
+    //  - disallow Credential
+    if (enumValue.ParseEnumValue(tokenString, kAutocompleteCredentialTypeTable,
+                                 false)) {
+      return eAutocompleteAttrState_Invalid;
+    }
+    //  - disallow Off and Automatic
+    if (enumValue.ParseEnumValue(tokenString, kAutocompleteFieldNameTable,
+                                 false)) {
+      if (enumValue.Equals(u"off"_ns, eIgnoreCase) ||
+          enumValue.Equals(u"on"_ns, eIgnoreCase)) {
+        return eAutocompleteAttrState_Invalid;
+      }
+    }
+
+    // Proceed to process the remaining tokens as if "webauthn" was not present.
+    // We need to decrement numTokens to enforce the correct per-category limits
+    // on the maximum number of tokens.
+    --numTokens;
+  }
 
   bool unsupported = false;
   if (!aGrantAllValidValue) {
@@ -1216,9 +1295,10 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(
     }
   }
 
-  nsAutoString str;
-  bool result =
+  nsAutoString fieldNameStr;
+  result =
       enumValue.ParseEnumValue(tokenString, kAutocompleteFieldNameTable, false);
+
   if (result) {
     // Off/Automatic/Normal categories.
     if (enumValue.Equals(u"off"_ns, eIgnoreCase) ||
@@ -1226,9 +1306,10 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(
       if (numTokens > 1) {
         return eAutocompleteAttrState_Invalid;
       }
-      enumValue.ToString(str);
-      ASCIIToLower(str);
-      aInfo.mFieldName.Assign(str);
+      enumValue.ToString(fieldNameStr);
+      ASCIIToLower(fieldNameStr);
+      aInfo.mFieldName.Assign(fieldNameStr);
+      aInfo.mCredentialType.Assign(credentialTypeStr);
       aInfo.mCanAutomaticallyPersist =
           !enumValue.Equals(u"off"_ns, eIgnoreCase);
       return eAutocompleteAttrState_Valid;
@@ -1263,10 +1344,11 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(
     category = eAutocompleteCategory_CONTACT;
   }
 
-  enumValue.ToString(str);
-  ASCIIToLower(str);
-  aInfo.mFieldName.Assign(str);
+  enumValue.ToString(fieldNameStr);
+  ASCIIToLower(fieldNameStr);
 
+  aInfo.mFieldName.Assign(fieldNameStr);
+  aInfo.mCredentialType.Assign(credentialTypeStr);
   aInfo.mCanAutomaticallyPersist = !enumValue.ParseEnumValue(
       tokenString, kAutocompleteNoPersistFieldNameTable, false);
 
@@ -1333,6 +1415,7 @@ nsContentUtils::InternalSerializeAutocompleteAttribute(
   aInfo.mAddressType.Truncate();
   aInfo.mContactType.Truncate();
   aInfo.mFieldName.Truncate();
+  aInfo.mCredentialType.Truncate();
 
   return eAutocompleteAttrState_Invalid;
 }
@@ -5366,14 +5449,31 @@ uint32_t computeSanitizationFlags(nsIPrincipal* aPrincipal, int32_t aFlags) {
 }
 
 /* static */
-bool AllowsUnsanitizedContentForAboutNewTab(nsIPrincipal* aPrincipal) {
-  if (StaticPrefs::dom_about_newtab_sanitization_enabled() ||
-      !aPrincipal->SchemeIs("about")) {
-    return false;
+void nsContentUtils::SetHTMLUnsafe(FragmentOrElement* aTarget,
+                                   Element* aContext,
+                                   const nsAString& aSource) {
+  MOZ_ASSERT(!sFragmentParsingActive, "Re-entrant fragment parsing attempted.");
+  mozilla::AutoRestore<bool> guard(sFragmentParsingActive);
+  sFragmentParsingActive = true;
+  if (!sHTMLFragmentParser) {
+    NS_ADDREF(sHTMLFragmentParser = new nsHtml5StringParser());
+    // Now sHTMLFragmentParser owns the object
   }
-  uint32_t aboutModuleFlags = 0;
-  aPrincipal->GetAboutModuleFlags(&aboutModuleFlags);
-  return aboutModuleFlags & nsIAboutModule::ALLOW_UNSANITIZED_CONTENT;
+
+  nsAtom* contextLocalName = aContext->NodeInfo()->NameAtom();
+  int32_t contextNameSpaceID = aContext->GetNameSpaceID();
+
+  RefPtr<Document> doc = aTarget->OwnerDoc();
+  RefPtr<DocumentFragment> fragment = doc->CreateDocumentFragment();
+  nsresult rv = sHTMLFragmentParser->ParseFragment(
+      aSource, fragment, contextLocalName, contextNameSpaceID,
+      fragment->OwnerDoc()->GetCompatibilityMode() == eCompatibility_NavQuirks,
+      true, true);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Failed to parse fragment for SetHTMLUnsafe");
+  }
+
+  aTarget->ReplaceChildren(fragment, IgnoreErrors());
 }
 
 /* static */
@@ -5416,8 +5516,7 @@ nsresult nsContentUtils::ParseFragmentHTML(
   // an about: scheme principal.
   bool shouldSanitize = nodePrincipal->IsSystemPrincipal() ||
                         nodePrincipal->SchemeIs("about") || aFlags >= 0;
-  if (shouldSanitize &&
-      !AllowsUnsanitizedContentForAboutNewTab(nodePrincipal)) {
+  if (shouldSanitize) {
     if (!doc->IsLoadedAsData()) {
       doc = nsContentUtils::CreateInertHTMLDocument(doc);
       if (!doc) {
@@ -5431,7 +5530,7 @@ nsresult nsContentUtils::ParseFragmentHTML(
 
   nsresult rv = sHTMLFragmentParser->ParseFragment(
       aSourceBuffer, target, aContextLocalName, aContextNamespace, aQuirks,
-      aPreventScriptExecution);
+      aPreventScriptExecution, false);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (fragment) {
@@ -6691,31 +6790,6 @@ nsresult nsContentUtils::WrapNative(JSContext* cx, nsISupports* native,
   return rv;
 }
 
-nsresult nsContentUtils::CreateArrayBuffer(JSContext* aCx,
-                                           const nsACString& aData,
-                                           JSObject** aResult) {
-  if (!aCx) {
-    return NS_ERROR_FAILURE;
-  }
-
-  size_t dataLen = aData.Length();
-  *aResult = JS::NewArrayBuffer(aCx, dataLen);
-  if (!*aResult) {
-    return NS_ERROR_FAILURE;
-  }
-
-  if (dataLen > 0) {
-    NS_ASSERTION(JS::IsArrayBufferObject(*aResult), "What happened?");
-    JS::AutoCheckCannotGC nogc;
-    bool isShared;
-    memcpy(JS::GetArrayBufferData(*aResult, &isShared, nogc),
-           aData.BeginReading(), dataLen);
-    MOZ_ASSERT(!isShared);
-  }
-
-  return NS_OK;
-}
-
 void nsContentUtils::StripNullChars(const nsAString& aInStr,
                                     nsAString& aOutStr) {
   // In common cases where we don't have nulls in the
@@ -7015,8 +7089,8 @@ bool nsContentUtils::IsSystemOrPDFJS(JSContext* aCx, JSObject*) {
 }
 
 already_AddRefed<nsIDocumentLoaderFactory>
-nsContentUtils::FindInternalContentViewer(const nsACString& aType,
-                                          ContentViewerType* aLoaderType) {
+nsContentUtils::FindInternalDocumentViewer(const nsACString& aType,
+                                           DocumentViewerType* aLoaderType) {
   if (aLoaderType) {
     *aLoaderType = TYPE_UNSUPPORTED;
   }
@@ -10437,22 +10511,6 @@ static bool HtmlObjectContentSupportsDocument(const nsCString& aMimeType) {
 }
 
 /* static */
-already_AddRefed<nsIPluginTag> nsContentUtils::PluginTagForType(
-    const nsCString& aMIMEType, bool aNoFakePlugin) {
-  RefPtr<nsPluginHost> pluginHost = nsPluginHost::GetInst();
-  nsCOMPtr<nsIPluginTag> tag;
-  NS_ENSURE_TRUE(pluginHost, nullptr);
-
-  // ShouldPlay will handle the case where the plugin is disabled
-  pluginHost->GetPluginTagForType(
-      aMIMEType,
-      aNoFakePlugin ? nsPluginHost::eExcludeFake : nsPluginHost::eExcludeNone,
-      getter_AddRefs(tag));
-
-  return tag.forget();
-}
-
-/* static */
 uint32_t nsContentUtils::HtmlObjectContentTypeForMIMEType(
     const nsCString& aMIMEType, bool aNoFakePlugin) {
   if (aMIMEType.IsEmpty()) {
@@ -10856,8 +10914,7 @@ nsresult nsContentUtils::AnonymizeURI(nsIURI* aURI, nsCString& aAnonymizedURI) {
 
 static bool JSONCreator(const char16_t* aBuf, uint32_t aLen, void* aData) {
   nsAString* result = static_cast<nsAString*>(aData);
-  result->Append(aBuf, aLen);
-  return true;
+  return result->Append(aBuf, aLen, fallible);
 }
 
 /* static */
@@ -10868,12 +10925,8 @@ bool nsContentUtils::StringifyJSON(JSContext* aCx, JS::Handle<JS::Value> aValue,
     case UndefinedIsNullStringLiteral: {
       aOutStr.Truncate();
       JS::Rooted<JS::Value> value(aCx, aValue);
-      nsAutoString serializedValue;
-      NS_ENSURE_TRUE(JS_Stringify(aCx, &value, nullptr, JS::NullHandleValue,
-                                  JSONCreator, &serializedValue),
-                     false);
-      aOutStr = serializedValue;
-      return true;
+      return JS_Stringify(aCx, &value, nullptr, JS::NullHandleValue,
+                          JSONCreator, &aOutStr);
     }
     case UndefinedIsVoidString: {
       aOutStr.SetIsVoid(true);
@@ -11314,6 +11367,25 @@ template bool nsContentUtils::AddElementToListByTreeOrder(
 template bool nsContentUtils::AddElementToListByTreeOrder(
     nsTArray<RefPtr<HTMLInputElement>>& aList, HTMLInputElement* aChild,
     nsIContent* aAncestor);
+
+nsIContent* nsContentUtils::AttachDeclarativeShadowRoot(nsIContent* aHost,
+                                                        ShadowRootMode aMode,
+                                                        bool aDelegatesFocus) {
+  RefPtr<Element> host = mozilla::dom::Element::FromNodeOrNull(aHost);
+  if (!host) {
+    return nullptr;
+  }
+
+  ShadowRootInit init;
+  init.mMode = aMode;
+  init.mDelegatesFocus = aDelegatesFocus;
+  init.mSlotAssignment = SlotAssignmentMode::Named;
+  init.mClonable = true;
+
+  RefPtr shadowRoot = host->AttachShadow(init, IgnoreErrors(),
+                                         Element::ShadowRootDeclarative::Yes);
+  return shadowRoot;
+}
 
 namespace mozilla {
 std::ostream& operator<<(std::ostream& aOut,

@@ -586,10 +586,8 @@ Result<nsCOMPtr<nsIFileURL>, nsresult> GetDatabaseFileURL(
   // - from DeleteDatabaseOp::LoadPreviousVersion, since this might require
   //   temporarily exceeding the quota limit before the database can be
   //   deleted.
-  const auto directoryLockIdClause =
-      aDirectoryLockId >= 0
-          ? "&directoryLockId="_ns + IntToCString(aDirectoryLockId)
-          : EmptyCString();
+  const nsCString directoryLockIdClause =
+      "&directoryLockId="_ns + IntToCString(aDirectoryLockId);
 
   const auto keyClause = [&aMaybeKey] {
     nsAutoCString keyClause;
@@ -5526,7 +5524,7 @@ nsresult DeleteFilesNoQuota(nsIFile* aDirectory, const nsAString& aFilename) {
   // don't update the size of origin. Adding this assertion for preventing from
   // misusing.
   DebugOnly<QuotaManager*> quotaManager = QuotaManager::Get();
-  MOZ_ASSERT(!quotaManager->IsTemporaryStorageInitialized());
+  MOZ_ASSERT(!quotaManager->IsTemporaryStorageInitializedInternal());
 
   QM_TRY_INSPECT(const auto& file, CloneFileAndAppend(*aDirectory, aFilename));
 
@@ -12307,7 +12305,7 @@ nsresult QuotaClient::GetUsageForOriginInternal(
               ([&directory,
                 &subdirName](const nsresult) -> Result<Ok, nsresult> {
                 // XXX It seems if we really got here, we can fail the
-                // MOZ_ASSERT(!quotaManager->IsTemporaryStorageInitialized());
+                // MOZ_ASSERT(!quotaManager->IsTemporaryStorageInitializedInternal());
                 // assertion in DeleteFilesNoQuota.
                 QM_TRY(MOZ_TO_RESULT(DeleteFilesNoQuota(directory, subdirName)),
                        Err(NS_ERROR_UNEXPECTED));
@@ -13022,7 +13020,8 @@ nsresult Maintenance::DirectoryWork() {
   // repository can still
   // be processed.
   const bool initTemporaryStorageFailed = [&quotaManager] {
-    QM_TRY(MOZ_TO_RESULT(quotaManager->EnsureTemporaryStorageIsInitialized()),
+    QM_TRY(MOZ_TO_RESULT(
+               quotaManager->EnsureTemporaryStorageIsInitializedInternal()),
            true);
     return false;
   }();
@@ -13146,7 +13145,7 @@ nsresult Maintenance::DirectoryWork() {
                 // We have to check that all persistent origins are cleaned up,
                 // but there's no way to do that by one call, we need to
                 // initialize (and possibly clean up) them one by one
-                // (EnsureTemporaryStorageIsInitialized cleans up only
+                // (EnsureTemporaryStorageIsInitializedInternal cleans up only
                 // non-persistent origins).
 
                 QM_TRY_UNWRAP(
@@ -15158,8 +15157,8 @@ nsresult OpenDatabaseOp::DoDatabaseWork() {
               mOriginMetadata));
         }
 
-        QM_TRY(
-            MOZ_TO_RESULT(quotaManager->EnsureTemporaryStorageIsInitialized()));
+        QM_TRY(MOZ_TO_RESULT(
+            quotaManager->EnsureTemporaryStorageIsInitializedInternal()));
         QM_TRY_RETURN(quotaManager->EnsureTemporaryOriginIsInitialized(
             persistenceType, mOriginMetadata));
       }()

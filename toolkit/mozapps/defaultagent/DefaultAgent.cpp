@@ -12,8 +12,8 @@
 
 #include "nsAutoRef.h"
 #include "nsDebug.h"
+#include "nsProxyRelease.h"
 #include "nsWindowsHelpers.h"
-#include "nsICommandLine.h"
 #include "nsString.h"
 
 #include "common.h"
@@ -24,8 +24,12 @@
 #include "Policy.h"
 #include "Registry.h"
 #include "ScheduledTask.h"
+#include "ScheduledTaskRemove.h"
 #include "SetDefaultBrowser.h"
 #include "Telemetry.h"
+#include "xpcpublic.h"
+#include "mozilla/dom/Promise.h"
+#include "mozilla/ErrorResult.h"
 
 #include "DefaultAgent.h"
 
@@ -316,7 +320,7 @@ DefaultAgent::DoTask(const nsAString& aUniqueToken, const bool aForce) {
   // So we'll just bail if we can't get the mutex quickly.
   RegistryMutex regMutex;
   if (!regMutex.Acquire()) {
-    return NS_ERROR_FAILURE;
+    return NS_ERROR_NOT_AVAILABLE;
   }
 
   // Check that Firefox ran recently, if not then stop here.
@@ -360,6 +364,54 @@ DefaultAgent::SetDefaultBrowserUserChoice(
     const nsAString& aAumid, const nsTArray<nsString>& aExtraFileExtensions) {
   return default_agent::SetDefaultBrowserUserChoice(
       PromiseFlatString(aAumid).get(), aExtraFileExtensions);
+}
+
+NS_IMETHODIMP
+DefaultAgent::SetDefaultBrowserUserChoiceAsync(
+    const nsAString& aAumid, const nsTArray<nsString>& aExtraFileExtensions,
+    JSContext* aCx, dom::Promise** aPromise) {
+  if (!NS_IsMainThread()) {
+    return NS_ERROR_NOT_SAME_THREAD;
+  }
+
+  ErrorResult rv;
+  RefPtr<dom::Promise> promise =
+      dom::Promise::Create(xpc::CurrentNativeGlobal(aCx), rv);
+  if (MOZ_UNLIKELY(rv.Failed())) {
+    return rv.StealNSResult();
+  }
+
+  // A holder to pass the promise through the background task and back to
+  // the main thread when finished.
+  auto promiseHolder = MakeRefPtr<nsMainThreadPtrHolder<dom::Promise>>(
+      "SetDefaultBrowserUserChoiceAsync promise", promise);
+
+  nsresult result = NS_DispatchBackgroundTask(
+      NS_NewRunnableFunction(
+          "SetDefaultBrowserUserChoiceAsync",
+          // Make a local copy of the aAudmid parameter which is a reference
+          // which will go out of scope
+          [aumid = nsString(aAumid), promiseHolder = std::move(promiseHolder),
+           aExtraFileExtensions =
+               CopyableTArray<nsString>(aExtraFileExtensions)] {
+            nsresult rv = default_agent::SetDefaultBrowserUserChoice(
+                PromiseFlatString(aumid).get(), aExtraFileExtensions);
+
+            NS_DispatchToMainThread(NS_NewRunnableFunction(
+                "SetDefaultBrowserUserChoiceAsync callback",
+                [rv, promiseHolder = std::move(promiseHolder)] {
+                  dom::Promise* promise = promiseHolder.get()->get();
+                  if (NS_SUCCEEDED(rv)) {
+                    promise->MaybeResolveWithUndefined();
+                  } else {
+                    promise->MaybeReject(rv);
+                  }
+                }));
+          }),
+      NS_DISPATCH_EVENT_MAY_BLOCK);
+
+  promise.forget(aPromise);
+  return result;
 }
 
 NS_IMETHODIMP

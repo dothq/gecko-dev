@@ -130,10 +130,10 @@
 #include "vm/StringType.h"
 #include "wasm/AsmJS.h"
 #include "wasm/WasmBaselineCompile.h"
+#include "wasm/WasmBuiltinModule.h"
 #include "wasm/WasmFeatures.h"
 #include "wasm/WasmGcObject.h"
 #include "wasm/WasmInstance.h"
-#include "wasm/WasmIntrinsic.h"
 #include "wasm/WasmIonCompile.h"
 #include "wasm/WasmJS.h"
 #include "wasm/WasmModule.h"
@@ -2110,7 +2110,7 @@ static bool WasmLoadedFromCache(JSContext* cx, unsigned argc, Value* vp) {
   return WasmReturnFlag(cx, argc, vp, Flag::Deserialized);
 }
 
-static bool WasmIntrinsicI8VecMul(JSContext* cx, unsigned argc, Value* vp) {
+static bool WasmBuiltinI8VecMul(JSContext* cx, unsigned argc, Value* vp) {
   if (!wasm::HasSupport(cx)) {
     JS_ReportErrorASCII(cx, "wasm support unavailable");
     return false;
@@ -2118,9 +2118,9 @@ static bool WasmIntrinsicI8VecMul(JSContext* cx, unsigned argc, Value* vp) {
 
   CallArgs args = CallArgsFromVp(argc, vp);
 
-  wasm::IntrinsicId ids[] = {wasm::IntrinsicId::I8VecMul};
   Rooted<WasmModuleObject*> module(cx);
-  if (!wasm::CompileIntrinsicModule(cx, ids, wasm::Shareable::False, &module)) {
+  if (!wasm::CompileBuiltinModule(cx, wasm::BuiltinModuleId::SelfTest,
+                                  &module)) {
     return false;
   }
   args.rval().set(ObjectValue(*module.get()));
@@ -3419,7 +3419,12 @@ static bool AddWatchtowerTarget(JSContext* cx, unsigned argc, Value* vp) {
 }
 
 struct TestExternalString : public JSExternalStringCallbacks {
+  void finalize(JS::Latin1Char* chars) const override { js_free(chars); }
   void finalize(char16_t* chars) const override { js_free(chars); }
+  size_t sizeOfBuffer(const JS::Latin1Char* chars,
+                      mozilla::MallocSizeOf mallocSizeOf) const override {
+    return mallocSizeOf(chars);
+  }
   size_t sizeOfBuffer(const char16_t* chars,
                       mozilla::MallocSizeOf mallocSizeOf) const override {
     return mallocSizeOf(chars);
@@ -3550,8 +3555,9 @@ static bool NewString(JSContext* cx, unsigned argc, Value* vp) {
           return nullptr;
         }
         mozilla::PodCopy(news.get(), chars, len);
-        return JSLinearString::newValidLength<CanGC>(cx, std::move(news), len,
-                                                     heap);
+        Rooted<JSString::OwnedChars<CharT>> owned(cx, std::move(news), len,
+                                                  true);
+        return JSLinearString::newValidLength<CanGC, CharT>(cx, &owned, heap);
       };
 
       if (stable.isLatin1()) {
@@ -8735,6 +8741,8 @@ static bool GetAvailableLocalesOf(JSContext* cx, unsigned argc, Value* vp) {
       kind = SupportedLocaleKind::PluralRules;
     } else if (StringEqualsLiteral(typeStr, "RelativeTimeFormat")) {
       kind = SupportedLocaleKind::RelativeTimeFormat;
+    } else if (StringEqualsLiteral(typeStr, "Segmenter")) {
+      kind = SupportedLocaleKind::Segmenter;
     } else {
       ReportUsageErrorASCII(cx, callee, "Unsupported Intl constructor name");
       return false;
@@ -9488,8 +9496,8 @@ JS_FOR_WASM_FEATURES(WASM_FEATURE)
 "  Returns a boolean indicating whether a given module was deserialized directly from a\n"
 "  cache (as opposed to compiled from bytecode)."),
 
-    JS_FN_HELP("wasmIntrinsicI8VecMul", WasmIntrinsicI8VecMul, 0, 0,
-"wasmIntrinsicI8VecMul()",
+    JS_FN_HELP("wasmBuiltinI8VecMul", WasmBuiltinI8VecMul, 0, 0,
+"wasmBuiltinI8VecMul()",
 "  Returns a module that implements an i8 vector pairwise multiplication intrinsic."),
 
 #ifdef ENABLE_WASM_GC

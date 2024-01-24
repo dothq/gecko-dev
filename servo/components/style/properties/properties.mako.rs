@@ -36,6 +36,7 @@ use style_traits::{CssWriter, KeywordsCollectFn, ParseError, ParsingMode};
 use style_traits::{SpecifiedValueInfo, StyleParseErrorKind, ToCss};
 use to_shmem::impl_trivial_to_shmem;
 use crate::stylesheets::{CssRuleType, CssRuleTypes, Origin, UrlExtraData};
+use crate::logical_geometry::{LogicalAxis, LogicalCorner, LogicalSide};
 use crate::use_counters::UseCounters;
 use crate::values::generics::font::LineHeight;
 use crate::values::specified::length::LineHeightBase;
@@ -45,6 +46,7 @@ use crate::rule_tree::StrongRuleNode;
 use crate::str::{CssString, CssStringWriter};
 use std::cell::Cell;
 use super::declaration_block::AppendableValue;
+use super::property_declaration::PropertyDeclarationId;
 
 <%!
     from collections import defaultdict
@@ -362,6 +364,13 @@ impl MallocSizeOf for PropertyDeclaration {
 
 
 impl PropertyDeclaration {
+    /// Returns the given value for this declaration as a particular type.
+    /// It's the caller's responsibility to guarantee that the longhand id has the right specified
+    /// value representation.
+    pub(crate) unsafe fn unchecked_value_as<T>(&self) -> &T {
+        &(*(self as *const _ as *const PropertyDeclarationVariantRepr<T>)).value
+    }
+
     /// Dumps the property declaration before crashing.
     #[cold]
     #[cfg(debug_assertions)]
@@ -427,8 +436,8 @@ pub mod animated_properties {
 }
 
 /// A longhand or shorthand property.
-#[derive(Clone, Copy, Debug)]
-pub struct NonCustomPropertyId(usize);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonCustomPropertyId(u32);
 
 /// The length of all the non-custom properties.
 pub const NON_CUSTOM_PROPERTY_ID_COUNT: usize =
@@ -449,7 +458,7 @@ unsafe fn static_assert_nscsspropertyid() {
 impl NonCustomPropertyId {
     /// Returns the underlying index, used for use counter.
     pub fn bit(self) -> usize {
-        self.0
+        self.0 as usize
     }
 
     /// Convert a `NonCustomPropertyId` into a `nsCSSPropertyID`.
@@ -463,16 +472,22 @@ impl NonCustomPropertyId {
     /// Convert an `nsCSSPropertyID` into a `NonCustomPropertyId`.
     #[cfg(feature = "gecko")]
     #[inline]
-    pub fn from_nscsspropertyid(prop: nsCSSPropertyID) -> Result<Self, ()> {
+    pub fn from_nscsspropertyid(prop: nsCSSPropertyID) -> Option<Self> {
         let prop = prop as i32;
-        if prop < 0 {
-            return Err(());
+        if prop < 0 || prop >= NON_CUSTOM_PROPERTY_ID_COUNT as i32 {
+            return None;
         }
-        if prop >= NON_CUSTOM_PROPERTY_ID_COUNT as i32 {
-            return Err(());
+        // guaranteed by static_assert_nscsspropertyid above.
+        Some(NonCustomPropertyId(prop as u32))
+    }
+
+    /// Resolves the alias of a given property if needed.
+    pub fn unaliased(self) -> Self {
+        let Some(alias_id) = self.as_alias() else { return self };
+        match alias_id.aliased_property() {
+            AliasedPropertyId::Longhand(longhand) => longhand.into(),
+            AliasedPropertyId::Shorthand(shorthand) => shorthand.into(),
         }
-        // unsafe: guaranteed by static_assert_nscsspropertyid above.
-        Ok(unsafe { std::mem::transmute(prop as usize) })
     }
 
     /// Get the property name.
@@ -483,7 +498,7 @@ impl NonCustomPropertyId {
             "${property.name}",
             % endfor
         ];
-        MAP[self.0]
+        MAP[self.0 as usize]
     }
 
     /// Returns whether this property is transitionable.
@@ -514,7 +529,7 @@ impl NonCustomPropertyId {
 
         let passes_pref_check = || {
             % if engine == "gecko":
-                unsafe { structs::nsCSSProps_gPropertyEnabled[self.0] }
+                unsafe { structs::nsCSSProps_gPropertyEnabled[self.0 as usize] }
             % else:
                 static PREF_NAME: [Option< &str>; ${
                     len(data.longhands) + len(data.shorthands) + len(data.all_aliases())
@@ -531,7 +546,7 @@ impl NonCustomPropertyId {
                         % endif
                     % endfor
                 ];
-                let pref = match PREF_NAME[self.0] {
+                let pref = match PREF_NAME[self.0 as usize] {
                     None => return true,
                     Some(pref) => pref,
                 };
@@ -571,7 +586,7 @@ impl NonCustomPropertyId {
             0,
             % endfor
         ];
-        MAP[self.0] & rule_types.bits() != 0
+        MAP[self.0 as usize] & rule_types.bits() != 0
     }
 
     fn allowed_in(self, context: &ParserContext) -> bool {
@@ -637,7 +652,7 @@ impl NonCustomPropertyId {
             % endif
             % endfor
         ];
-        SUPPORTED_TYPES[self.0]
+        SUPPORTED_TYPES[self.0 as usize]
     }
 
     /// See PropertyId::collect_property_completion_keywords.
@@ -657,31 +672,52 @@ impl NonCustomPropertyId {
             % endif
             % endfor
         ];
-        COLLECT_FUNCTIONS[self.0](f);
+        COLLECT_FUNCTIONS[self.0 as usize](f);
     }
 
     /// Turns this `NonCustomPropertyId` into a `PropertyId`.
     #[inline]
     pub fn to_property_id(self) -> PropertyId {
-        use std::mem::transmute;
-        if self.0 < ${len(data.longhands)} {
-            return unsafe {
-                PropertyId::Longhand(transmute(self.0 as u16))
-            }
-        }
-        if self.0 < ${len(data.longhands) + len(data.shorthands)} {
-            return unsafe {
-                PropertyId::Shorthand(transmute((self.0 - ${len(data.longhands)}) as u16))
-            }
-        }
-        assert!(self.0 < NON_CUSTOM_PROPERTY_ID_COUNT);
-        let alias_id: AliasId = unsafe {
-            transmute((self.0 - ${len(data.longhands) + len(data.shorthands)}) as u16)
-        };
+        PropertyId::NonCustom(self)
+    }
 
-        match alias_id.aliased_property() {
-            AliasedPropertyId::Longhand(longhand) => PropertyId::LonghandAlias(longhand, alias_id),
-            AliasedPropertyId::Shorthand(shorthand) => PropertyId::ShorthandAlias(shorthand, alias_id),
+    /// Returns a longhand id, if this property is one.
+    #[inline]
+    pub fn as_longhand(self) -> Option<LonghandId> {
+        if self.0 < ${len(data.longhands)} {
+            return Some(unsafe { std::mem::transmute(self.0 as u16) })
+        }
+        None
+    }
+
+    /// Returns a shorthand id, if this property is one.
+    #[inline]
+    pub fn as_shorthand(self) -> Option<ShorthandId> {
+        if self.0 >= ${len(data.longhands)} && self.0 < ${len(data.longhands) + len(data.shorthands)} {
+            return Some(unsafe { std::mem::transmute((self.0 - ${len(data.longhands)}) as u16) })
+        }
+        None
+    }
+
+    /// Returns an alias id, if this property is one.
+    #[inline]
+    pub fn as_alias(self) -> Option<AliasId> {
+        debug_assert!((self.0 as usize) < NON_CUSTOM_PROPERTY_ID_COUNT);
+        if self.0 >= ${len(data.longhands) + len(data.shorthands)} {
+            return Some(unsafe {
+                std::mem::transmute((self.0 - ${len(data.longhands) + len(data.shorthands)}) as u16)
+            });
+        }
+        None
+    }
+
+    /// Returns either a longhand or a shorthand, resolving aliases.
+    #[inline]
+    pub fn longhand_or_shorthand(self) -> Result<LonghandId, ShorthandId> {
+        let id = self.unaliased();
+        match id.as_longhand() {
+            Some(lh) => Ok(lh),
+            None => Err(id.as_shorthand().unwrap()),
         }
     }
 }
@@ -689,21 +725,21 @@ impl NonCustomPropertyId {
 impl From<LonghandId> for NonCustomPropertyId {
     #[inline]
     fn from(id: LonghandId) -> Self {
-        NonCustomPropertyId(id as usize)
+        NonCustomPropertyId(id as u32)
     }
 }
 
 impl From<ShorthandId> for NonCustomPropertyId {
     #[inline]
     fn from(id: ShorthandId) -> Self {
-        NonCustomPropertyId((id as usize) + ${len(data.longhands)})
+        NonCustomPropertyId((id as u32) + ${len(data.longhands)})
     }
 }
 
 impl From<AliasId> for NonCustomPropertyId {
     #[inline]
     fn from(id: AliasId) -> Self {
-        NonCustomPropertyId(id as usize + ${len(data.longhands) + len(data.shorthands)})
+        NonCustomPropertyId(id as u32 + ${len(data.longhands) + len(data.shorthands)})
     }
 }
 
@@ -724,14 +760,14 @@ impl NonCustomPropertyIdSet {
     /// Insert a non-custom-property in the set.
     #[inline]
     pub fn insert(&mut self, id: NonCustomPropertyId) {
-        let bit = id.0;
+        let bit = id.0 as usize;
         self.storage[bit / 32] |= 1 << (bit % 32);
     }
 
     /// Return whether the given property is in the set
     #[inline]
     pub fn contains(&self, id: NonCustomPropertyId) -> bool {
-        let bit = id.0;
+        let bit = id.0 as usize;
         (self.storage[bit / 32] & (1 << (bit % 32))) != 0
     }
 }
@@ -795,17 +831,35 @@ static ${name}: LonghandIdSet = LonghandIdSet {
 
 %>
 
-/// A group for properties which may override each other
-/// via logical resolution.
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+/// A group for properties which may override each other via logical resolution.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[repr(u8)]
-pub enum LogicalGroup {
+pub enum LogicalGroupId {
     % for i, group in enumerate(logical_groups.keys()):
     /// ${group}
     ${to_camel_case(group)} = ${i},
     % endfor
 }
 
+impl LogicalGroupId {
+    /// Return the list of physical mapped properties for a given logical group.
+    fn physical_properties(self) -> &'static [LonghandId] {
+        static PROPS: [[LonghandId; 4]; ${len(logical_groups)}] = [
+        % for group, props in logical_groups.items():
+        [
+            <% physical_props = [p for p in props if p.logical][0].all_physical_mapped_properties(data) %>
+            % for phys in physical_props:
+            LonghandId::${phys.camel_case},
+            % endfor
+            % for i in range(len(physical_props), 4):
+            LonghandId::${physical_props[0].camel_case},
+            % endfor
+        ],
+        % endfor
+        ];
+        &PROPS[self as usize]
+    }
+}
 
 /// A set of logical groups.
 #[derive(Clone, Copy, Debug, Default, MallocSizeOf, PartialEq)]
@@ -823,14 +877,14 @@ impl LogicalGroupSet {
 
     /// Return whether the given group is in the set
     #[inline]
-    pub fn contains(&self, g: LogicalGroup) -> bool {
+    pub fn contains(&self, g: LogicalGroupId) -> bool {
         let bit = g as usize;
         (self.storage[bit / 32] & (1 << (bit % 32))) != 0
     }
 
     /// Insert a group the set.
     #[inline]
-    pub fn insert(&mut self, g: LogicalGroup) {
+    pub fn insert(&mut self, g: LogicalGroupId) {
         let bit = g as usize;
         self.storage[bit / 32] |= 1 << (bit % 32);
     }
@@ -1267,6 +1321,28 @@ impl fmt::Debug for LonghandId {
     }
 }
 
+enum LogicalMappingKind {
+    Side(LogicalSide),
+    Corner(LogicalCorner),
+    Axis(LogicalAxis),
+}
+
+struct LogicalMappingData {
+    group: LogicalGroupId,
+    kind: LogicalMappingKind,
+}
+
+impl LogicalMappingData {
+    fn to_physical(&self, wm: WritingMode) -> LonghandId {
+        let index = match self.kind {
+            LogicalMappingKind::Side(s) => s.to_physical(wm) as usize,
+            LogicalMappingKind::Corner(c) => c.to_physical(wm) as usize,
+            LogicalMappingKind::Axis(a) => a.to_physical(wm) as usize,
+        };
+        self.group.physical_properties()[index]
+    }
+}
+
 impl LonghandId {
     /// Get the name of this longhand property.
     #[inline]
@@ -1337,7 +1413,7 @@ impl LonghandId {
     }
 
     fn parse_value<'i, 't>(
-        &self,
+        self,
         context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<PropertyDeclaration, ParseError<'i>> {
@@ -1350,7 +1426,20 @@ impl LonghandId {
             longhands::${property.ident}::parse_declared,
         % endfor
         ];
-        (PARSE_PROPERTY[*self as usize])(context, input)
+        (PARSE_PROPERTY[self as usize])(context, input)
+    }
+
+    /// Returns whether this longhand is `non_custom` or is a longhand of it.
+    pub fn is_or_is_longhand_of(self, non_custom: NonCustomPropertyId) -> bool {
+        match non_custom.longhand_or_shorthand() {
+            Ok(lh) => self == lh,
+            Err(sh) => self.is_longhand_of(sh),
+        }
+    }
+
+    /// Returns whether this longhand is a longhand of `shorthand`.
+    pub fn is_longhand_of(self, shorthand: ShorthandId) -> bool {
+        self.shorthands().any(|s| s == shorthand)
     }
 
     /// Returns whether this property is animatable.
@@ -1373,14 +1462,9 @@ impl LonghandId {
     }
 
     #[cfg(feature = "gecko")]
-    #[allow(non_upper_case_globals)]
     /// Returns a longhand id from Gecko's nsCSSPropertyID.
-    pub fn from_nscsspropertyid(id: nsCSSPropertyID) -> Result<Self, ()> {
-        match PropertyId::from_nscsspropertyid(id) {
-            Ok(PropertyId::Longhand(id)) |
-            Ok(PropertyId::LonghandAlias(id, _)) => Ok(id),
-            _ => Err(()),
-        }
+    pub fn from_nscsspropertyid(id: nsCSSPropertyID) -> Option<Self> {
+        NonCustomPropertyId::from_nscsspropertyid(id)?.unaliased().as_longhand()
     }
 
     /// Return whether this property is logical.
@@ -1390,45 +1474,42 @@ impl LonghandId {
     }
 
     /// If this is a logical property, return the corresponding physical one in
-    /// the given writing mode.
-    ///
-    /// Otherwise, return unchanged.
+    /// the given writing mode. Otherwise, return unchanged.
     #[inline]
-    pub fn to_physical(&self, wm: WritingMode) -> Self {
-        match *self {
-            % for property in data.longhands:
-            % if property.logical:
-                <% logical_group = property.logical_group %>
-                LonghandId::${property.camel_case} => {
-                    <%helpers:logical_setter_helper name="${property.name}">
-                    <%def name="inner(physical_ident)">
-                        <%
-                            physical_name = physical_ident.replace("_", "-")
-                            physical_property = data.longhands_by_name[physical_name]
-                            assert logical_group == physical_property.logical_group
-                        %>
-                        LonghandId::${to_camel_case(physical_ident)}
-                    </%def>
-                    </%helpers:logical_setter_helper>
-                }
-            % endif
-            % endfor
-            _ => *self
-        }
+    pub fn to_physical(self, wm: WritingMode) -> Self {
+        let Some(data) = self.logical_mapping_data() else { return self };
+        data.to_physical(wm)
     }
 
-    /// Return the logical group of this longhand property.
-    pub fn logical_group(&self) -> Option<LogicalGroup> {
-        const LOGICAL_GROUPS: [Option<LogicalGroup>; ${len(data.longhands)}] = [
+    /// Return the relevant data to map a particular logical property into physical.
+    fn logical_mapping_data(self) -> Option<<&'static LogicalMappingData> {
+        const LOGICAL_MAPPING_DATA: [Option<LogicalMappingData>; ${len(data.longhands)}] = [
             % for prop in data.longhands:
-            % if prop.logical_group:
-            Some(LogicalGroup::${to_camel_case(prop.logical_group)}),
+            % if prop.logical:
+            Some(LogicalMappingData {
+                group: LogicalGroupId::${to_camel_case(prop.logical_group)},
+                kind: ${prop.logical_mapping_kind(data)}
+            }),
             % else:
             None,
             % endif
             % endfor
         ];
-        LOGICAL_GROUPS[*self as usize]
+        LOGICAL_MAPPING_DATA[self as usize].as_ref()
+    }
+
+    /// Return the logical group of this longhand property.
+    pub fn logical_group(self) -> Option<LogicalGroupId> {
+        const LOGICAL_GROUP_IDS: [Option<LogicalGroupId>; ${len(data.longhands)}] = [
+            % for prop in data.longhands:
+            % if prop.logical_group:
+            Some(LogicalGroupId::${to_camel_case(prop.logical_group)}),
+            % else:
+            None,
+            % endif
+            % endfor
+        ];
+        LOGICAL_GROUP_IDS[self as usize]
     }
 
     /// Returns PropertyFlags for given longhand property.
@@ -1515,8 +1596,8 @@ impl ShorthandId {
     /// Converts from a nsCSSPropertyID to a ShorthandId.
     #[cfg(feature = "gecko")]
     #[inline]
-    pub fn from_nscsspropertyid(prop: nsCSSPropertyID) -> Result<Self, ()> {
-        PropertyId::from_nscsspropertyid(prop)?.as_shorthand().map_err(|_| ())
+    pub fn from_nscsspropertyid(id: nsCSSPropertyID) -> Option<Self> {
+        NonCustomPropertyId::from_nscsspropertyid(id)?.unaliased().as_shorthand()
     }
 
     /// Get the longhand ids that form this shorthand.
@@ -1831,95 +1912,12 @@ impl UnparsedValue {
     }
 }
 
-/// An identifier for a given property declaration, which can be either a
-/// longhand or a custom property.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "servo", derive(MallocSizeOf))]
-pub enum PropertyDeclarationId<'a> {
-    /// A longhand.
-    Longhand(LonghandId),
-    /// A custom property declaration.
-    Custom(&'a crate::custom_properties::Name),
-}
-
-impl<'a> ToCss for PropertyDeclarationId<'a> {
-    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
-    where
-        W: Write,
-    {
-        match *self {
-            PropertyDeclarationId::Longhand(id) => dest.write_str(id.name()),
-            PropertyDeclarationId::Custom(ref name) => {
-                dest.write_str("--")?;
-                serialize_atom_name(name, dest)
-            }
-        }
-    }
-}
-
-impl<'a> PropertyDeclarationId<'a> {
-    /// Whether a given declaration id is either the same as `other`, or a
-    /// longhand of it.
-    pub fn is_or_is_longhand_of(&self, other: &PropertyId) -> bool {
-        match *self {
-            PropertyDeclarationId::Longhand(id) => {
-                match *other {
-                    PropertyId::Longhand(other_id) |
-                    PropertyId::LonghandAlias(other_id, _) => id == other_id,
-                    PropertyId::Shorthand(shorthand) |
-                    PropertyId::ShorthandAlias(shorthand, _) => self.is_longhand_of(shorthand),
-                    PropertyId::Custom(_) => false,
-                }
-            }
-            PropertyDeclarationId::Custom(name) => {
-                matches!(*other, PropertyId::Custom(ref other_name) if name == other_name)
-            }
-        }
-    }
-
-    /// Whether a given declaration id is a longhand belonging to this
-    /// shorthand.
-    pub fn is_longhand_of(&self, shorthand: ShorthandId) -> bool {
-        match *self {
-            PropertyDeclarationId::Longhand(ref id) => id.shorthands().any(|s| s == shorthand),
-            _ => false,
-        }
-    }
-
-    /// Returns the name of the property without CSS escaping.
-    pub fn name(&self) -> Cow<'static, str> {
-        match *self {
-            PropertyDeclarationId::Longhand(id) => id.name().into(),
-            PropertyDeclarationId::Custom(name) => {
-                let mut s = String::new();
-                write!(&mut s, "--{}", name).unwrap();
-                s.into()
-            }
-        }
-    }
-
-    /// Returns longhand id if it is, None otherwise.
-    #[inline]
-    pub fn as_longhand(&self) -> Option<LonghandId> {
-        match *self {
-            PropertyDeclarationId::Longhand(id) => Some(id),
-            _ => None,
-        }
-    }
-}
-
-/// Servo's representation of a CSS property, that is, either a longhand, a
-/// shorthand, or a custom property.
+/// Servo's representation of a CSS property, that is, either a longhand, a shorthand, or a custom
+/// property.
 #[derive(Clone, Eq, PartialEq)]
 pub enum PropertyId {
-    /// A longhand property.
-    Longhand(LonghandId),
-    /// A shorthand property.
-    Shorthand(ShorthandId),
-    /// An alias for a longhand property.
-    LonghandAlias(LonghandId, AliasId),
     /// An alias for a shorthand property.
-    ShorthandAlias(ShorthandId, AliasId),
+    NonCustom(NonCustomPropertyId),
     /// A custom property.
     Custom(crate::custom_properties::Name),
 }
@@ -1936,10 +1934,7 @@ impl ToCss for PropertyId {
         W: Write,
     {
         match *self {
-            PropertyId::Longhand(id) => dest.write_str(id.name()),
-            PropertyId::Shorthand(id) => dest.write_str(id.name()),
-            PropertyId::LonghandAlias(id, _) => dest.write_str(id.name()),
-            PropertyId::ShorthandAlias(id, _) => dest.write_str(id.name()),
+            PropertyId::NonCustom(id) => dest.write_str(id.name()),
             PropertyId::Custom(ref name) => {
                 dest.write_str("--")?;
                 serialize_atom_name(name, dest)
@@ -1985,11 +1980,7 @@ impl PropertyId {
     /// Return the longhand id that this property id represents.
     #[inline]
     pub fn longhand_id(&self) -> Option<LonghandId> {
-        Some(match *self {
-            PropertyId::Longhand(id) => id,
-            PropertyId::LonghandAlias(id, _) => id,
-            _ => return None,
-        })
+        self.non_custom_non_alias_id()?.as_longhand()
     }
 
     /// Returns a given property from the given name, _regardless of whether it
@@ -2011,26 +2002,13 @@ impl PropertyId {
         // That's why we need to allow dead_code.
         #[allow(dead_code)]
         pub enum StaticId {
-            Longhand(LonghandId),
-            Shorthand(ShorthandId),
-            LonghandAlias(LonghandId, AliasId),
-            ShorthandAlias(ShorthandId, AliasId),
+            NonCustom(NonCustomPropertyId),
             CountedUnknown(CountedUnknownProperty),
         }
         ascii_case_insensitive_phf_map! {
             static_ids -> StaticId = {
-                % for (kind, properties) in [("Longhand", data.longhands), ("Shorthand", data.shorthands)]:
-                % for property in properties:
-                "${property.name}" => StaticId::${kind}(${kind}Id::${property.camel_case}),
-                % for alias in property.aliases:
-                "${alias.name}" => {
-                    StaticId::${kind}Alias(
-                        ${kind}Id::${property.camel_case},
-                        AliasId::${alias.camel_case},
-                    )
-                },
-                % endfor
-                % endfor
+                % for i, property in enumerate(data.longhands + data.shorthands + data.all_aliases()):
+                "${property.name}" => StaticId::NonCustom(NonCustomPropertyId(${i})),
                 % endfor
                 % for property in data.counted_unknown_properties:
                 "${property.name}" => {
@@ -2042,15 +2020,11 @@ impl PropertyId {
 
         if let Some(id) = static_ids::get(property_name) {
             return Ok(match *id {
-                StaticId::Longhand(id) => PropertyId::Longhand(id),
-                StaticId::Shorthand(id) => PropertyId::Shorthand(id),
-                StaticId::LonghandAlias(id, alias) => PropertyId::LonghandAlias(id, alias),
-                StaticId::ShorthandAlias(id, alias) => PropertyId::ShorthandAlias(id, alias),
+                StaticId::NonCustom(id) => PropertyId::NonCustom(id),
                 StaticId::CountedUnknown(unknown_prop) => {
                     if let Some(counters) = use_counters {
                         counters.counted_unknown_properties.record(unknown_prop);
                     }
-
                     // Always return Err(()) because these aren't valid custom property names.
                     return Err(());
                 }
@@ -2108,10 +2082,9 @@ impl PropertyId {
 
     /// Returns a property id from Gecko's nsCSSPropertyID.
     #[cfg(feature = "gecko")]
-    #[allow(non_upper_case_globals)]
     #[inline]
-    pub fn from_nscsspropertyid(id: nsCSSPropertyID) -> Result<Self, ()> {
-        Ok(NonCustomPropertyId::from_nscsspropertyid(id)?.to_property_id())
+    pub fn from_nscsspropertyid(id: nsCSSPropertyID) -> Option<Self> {
+        Some(NonCustomPropertyId::from_nscsspropertyid(id)?.to_property_id())
     }
 
     /// Returns true if the property is a shorthand or shorthand alias.
@@ -2124,35 +2097,26 @@ impl PropertyId {
     /// `PropertyDeclarationId`.
     pub fn as_shorthand(&self) -> Result<ShorthandId, PropertyDeclarationId> {
         match *self {
-            PropertyId::ShorthandAlias(id, _) |
-            PropertyId::Shorthand(id) => Ok(id),
-            PropertyId::LonghandAlias(id, _) |
-            PropertyId::Longhand(id) => Err(PropertyDeclarationId::Longhand(id)),
-            PropertyId::Custom(ref name) => Err(PropertyDeclarationId::Custom(name)),
+            Self::NonCustom(id) => match id.longhand_or_shorthand() {
+                Ok(lh) => Err(PropertyDeclarationId::Longhand(lh)),
+                Err(sh) => Ok(sh),
+            },
+            Self::Custom(ref name) => Err(PropertyDeclarationId::Custom(name)),
         }
     }
 
     /// Returns the `NonCustomPropertyId` corresponding to this property id.
     pub fn non_custom_id(&self) -> Option<NonCustomPropertyId> {
-        Some(match *self {
-            PropertyId::Custom(_) => return None,
-            PropertyId::Shorthand(shorthand_id) => shorthand_id.into(),
-            PropertyId::Longhand(longhand_id) => longhand_id.into(),
-            PropertyId::ShorthandAlias(_, alias_id) => alias_id.into(),
-            PropertyId::LonghandAlias(_, alias_id) => alias_id.into(),
-        })
+        match *self {
+            Self::Custom(_) => None,
+            Self::NonCustom(id) => Some(id),
+        }
     }
 
     /// Returns non-alias NonCustomPropertyId corresponding to this
     /// property id.
     fn non_custom_non_alias_id(&self) -> Option<NonCustomPropertyId> {
-        Some(match *self {
-            PropertyId::Custom(_) => return None,
-            PropertyId::Shorthand(id) => id.into(),
-            PropertyId::Longhand(id) => id.into(),
-            PropertyId::ShorthandAlias(id, _) => id.into(),
-            PropertyId::LonghandAlias(id, _) => id.into(),
-        })
+        self.non_custom_id().map(NonCustomPropertyId::unaliased)
     }
 
     /// Whether the property is enabled for all content regardless of the
@@ -2439,8 +2403,7 @@ impl PropertyDeclaration {
         }
     }
 
-    /// Returns true if this property declaration is for one of the animatable
-    /// properties.
+    /// Returns true if this property declaration is for one of the animatable properties.
     pub fn is_animatable(&self) -> bool {
         match self.id() {
             PropertyDeclarationId::Longhand(id) => id.is_animatable(),
@@ -2472,12 +2435,10 @@ impl PropertyDeclaration {
     ) -> Result<(), ParseError<'i>> {
         assert!(declarations.is_empty());
         debug_assert!(id.allowed_in(context), "{:?}", id);
-
-        let non_custom_id = id.non_custom_id();
         input.skip_whitespace();
 
         let start = input.state();
-        match id {
+        let non_custom_id = match id {
             PropertyId::Custom(property_name) => {
                 let value = match input.try_parse(CSSWideKeyword::parse) {
                     Ok(keyword) => CustomDeclarationValue::CSSWideKeyword(keyword),
@@ -2490,43 +2451,42 @@ impl PropertyDeclaration {
                     value,
                 }));
                 return Ok(());
-            }
-            PropertyId::LonghandAlias(id, _) |
-            PropertyId::Longhand(id) => {
-                input.try_parse(CSSWideKeyword::parse).map(|keyword| {
-                    PropertyDeclaration::css_wide_keyword(id, keyword)
+            },
+            PropertyId::NonCustom(id) => id,
+        };
+        match non_custom_id.longhand_or_shorthand() {
+            Ok(longhand_id) => {
+                let declaration = input.try_parse(CSSWideKeyword::parse).map(|keyword| {
+                    PropertyDeclaration::css_wide_keyword(longhand_id, keyword)
                 }).or_else(|()| {
                     input.look_for_var_or_env_functions();
-                    input.parse_entirely(|input| id.parse_value(context, input))
-                    .or_else(|err| {
-                        while let Ok(_) = input.next() {}  // Look for var() after the error.
-                        if !input.seen_var_or_env_functions() {
-                            return Err(err);
-                        }
-                        input.reset(&start);
-                        let (first_token_type, css) =
-                            crate::custom_properties::parse_non_custom_with_var(input)?;
-                        Ok(PropertyDeclaration::WithVariables(VariableDeclaration {
-                            id,
-                            value: Arc::new(UnparsedValue {
-                                css: css.into_owned(),
-                                first_token_type,
-                                url_data: context.url_data.clone(),
-                                from_shorthand: None,
-                            }),
-                        }))
-                    })
-                }).map(|declaration| {
-                    declarations.push(declaration)
+                    input.parse_entirely(|input| longhand_id.parse_value(context, input))
+                }).or_else(|err| {
+                    while let Ok(_) = input.next() {}  // Look for var() after the error.
+                    if !input.seen_var_or_env_functions() {
+                        return Err(err);
+                    }
+                    input.reset(&start);
+                    let (first_token_type, css) =
+                        crate::custom_properties::parse_non_custom_with_var(input)?;
+                    Ok(PropertyDeclaration::WithVariables(VariableDeclaration {
+                        id: longhand_id,
+                        value: Arc::new(UnparsedValue {
+                            css: css.into_owned(),
+                            first_token_type,
+                            url_data: context.url_data.clone(),
+                            from_shorthand: None,
+                        }),
+                    }))
                 })?;
-            }
-            PropertyId::ShorthandAlias(id, _) |
-            PropertyId::Shorthand(id) => {
+                declarations.push(declaration)
+            },
+            Err(shorthand_id) => {
                 if let Ok(keyword) = input.try_parse(CSSWideKeyword::parse) {
-                    if id == ShorthandId::All {
+                    if shorthand_id == ShorthandId::All {
                         declarations.all_shorthand = AllShorthand::CSSWideKeyword(keyword)
                     } else {
-                        for longhand in id.longhands() {
+                        for longhand in shorthand_id.longhands() {
                             declarations.push(PropertyDeclaration::css_wide_keyword(longhand, keyword));
                         }
                     }
@@ -2535,7 +2495,7 @@ impl PropertyDeclaration {
                     // Not using parse_entirely here: each
                     // ${shorthand.ident}::parse_into function needs to do so
                     // *before* pushing to `declarations`.
-                    id.parse_into(declarations, context, input).or_else(|err| {
+                    shorthand_id.parse_into(declarations, context, input).or_else(|err| {
                         while let Ok(_) = input.next() {}  // Look for var() after the error.
                         if !input.seen_var_or_env_functions() {
                             return Err(err);
@@ -2548,12 +2508,12 @@ impl PropertyDeclaration {
                             css: css.into_owned(),
                             first_token_type,
                             url_data: context.url_data.clone(),
-                            from_shorthand: Some(id),
+                            from_shorthand: Some(shorthand_id),
                         });
-                        if id == ShorthandId::All {
+                        if shorthand_id == ShorthandId::All {
                             declarations.all_shorthand = AllShorthand::WithVariables(unparsed)
                         } else {
-                            for id in id.longhands() {
+                            for id in shorthand_id.longhands() {
                                 declarations.push(
                                     PropertyDeclaration::WithVariables(VariableDeclaration {
                                         id,
@@ -2565,11 +2525,10 @@ impl PropertyDeclaration {
                         Ok(())
                     })?;
                 }
-            }
+            },
         }
-        debug_assert!(non_custom_id.is_some(), "Custom properties should've returned earlier");
         if let Some(use_counters) = context.use_counters {
-            use_counters.non_custom_properties.record(non_custom_id.unwrap());
+            use_counters.non_custom_properties.record(non_custom_id);
         }
         Ok(())
     }
@@ -2751,9 +2710,7 @@ pub mod style_structs {
 
         impl ${style_struct.name} {
             % for longhand in style_struct.longhands:
-                % if longhand.logical:
-                    ${helpers.logical_setter(name=longhand.name)}
-                % else:
+                % if not longhand.logical:
                     % if longhand.ident == "display":
                         /// Set `display`.
                         ///
@@ -3098,19 +3055,16 @@ impl ComputedValues {
     }
 
 % for prop in data.longhands:
+% if not prop.logical:
     /// Gets the computed value of a given property.
     #[inline(always)]
     #[allow(non_snake_case)]
     pub fn clone_${prop.ident}(
         &self,
     ) -> longhands::${prop.ident}::computed_value::T {
-        self.get_${prop.style_struct.ident.strip("_")}()
-        % if prop.logical:
-            .clone_${prop.ident}(self.writing_mode)
-        % else:
-            .clone_${prop.ident}()
-        % endif
+        self.get_${prop.style_struct.ident.strip("_")}().clone_${prop.ident}()
     }
+% endif
 % endfor
 
     /// Writes the (resolved or computed) value of the given longhand as a string in `dest`.
@@ -3125,13 +3079,16 @@ impl ComputedValues {
     ) -> fmt::Result {
         use crate::values::resolved::ToResolvedValue;
         let mut dest = CssWriter::new(dest);
+        let property_id = property_id.to_physical(self.writing_mode);
         match property_id {
             % for specified_type, props in groupby(data.longhands, key=lambda x: x.specified_type()):
             <% props = list(props) %>
             ${" |\n".join("LonghandId::{}".format(p.camel_case) for p in props)} => {
                 let value = match property_id {
                     % for prop in props:
+                    % if not prop.logical:
                     LonghandId::${prop.camel_case} => self.clone_${prop.ident}(),
+                    % endif
                     % endfor
                     _ => unsafe { debug_unreachable!() },
                 };
@@ -3153,13 +3110,16 @@ impl ComputedValues {
     ) -> PropertyDeclaration {
         use crate::values::resolved::ToResolvedValue;
         use crate::values::computed::ToComputedValue;
-        match property_id {
+        let physical_property_id = property_id.to_physical(self.writing_mode);
+        match physical_property_id {
             % for specified_type, props in groupby(data.longhands, key=lambda x: x.specified_type()):
             <% props = list(props) %>
             ${" |\n".join("LonghandId::{}".format(p.camel_case) for p in props)} => {
-                let mut computed_value = match property_id {
+                let mut computed_value = match physical_property_id {
                     % for prop in props:
+                    % if not prop.logical:
                     LonghandId::${prop.camel_case} => self.clone_${prop.ident}(),
+                    % endif
                     % endfor
                     _ => unsafe { debug_unreachable!() },
                 };
@@ -3211,9 +3171,11 @@ impl ComputedValues {
     pub fn differing_properties(&self, other: &ComputedValues) -> LonghandIdSet {
         let mut set = LonghandIdSet::new();
         % for prop in data.longhands:
+        % if not prop.logical:
         if self.clone_${prop.ident}() != other.clone_${prop.ident}() {
             set.insert(LonghandId::${prop.camel_case});
         }
+        % endif
         % endfor
         set
     }
@@ -3767,6 +3729,7 @@ impl<'a> StyleBuilder<'a> {
     }
 
     % for property in data.longhands:
+    % if not property.logical:
     % if not property.style_struct.inherited:
     /// Inherit `${property.ident}` from our parent style.
     #[allow(non_snake_case)]
@@ -3790,12 +3753,7 @@ impl<'a> StyleBuilder<'a> {
         }
 
         self.${property.style_struct.ident}.mutate()
-            .copy_${property.ident}_from(
-                inherited_struct,
-                % if property.logical:
-                self.writing_mode,
-                % endif
-            );
+            .copy_${property.ident}_from(inherited_struct);
     }
     % else:
     /// Reset `${property.ident}` to the initial value.
@@ -3809,12 +3767,7 @@ impl<'a> StyleBuilder<'a> {
         }
 
         self.${property.style_struct.ident}.mutate()
-            .reset_${property.ident}(
-                reset_struct,
-                % if property.logical:
-                self.writing_mode,
-                % endif
-            );
+            .reset_${property.ident}(reset_struct);
     }
     % endif
 
@@ -3837,6 +3790,7 @@ impl<'a> StyleBuilder<'a> {
                 % endif
             );
     }
+    % endif
     % endif
     % endfor
     <% del property %>
@@ -4135,7 +4089,7 @@ mod lazy_static_module {
 
 /// A per-longhand function that performs the CSS cascade for that longhand.
 pub type CascadePropertyFn =
-    extern "Rust" fn(
+    unsafe extern "Rust" fn(
         declaration: &PropertyDeclaration,
         context: &mut computed::Context,
     );
@@ -4147,7 +4101,6 @@ pub static CASCADE_PROPERTY: [CascadePropertyFn; ${len(data.longhands)}] = [
         longhands::${property.ident}::cascade_property,
     % endfor
 ];
-
 
 /// See StyleAdjuster::adjust_for_border_width.
 pub fn adjust_border_width(style: &mut StyleBuilder) {

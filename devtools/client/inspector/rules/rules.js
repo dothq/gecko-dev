@@ -76,6 +76,9 @@ const FILTER_PROP_RE = /\s*([^:\s]*)\s*:\s*(.*?)\s*;?$/;
 // should be strict or not
 const FILTER_STRICT_RE = /\s*`(.*?)`\s*$/;
 
+const RULE_VIEW_HEADER_CLASSNAME = "ruleview-header";
+const PSEUDO_ELEMENTS_CONTAINER_ID = "pseudo-elements-container";
+
 /**
  * Our model looks like this:
  *
@@ -141,6 +144,7 @@ function CssRuleView(inspector, document, store) {
   this.childHasDragged = false;
 
   this._outputParser = new OutputParser(document, this.cssProperties);
+  this._abortController = new this.styleWindow.AbortController();
 
   this._onAddRule = this._onAddRule.bind(this);
   this._onContextMenu = this._onContextMenu.bind(this);
@@ -672,6 +676,48 @@ CssRuleView.prototype = {
     this.pageStyle.addNewRule(element, pseudoClasses);
   },
 
+  maybeShowEnterKeyNotice() {
+    const SHOW_RULES_VIEW_ENTER_KEY_NOTICE_PREF =
+      "devtools.inspector.showRulesViewEnterKeyNotice";
+    // Make the Enter key notice visible
+    // if it wasn't dismissed by the user yet.
+    if (
+      !Services.prefs.getBoolPref(SHOW_RULES_VIEW_ENTER_KEY_NOTICE_PREF, false)
+    ) {
+      return;
+    }
+
+    const enterKeyNoticeEl = this.styleDocument.getElementById(
+      "ruleview-kbd-enter-notice"
+    );
+
+    if (!enterKeyNoticeEl.hasAttribute("hidden")) {
+      return;
+    }
+
+    // Compute the right key (Cmd / Ctrl) depending on the OS
+    enterKeyNoticeEl.querySelector(
+      "#ruleview-kbd-enter-notice-ctrl-cmd"
+    ).textContent = Services.appinfo.OS === "Darwin" ? "Cmd" : "Ctrl";
+    enterKeyNoticeEl.removeAttribute("hidden");
+
+    enterKeyNoticeEl
+      .querySelector("#ruleview-kbd-enter-notice-dismiss-button")
+      .addEventListener(
+        "click",
+        () => {
+          // Hide the notice
+          enterKeyNoticeEl.setAttribute("hidden", "");
+          // And set the pref to false so we don't show the notice on next startup.
+          Services.prefs.setBoolPref(
+            SHOW_RULES_VIEW_ENTER_KEY_NOTICE_PREF,
+            false
+          );
+        },
+        { once: true, signal: this._abortController.signal }
+      );
+  },
+
   /**
    * Disables add rule button when needed
    */
@@ -875,6 +921,8 @@ CssRuleView.prototype = {
     this.tooltips.destroy();
 
     // Remove bound listeners
+    this._abortController.abort();
+    this._abortController = null;
     this.shortcuts.destroy();
     this.styleDocument.removeEventListener("click", this, { capture: true });
     this.element.removeEventListener("copy", this._onCopy);
@@ -1221,33 +1269,44 @@ CssRuleView.prototype = {
    *
    * @param  {String} label
    *         The label for the container header
+   * @param  {String} containerId
+   *         The id that will be set on the container
    * @param  {Boolean} isPseudo
    *         Whether or not the container will hold pseudo element rules
    * @return {DOMNode} The container element
    */
-  createExpandableContainer(label, isPseudo = false) {
+  createExpandableContainer(label, containerId, isPseudo = false) {
     const header = this.styleDocument.createElementNS(HTML_NS, "div");
-    header.className = this._getRuleViewHeaderClassName(true);
+    header.classList.add(
+      RULE_VIEW_HEADER_CLASSNAME,
+      "ruleview-expandable-header"
+    );
     header.setAttribute("role", "heading");
-    header.textContent = label;
+
+    const toggleButton = this.styleDocument.createElementNS(HTML_NS, "button");
+    toggleButton.setAttribute(
+      "title",
+      l10n("rule.expandableContainerToggleButton.title")
+    );
+    toggleButton.setAttribute("aria-expanded", "true");
+    toggleButton.setAttribute("aria-controls", containerId);
 
     const twisty = this.styleDocument.createElementNS(HTML_NS, "span");
     twisty.className = "ruleview-expander theme-twisty";
-    twisty.setAttribute("open", "true");
-    twisty.setAttribute("role", "button");
-    twisty.setAttribute("aria-label", l10n("rule.twistyCollapse.label"));
 
-    header.insertBefore(twisty, header.firstChild);
-    this.element.appendChild(header);
+    toggleButton.append(twisty, this.styleDocument.createTextNode(label));
+    header.append(toggleButton);
 
     const container = this.styleDocument.createElementNS(HTML_NS, "div");
+    container.id = containerId;
     container.classList.add("ruleview-expandable-container");
     container.hidden = false;
-    this.element.appendChild(container);
 
-    header.addEventListener("click", () => {
+    this.element.append(header, container);
+
+    toggleButton.addEventListener("click", () => {
       this._toggleContainerVisibility(
-        twisty,
+        toggleButton,
         container,
         isPseudo,
         !this.showPseudoElements
@@ -1255,10 +1314,8 @@ CssRuleView.prototype = {
     });
 
     if (isPseudo) {
-      container.id = "pseudo-elements-container";
-      twisty.id = "pseudo-elements-header-twisty";
       this._toggleContainerVisibility(
-        twisty,
+        toggleButton,
         container,
         isPseudo,
         this.showPseudoElements
@@ -1280,8 +1337,8 @@ CssRuleView.prototype = {
    * @param  {Boolean}  showPseudo
    *         Whether or not pseudo element rules should be displayed
    */
-  _toggleContainerVisibility(twisty, container, isPseudo, showPseudo) {
-    let isOpen = twisty.getAttribute("open");
+  _toggleContainerVisibility(toggleButton, container, isPseudo, showPseudo) {
+    let isOpen = toggleButton.getAttribute("aria-expanded") === "true";
 
     if (isPseudo) {
       this._showPseudoElements = !!showPseudo;
@@ -1297,20 +1354,7 @@ CssRuleView.prototype = {
       container.hidden = !container.hidden;
     }
 
-    if (isOpen) {
-      twisty.removeAttribute("open");
-      twisty.setAttribute("aria-label", l10n("rule.twistyExpand.label"));
-    } else {
-      twisty.setAttribute("open", "true");
-      twisty.setAttribute("aria-label", l10n("rule.twistyCollapse.label"));
-    }
-  },
-
-  _getRuleViewHeaderClassName(isPseudo) {
-    const baseClassName = "ruleview-header";
-    return isPseudo
-      ? baseClassName + " ruleview-expandable-header"
-      : baseClassName;
+    toggleButton.setAttribute("aria-expanded", !isOpen);
   },
 
   /**
@@ -1356,7 +1400,7 @@ CssRuleView.prototype = {
       if (seenPseudoElement && !seenNormalElement && !rule.pseudoElement) {
         seenNormalElement = true;
         const div = this.styleDocument.createElementNS(HTML_NS, "div");
-        div.className = this._getRuleViewHeaderClassName();
+        div.className = RULE_VIEW_HEADER_CLASSNAME;
         div.setAttribute("role", "heading");
         div.textContent = this.selectedElementLabel;
         this.element.appendChild(div);
@@ -1365,7 +1409,7 @@ CssRuleView.prototype = {
       const inheritedSource = rule.inherited;
       if (inheritedSource && inheritedSource !== lastInheritedSource) {
         const div = this.styleDocument.createElementNS(HTML_NS, "div");
-        div.className = this._getRuleViewHeaderClassName();
+        div.className = RULE_VIEW_HEADER_CLASSNAME;
         div.setAttribute("role", "heading");
         div.setAttribute("aria-level", "3");
         div.textContent = rule.inheritedSource;
@@ -1377,6 +1421,7 @@ CssRuleView.prototype = {
         seenPseudoElement = true;
         container = this.createExpandableContainer(
           this.pseudoElementLabel,
+          PSEUDO_ELEMENTS_CONTAINER_ID,
           true
         );
       }
@@ -1384,7 +1429,10 @@ CssRuleView.prototype = {
       const keyframes = rule.keyframes;
       if (keyframes && keyframes !== lastKeyframes) {
         lastKeyframes = keyframes;
-        container = this.createExpandableContainer(rule.keyframesName);
+        container = this.createExpandableContainer(
+          rule.keyframesName,
+          `keyframes-container-${keyframes.name}`
+        );
       }
 
       rule.editor.element.setAttribute("role", "article");
@@ -1720,7 +1768,7 @@ CssRuleView.prototype = {
   showPseudoClassPanel() {
     this.hideClassPanel();
 
-    this.pseudoClassToggle.classList.add("checked");
+    this.pseudoClassToggle.setAttribute("aria-pressed", "true");
     this.pseudoClassCheckboxes.forEach(checkbox => {
       checkbox.setAttribute("tabindex", "0");
     });
@@ -1728,7 +1776,7 @@ CssRuleView.prototype = {
   },
 
   hidePseudoClassPanel() {
-    this.pseudoClassToggle.classList.remove("checked");
+    this.pseudoClassToggle.setAttribute("aria-pressed", "false");
     this.pseudoClassCheckboxes.forEach(checkbox => {
       checkbox.setAttribute("tabindex", "-1");
     });
@@ -1759,14 +1807,14 @@ CssRuleView.prototype = {
   showClassPanel() {
     this.hidePseudoClassPanel();
 
-    this.classToggle.classList.add("checked");
+    this.classToggle.setAttribute("aria-pressed", "true");
     this.classPanel.hidden = false;
 
     this.classListPreviewer.focusAddClassField();
   },
 
   hideClassPanel() {
-    this.classToggle.classList.remove("checked");
+    this.classToggle.setAttribute("aria-pressed", "false");
     this.classPanel.hidden = true;
   },
 
@@ -1800,13 +1848,15 @@ CssRuleView.prototype = {
 
   async _onToggleLightColorSchemeSimulation() {
     const shouldSimulateLightScheme =
-      this.colorSchemeLightSimulationButton.classList.toggle("checked");
+      this.colorSchemeLightSimulationButton.getAttribute("aria-pressed") !==
+      "true";
 
-    const darkColorSchemeEnabled =
-      this.colorSchemeDarkSimulationButton.classList.contains("checked");
-    if (shouldSimulateLightScheme && darkColorSchemeEnabled) {
-      this.colorSchemeDarkSimulationButton.classList.toggle("checked");
-    }
+    this.colorSchemeLightSimulationButton.setAttribute(
+      "aria-pressed",
+      shouldSimulateLightScheme
+    );
+
+    this.colorSchemeDarkSimulationButton.setAttribute("aria-pressed", "false");
 
     await this.inspector.commands.targetConfigurationCommand.updateConfiguration(
       {
@@ -1819,13 +1869,15 @@ CssRuleView.prototype = {
 
   async _onToggleDarkColorSchemeSimulation() {
     const shouldSimulateDarkScheme =
-      this.colorSchemeDarkSimulationButton.classList.toggle("checked");
+      this.colorSchemeDarkSimulationButton.getAttribute("aria-pressed") !==
+      "true";
 
-    const lightColorSchemeEnabled =
-      this.colorSchemeLightSimulationButton.classList.contains("checked");
-    if (shouldSimulateDarkScheme && lightColorSchemeEnabled) {
-      this.colorSchemeLightSimulationButton.classList.toggle("checked");
-    }
+    this.colorSchemeDarkSimulationButton.setAttribute(
+      "aria-pressed",
+      shouldSimulateDarkScheme
+    );
+
+    this.colorSchemeLightSimulationButton.setAttribute("aria-pressed", "false");
 
     await this.inspector.commands.targetConfigurationCommand.updateConfiguration(
       {
@@ -1837,7 +1889,9 @@ CssRuleView.prototype = {
   },
 
   async _onTogglePrintSimulation() {
-    const enabled = this.printSimulationButton.classList.toggle("checked");
+    const enabled =
+      this.printSimulationButton.getAttribute("aria-pressed") !== "true";
+    this.printSimulationButton.setAttribute("aria-pressed", enabled);
     await this.inspector.commands.targetConfigurationCommand.updateConfiguration(
       {
         printSimulationEnabled: enabled,
@@ -1912,12 +1966,12 @@ CssRuleView.prototype = {
    */
   _togglePseudoElementRuleContainer() {
     const container = this.styleDocument.getElementById(
-      "pseudo-elements-container"
+      PSEUDO_ELEMENTS_CONTAINER_ID
     );
-    const twisty = this.styleDocument.getElementById(
-      "pseudo-elements-header-twisty"
+    const toggle = this.styleDocument.querySelector(
+      `[aria-controls="${PSEUDO_ELEMENTS_CONTAINER_ID}"]`
     );
-    this._toggleContainerVisibility(twisty, container, true, true);
+    this._toggleContainerVisibility(toggle, container, true, true);
   },
 
   /**

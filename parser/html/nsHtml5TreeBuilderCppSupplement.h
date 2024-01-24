@@ -7,9 +7,12 @@
 #include "ErrorList.h"
 #include "nsError.h"
 #include "nsHtml5AttributeName.h"
+#include "nsHtml5HtmlAttributes.h"
 #include "nsHtml5String.h"
 #include "nsNetUtil.h"
 #include "mozilla/dom/FetchPriority.h"
+#include "mozilla/dom/ShadowRoot.h"
+#include "mozilla/dom/ShadowRootBinding.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/Likely.h"
 #include "mozilla/StaticPrefs_dom.h"
@@ -38,6 +41,7 @@ nsHtml5TreeBuilder::nsHtml5TreeBuilder(nsHtml5OplessBuilder* aBuilder)
       charBufferLen(0),
       quirks(false),
       forceNoQuirks(false),
+      allowDeclarativeShadowRoots(false),
       mBuilder(aBuilder),
       mViewSource(nullptr),
       mOpSink(nullptr),
@@ -80,6 +84,7 @@ nsHtml5TreeBuilder::nsHtml5TreeBuilder(nsAHtml5TreeOpSink* aOpSink,
       charBufferLen(0),
       quirks(false),
       forceNoQuirks(false),
+      allowDeclarativeShadowRoots(false),
       mBuilder(nullptr),
       mViewSource(nullptr),
       mOpSink(aOpSink),
@@ -227,7 +232,8 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
           }
           opSetScriptLineAndColumnNumberAndFreeze operation(
               content, tokenizer->getLineNumber(),
-              tokenizer->getColumnNumber());
+              // NOTE: tokenizer->getColumnNumber() points '>'.
+              tokenizer->getColumnNumber() + 1);
           treeOp->Init(mozilla::AsVariant(operation));
 
           nsHtml5String type =
@@ -363,9 +369,11 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
                     nsHtml5AttributeName::ATTR_REFERRERPOLICY);
                 nsHtml5String media =
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_MEDIA);
+                nsHtml5String fetchPriority = aAttributes->getValue(
+                    nsHtml5AttributeName::ATTR_FETCHPRIORITY);
                 mSpeculativeLoadQueue.AppendElement()->InitStyle(
                     url, charset, crossOrigin, media, referrerPolicy, nonce,
-                    integrity, false);
+                    integrity, false, fetchPriority);
               }
             } else if (rel.LowerCaseEqualsASCII("preconnect")) {
               nsHtml5String url =
@@ -394,6 +402,8 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
                     nsHtml5AttributeName::ATTR_REFERRERPOLICY);
                 nsHtml5String media =
                     aAttributes->getValue(nsHtml5AttributeName::ATTR_MEDIA);
+                nsHtml5String fetchPriority = aAttributes->getValue(
+                    nsHtml5AttributeName::ATTR_FETCHPRIORITY);
 
                 // Note that respective speculative loaders for scripts and
                 // styles check all additional attributes to be equal to use the
@@ -405,14 +415,6 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
                 if (as.LowerCaseEqualsASCII("script")) {
                   nsHtml5String type =
                       aAttributes->getValue(nsHtml5AttributeName::ATTR_TYPE);
-
-                  // Bug 1839315: get the attribute's value instead.
-                  // Use the empty string and rely on the
-                  // "invalid value default" state being used later.
-                  // Compared to using a non-empty string, this doesn't
-                  // require calling `Release()` for the string.
-                  nsHtml5String fetchPriority = nsHtml5String::EmptyString();
-
                   mSpeculativeLoadQueue.AppendElement()->InitScript(
                       url, charset, type, crossOrigin, media, nonce,
                       /* aFetchPriority */ fetchPriority, integrity,
@@ -421,7 +423,7 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
                 } else if (as.LowerCaseEqualsASCII("style")) {
                   mSpeculativeLoadQueue.AppendElement()->InitStyle(
                       url, charset, crossOrigin, media, referrerPolicy, nonce,
-                      integrity, true);
+                      integrity, true, fetchPriority);
                 } else if (as.LowerCaseEqualsASCII("image")) {
                   nsHtml5String srcset = aAttributes->getValue(
                       nsHtml5AttributeName::ATTR_IMAGESRCSET);
@@ -432,10 +434,10 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
                       true);
                 } else if (as.LowerCaseEqualsASCII("font")) {
                   mSpeculativeLoadQueue.AppendElement()->InitFont(
-                      url, crossOrigin, media, referrerPolicy);
+                      url, crossOrigin, media, referrerPolicy, fetchPriority);
                 } else if (as.LowerCaseEqualsASCII("fetch")) {
                   mSpeculativeLoadQueue.AppendElement()->InitFetch(
-                      url, crossOrigin, media, referrerPolicy);
+                      url, crossOrigin, media, referrerPolicy, fetchPriority);
                 }
                 // Other "as" values will be supported later.
               }
@@ -465,13 +467,8 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
                       nsHtml5AttributeName::ATTR_INTEGRITY);
                   nsHtml5String referrerPolicy = aAttributes->getValue(
                       nsHtml5AttributeName::ATTR_REFERRERPOLICY);
-
-                  // Bug 1839315: get the attribute's value instead.
-                  // Use the empty string and rely on the
-                  // "invalid value default" state being used later.
-                  // Compared to using a non-empty string, this doesn't
-                  // require calling `Release()` for the string.
-                  nsHtml5String fetchPriority = nsHtml5String::EmptyString();
+                  nsHtml5String fetchPriority = aAttributes->getValue(
+                      nsHtml5AttributeName::ATTR_FETCHPRIORITY);
 
                   mSpeculativeLoadQueue.AppendElement()->InitScript(
                       url, charset, type, crossOrigin, media, nonce,
@@ -555,7 +552,8 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
           }
           opSetScriptLineAndColumnNumberAndFreeze operation(
               content, tokenizer->getLineNumber(),
-              tokenizer->getColumnNumber());
+              // NOTE: tokenizer->getColumnNumber() points '>'.
+              tokenizer->getColumnNumber() + 1);
           treeOp->Init(mozilla::AsVariant(operation));
 
           nsHtml5String url =
@@ -619,7 +617,9 @@ nsIContentHandle* nsHtml5TreeBuilder::createElement(
         return nullptr;
       }
       opSetScriptLineAndColumnNumberAndFreeze operation(
-          content, tokenizer->getLineNumber(), tokenizer->getColumnNumber());
+          content, tokenizer->getLineNumber(),
+          // NOTE: tokenizer->getColumnNumber() points '>'.
+          tokenizer->getColumnNumber() + 1);
       treeOp->Init(mozilla::AsVariant(operation));
       if (aNamespace == kNameSpaceID_XHTML) {
         // Although we come here in cases where the value of
@@ -1637,6 +1637,53 @@ nsIContentHandle* nsHtml5TreeBuilder::getDocumentFragmentForTemplate(
   }
   nsIContentHandle* fragHandle = AllocateContentHandle();
   opGetDocumentFragmentForTemplate operation(aTemplate, fragHandle);
+  treeOp->Init(mozilla::AsVariant(operation));
+  return fragHandle;
+}
+
+void nsHtml5TreeBuilder::setDocumentFragmentForTemplate(
+    nsIContentHandle* aTemplate, nsIContentHandle* aFragment) {
+  if (mBuilder) {
+    nsHtml5TreeOperation::SetDocumentFragmentForTemplate(
+        static_cast<nsIContent*>(aTemplate),
+        static_cast<nsIContent*>(aFragment));
+    return;
+  }
+
+  nsHtml5TreeOperation* treeOp = mOpQueue.AppendElement(mozilla::fallible);
+  if (MOZ_UNLIKELY(!treeOp)) {
+    MarkAsBrokenAndRequestSuspensionWithoutBuilder(NS_ERROR_OUT_OF_MEMORY);
+    return;
+  }
+  opSetDocumentFragmentForTemplate operation(aTemplate, aFragment);
+  treeOp->Init(mozilla::AsVariant(operation));
+}
+
+nsIContentHandle* nsHtml5TreeBuilder::getShadowRootFromHost(
+    nsIContentHandle* aHost, nsIContentHandle* aTemplateNode,
+    nsHtml5String aShadowRootMode, bool aShadowRootDelegatesFocus) {
+  mozilla::dom::ShadowRootMode mode;
+  if (aShadowRootMode.LowerCaseEqualsASCII("open")) {
+    mode = mozilla::dom::ShadowRootMode::Open;
+  } else if (aShadowRootMode.LowerCaseEqualsASCII("closed")) {
+    mode = mozilla::dom::ShadowRootMode::Closed;
+  } else {
+    return nullptr;
+  }
+
+  if (mBuilder) {
+    return nsContentUtils::AttachDeclarativeShadowRoot(
+        static_cast<nsIContent*>(aHost), mode, aShadowRootDelegatesFocus);
+  }
+
+  nsHtml5TreeOperation* treeOp = mOpQueue.AppendElement(mozilla::fallible);
+  if (MOZ_UNLIKELY(!treeOp)) {
+    MarkAsBrokenAndRequestSuspensionWithoutBuilder(NS_ERROR_OUT_OF_MEMORY);
+    return nullptr;
+  }
+  nsIContentHandle* fragHandle = AllocateContentHandle();
+  opGetShadowRootFromHost operation(aHost, fragHandle, aTemplateNode, mode,
+                                    aShadowRootDelegatesFocus);
   treeOp->Init(mozilla::AsVariant(operation));
   return fragHandle;
 }

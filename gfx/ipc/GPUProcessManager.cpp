@@ -228,6 +228,16 @@ bool GPUProcessManager::LaunchGPUProcess() {
   mProcessAttemptLastTime = newTime;
   mProcessStable = false;
 
+  // If the process is launched whilst we're in the background it may never get
+  // a chance to be declared stable before it is killed again. We don't want
+  // this happening repeatedly to result in the GPU process being disabled, so
+  // we assume that processes launched whilst in the background are stable.
+  if (!mAppInForeground) {
+    gfxCriticalNote
+        << "GPU process is being launched whilst app is in background";
+    mProcessStable = true;
+  }
+
   std::vector<std::string> extraArgs;
   ipc::ProcessChild::AddPlatformBuildID(extraArgs);
 
@@ -395,8 +405,9 @@ bool GPUProcessManager::EnsureCompositorManagerChild() {
     return true;
   }
 
-  mGPUChild->SendInitCompositorManager(std::move(parentPipe));
-  CompositorManagerChild::Init(std::move(childPipe), AllocateNamespace(),
+  uint32_t cmNamespace = AllocateNamespace();
+  mGPUChild->SendInitCompositorManager(std::move(parentPipe), cmNamespace);
+  CompositorManagerChild::Init(std::move(childPipe), cmNamespace,
                                mProcessToken);
   return true;
 }
@@ -1149,7 +1160,8 @@ bool GPUProcessManager::CreateContentBridges(
     ipc::Endpoint<PVRManagerChild>* aOutVRBridge,
     ipc::Endpoint<PRemoteDecoderManagerChild>* aOutVideoManager,
     dom::ContentParentId aChildId, nsTArray<uint32_t>* aNamespaces) {
-  if (!CreateContentCompositorManager(aOtherProcess, aChildId,
+  const uint32_t cmNamespace = AllocateNamespace();
+  if (!CreateContentCompositorManager(aOtherProcess, aChildId, cmNamespace,
                                       aOutCompositor) ||
       !CreateContentImageBridge(aOtherProcess, aChildId, aOutImageBridge) ||
       !CreateContentVRManager(aOtherProcess, aChildId, aOutVRBridge)) {
@@ -1160,7 +1172,7 @@ bool GPUProcessManager::CreateContentBridges(
   CreateContentRemoteDecoderManager(aOtherProcess, aChildId, aOutVideoManager);
   // Allocates 3 namespaces(for CompositorManagerChild, CompositorBridgeChild
   // and ImageBridgeChild)
-  aNamespaces->AppendElement(AllocateNamespace());
+  aNamespaces->AppendElement(cmNamespace);
   aNamespaces->AppendElement(AllocateNamespace());
   aNamespaces->AppendElement(AllocateNamespace());
   return true;
@@ -1168,7 +1180,7 @@ bool GPUProcessManager::CreateContentBridges(
 
 bool GPUProcessManager::CreateContentCompositorManager(
     base::ProcessId aOtherProcess, dom::ContentParentId aChildId,
-    ipc::Endpoint<PCompositorManagerChild>* aOutEndpoint) {
+    uint32_t aNamespace, ipc::Endpoint<PCompositorManagerChild>* aOutEndpoint) {
   ipc::Endpoint<PCompositorManagerParent> parentPipe;
   ipc::Endpoint<PCompositorManagerChild> childPipe;
 
@@ -1189,8 +1201,10 @@ bool GPUProcessManager::CreateContentCompositorManager(
   }
 
   if (mGPUChild) {
-    mGPUChild->SendNewContentCompositorManager(std::move(parentPipe), aChildId);
+    mGPUChild->SendNewContentCompositorManager(std::move(parentPipe), aChildId,
+                                               aNamespace);
   } else if (!CompositorManagerParent::Create(std::move(parentPipe), aChildId,
+                                              aNamespace,
                                               /* aIsRoot */ false)) {
     return false;
   }
@@ -1342,7 +1356,9 @@ void GPUProcessManager::MapLayerTreeId(LayersId aLayersId,
 
 void GPUProcessManager::UnmapLayerTreeId(LayersId aLayersId,
                                          base::ProcessId aOwningId) {
-  nsresult rv = EnsureGPUReady();
+  // Only call EnsureGPUReady() if we have already launched the process, to
+  // avoid launching a new process unnecesarily. (eg if we are backgrounded)
+  nsresult rv = mProcess ? EnsureGPUReady() : NS_ERROR_NOT_AVAILABLE;
   if (NS_WARN_IF(rv == NS_ERROR_ILLEGAL_DURING_SHUTDOWN)) {
     return;
   }
@@ -1350,7 +1366,7 @@ void GPUProcessManager::UnmapLayerTreeId(LayersId aLayersId,
   if (NS_SUCCEEDED(rv)) {
     mGPUChild->SendRemoveLayerTreeIdMapping(
         LayerTreeIdMapping(aLayersId, aOwningId));
-  } else {
+  } else if (!mProcess) {
     CompositorBridgeParent::DeallocateLayerTreeId(aLayersId);
   }
 

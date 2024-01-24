@@ -162,6 +162,9 @@ const PREF_PRIVATE_BROWSING_SHORTCUT_CREATED =
 // Whether this launch was initiated by the OS.  A launch-on-login will contain
 // the "os-autostart" flag in the initial launch command line.
 let gThisInstanceIsLaunchOnLogin = false;
+// Whether this launch was initiated by a taskbar tab shortcut. A launch from
+// a taskbar tab shortcut will contain the "taskbar-tab" flag.
+let gThisInstanceIsTaskbarTab = false;
 
 /**
  * Fission-compatible JSProcess implementations.
@@ -282,8 +285,8 @@ let JSWINDOWACTORS = {
         visibilitychange: {},
       },
     },
-    // The wildcard on about:newtab is for the ?endpoint query parameter
-    // that is used for snippets debugging. The wildcard for about:home
+    // The wildcard on about:newtab is for the # parameter
+    // that is used for the newtab devtools. The wildcard for about:home
     // is similar, and also allows for falling back to loading the
     // about:home document dynamically if an attempt is made to load
     // about:home?jscache from the AboutHomeStartupCache as a top-level
@@ -578,6 +581,7 @@ let JSWINDOWACTORS = {
     includeChrome: true,
     allFrames: true,
     matches: [
+      "about:asrouter",
       "about:home",
       "about:newtab",
       "about:welcome",
@@ -793,6 +797,7 @@ let JSWINDOWACTORS = {
       },
     },
     matches: [
+      "about:asrouter*",
       "about:home*",
       "about:newtab*",
       "about:welcome*",
@@ -1223,6 +1228,7 @@ BrowserGlue.prototype = {
         break;
       case "app-startup":
         this._earlyBlankFirstPaint(subject);
+        gThisInstanceIsTaskbarTab = subject.handleFlag("taskbar-tab", false);
         gThisInstanceIsLaunchOnLogin = subject.handleFlag(
           "os-autostart",
           false
@@ -1233,18 +1239,24 @@ BrowserGlue.prototype = {
         ].getService(Ci.nsIToolkitProfileService);
         if (
           AppConstants.platform == "win" &&
-          Services.prefs.getBoolPref(launchOnLoginPref) &&
           !profileSvc.startWithLastProfile
         ) {
           // If we don't start with last profile, the user
           // likely sees the profile selector on launch.
+          if (Services.prefs.getBoolPref(launchOnLoginPref)) {
+            Services.telemetry.setEventRecordingEnabled(
+              "launch_on_login",
+              true
+            );
+            Services.telemetry.recordEvent(
+              "launch_on_login",
+              "last_profile_disable",
+              "startup"
+            );
+          }
           Services.prefs.setBoolPref(launchOnLoginPref, false);
-          Services.telemetry.setEventRecordingEnabled("launch_on_login", true);
-          Services.telemetry.recordEvent(
-            "launch_on_login",
-            "last_profile_disable:",
-            "startup"
-          );
+          // Only remove registry key, not shortcut here as we can assume
+          // if a user manually created a shortcut they want this behavior.
           await lazy.WindowsLaunchOnLogin.removeLaunchOnLoginRegistryKey();
         }
         break;
@@ -2601,7 +2613,11 @@ BrowserGlue.prototype = {
               classification = "Other";
             }
           }
-
+          // Because of how taskbar tabs work, it may be classifed as a taskbar
+          // shortcut, in which case we want to overwrite it.
+          if (gThisInstanceIsTaskbarTab) {
+            classification = "TaskbarTab";
+          }
           Services.telemetry.scalarSet(
             "os.environment.launch_method",
             classification
@@ -5480,7 +5496,12 @@ export var DefaultBrowserCheck = {
     let buttonNumClicked = rv.get("buttonNumClicked");
     let checkboxState = rv.get("checked");
     if (buttonNumClicked == 0) {
-      shellService.setAsDefault();
+      try {
+        await shellService.setAsDefault();
+      } catch (e) {
+        this.log.error("Failed to set the default browser", e);
+      }
+
       shellService.pinToTaskbar();
     }
     if (checkboxState) {

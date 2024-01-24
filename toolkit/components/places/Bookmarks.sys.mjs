@@ -9,7 +9,7 @@
  * separators.  Multiple bookmarks for the same URL are allowed.
  *
  * Note that if you are handling bookmarks operations in the UI, you should
- * not use this API directly, but rather use PlacesTransactions.jsm, so that
+ * not use this API directly, but rather use PlacesTransactions, so that
  * any operation is undo/redo-able.
  *
  * Each bookmark-item is represented by an object having the following
@@ -963,6 +963,7 @@ export var Bookmarks = Object.freeze({
                 frecency: details.frecency,
                 hidden: details.hidden,
                 visitCount: details.visitCount,
+                dateAdded: updatedItem.dateAdded ?? Date.now(),
                 lastVisitDate: details.lastVisitDate,
               })
             );
@@ -1208,6 +1209,7 @@ export var Bookmarks = Object.freeze({
               frecency: details.frecency,
               hidden: details.hidden,
               visitCount: details.visitCount,
+              dateAdded: updatedItem.dateAdded,
               lastVisitDate: details.lastVisitDate,
             })
           );
@@ -1806,6 +1808,7 @@ export var Bookmarks = Object.freeze({
             frecency: details.frecency,
             hidden: details.hidden,
             visitCount: details.visitCount,
+            dateAdded: child.dateAdded,
             lastVisitDate: details.lastVisitDate,
           })
         );

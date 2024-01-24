@@ -508,7 +508,7 @@ A user event ping includes some basic metadata (tab id, addon version, etc.) as 
 ```js
 {
   "event": "PREF_CHANGED",
-  "source": ["TOP_STORIES" | "POCKET_SPOCS" | "HIGHLIGHTS" | "SNIPPETS" | "TOP_SITES" | "SPONSORED_TOP_SITES"],
+  "source": ["TOP_STORIES" | "POCKET_SPOCS" | "HIGHLIGHTS" | "TOP_SITES" | "SPONSORED_TOP_SITES"],
   "value": "{\"status\":true|false,\"menu_source\":\"ABOUT_PREFERENCES|CUSTOMIZE_MENU\"}"
   "release_channel": "default",
   "experiments": {},
@@ -751,27 +751,7 @@ These pings record the impression and user interactions within Activity Stream R
 
 This reports the impression of Activity Stream Router.
 
-#### Snippets impression
-
-```js
-{
-  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
-  "action": "snippets_user_event",
-  "impression_id": "n/a",
-  "source": "SNIPPETS",
-  "addon_version": "20180710100040",
-  "locale": "en-US",
-  "experiments": {
-    "experiment_1": { "branch": "control" },
-    "experiment_2": { "branch": "treatment" }
-  },
-  "source": "NEWTAB_FOOTER_BAR",
-  "message_id": "some_snippet_id",
-  "event": "IMPRESSION"
-}
-```
-
-CFR impression ping has two forms, in which the message_id could be of different meanings.
+A CFR impression ping has two forms, in which the message_id could be of different meanings.
 
 #### CFR impression for all the prerelease channels and shield experiment
 
@@ -817,25 +797,6 @@ CFR impression ping has two forms, in which the message_id could be of different
 ### User interaction pings
 
 This reports the user's interaction with Activity Stream Router.
-
-#### Snippets interaction pings
-
-```js
-{
-  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
-  "action": "snippets_user_event",
-  "addon_version": "20180710100040",
-  "impression_id": "n/a",
-  "locale": "en-US",
-  "experiments": {
-    "experiment_1": { "branch": "control" },
-    "experiment_2": { "branch": "treatment" }
-  },
-  "source": "NEWTAB_FOOTER_BAR",
-  "message_id": "some_snippet_id",
-  "event": ["CLICK_BUTTION" | "BLOCK"]
-}
-```
 
 #### CFR interaction pings for all the prerelease channels and shield experiment
 
@@ -1100,7 +1061,7 @@ channels. Currently this is only used in experiments.
 
 ## Messaging-experiments pings
 
-As the new experiment platform, the Messaging experiment manager is now managing & operating all the experiments of Firefox Messaging System, including the first-run experience (about:welcome), CFR, Whats-new-panel, Moments Page, and Snippets.
+As the new experiment platform, the Messaging experiment manager is now managing & operating all the experiments of Firefox Messaging System, including the first-run experience (about:welcome), CFR, Whats-new-panel, and Moments Page.
 
 ### Enrollment & Unenrollment pings
 
@@ -1116,7 +1077,7 @@ Unlike other Activity Stream pings, this is a Firefox Events telemetry event, an
 {
   "category": "messaging_experiments",
   "method": "reach",
-  // any of ["cfr", "whats_new_panel", "moments_page", "snippets", "cfr_fxa"]
+  // any of ["cfr", "whats_new_panel", "moments_page", "cfr_fxa"]
   "object": "cfr"
   "value": "experiment_message_id",
   "extra_keys": {
@@ -1355,63 +1316,13 @@ A Feature Callout can be dismissed by clicking its dismiss button directly or pr
 }
 ```
 
-## Sponsored TopSites pings
+## Glean pings for New Tab and related modules
 
-These record the impression and click pings for the Sponsored TopSites.
-
-### Impression ping for the sponsored TopSites
-
-```js
-{
-  "context_id": "{94642acb-4996-034b-916c-147da723cc41}",
-  "advertiser": "test-advertiser",
-  "tile_id": 42,
-  "source": "newtab",
-  "position": 1,
-  "reporting_url": "https://test.reporting.net/static?id=7RHzfOIWHG7kJnEYgGeuJm7vJ%3DEkiFXwxYIZjF8XgClWfC 8%2B7R4dHQ8zjmENj%3DNwxwz%2FJmdw7R4dHQfz4Z2ZfplnHG3Z5FwqgCfX4ZLafC2mfBINI9HuiF2 z4Z2ZfplnHmcux%3DcvImauiF2zfQlWfpDX7R3%2Bx%3DDuiF2zfLyy",
-  "version": "76.0a1",
-  "locale": "en-US",
-  "release_channel": "default",
-  "experiments": {
-    "exp_id_foo": {
-      "branch": "control"
-    },
-    "exp_id_bar": {
-      "branch": "treatment"
-    }
-  }
-}
-```
-
-### Click ping for the sponsored TopSites
-
-```js
-{
-  "context_id": "{94642acb-4996-034b-916c-147da723cc41}",
-  "tile_id": 42,
-  "source": "newtab",
-  "position": 1,
-  "advertiser": "test-advertiser",
-  "reporting_url": "https://test.reporting.net/ctp?version=16.0.0&key=1598991514900100001.1&ci=15 98991514792.12747&ctag=1598291839300100006&aespFlag=altinst",
-  "version": "76.0a1",
-  "locale": "en-US",
-  "release_channel": "default",
-  "experiments": {
-    "exp_id_foo": {
-      "branch": "control"
-    },
-    "exp_id_bar": {
-      "branch": "treatment"
-    }
-  }
-}
-```
-
-## Glean "newtab" ping
-
-Unlike the other data collections, this is a
-[Glean Ping](https://mozilla.github.io/glean/book/user/pings/index.html)
-that batches events and metadata about newtab sessions.
-
-You can find full documentation about this ping and its contents in
-[its Glean Dictionary entry](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/newtab).
+Glean pings are documented on their respective pages on the Glean Dictionary.
+The ones collected on Firefox Home (New Tab) include:
+* ["newtab"](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/newtab)
+* ["pocket-button"](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/pocket-button)
+* ["top-sites"](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/top-sites)
+* ["quick-suggest"](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/quick-suggest)
+* ["messaging-system"](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/messaging-system)
+* ["spoc"](https://dictionary.telemetry.mozilla.org/apps/firefox_desktop/pings/spoc)

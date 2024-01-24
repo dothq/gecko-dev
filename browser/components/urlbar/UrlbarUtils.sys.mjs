@@ -554,7 +554,7 @@ export var UrlbarUtils = {
             ? UrlbarUtils.RESULT_GROUP.RECENT_SEARCH
             : UrlbarUtils.RESULT_GROUP.FORM_HISTORY;
         }
-        if (result.payload.tail) {
+        if (result.payload.tail && !result.isRichSuggestion) {
           return UrlbarUtils.RESULT_GROUP.TAIL_SUGGESTION;
         }
         if (result.payload.suggestion) {
@@ -1317,7 +1317,7 @@ export var UrlbarUtils = {
 
   /**
    * Unescape, decode punycode, and trim (both protocol and trailing slash)
-   * the URL.
+   * the URL. Use for displaying purposes only!
    *
    * @param {string} url The url that should be prepared for display.
    * @returns {string} Prepared url.

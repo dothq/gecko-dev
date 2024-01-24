@@ -28,6 +28,8 @@
 
   /* copy over newtab background color from activity-stream-[os].css files */
   --newtab-background-color: #F9F9FB;
+
+  --fxview-card-header-font-weight: 500;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -119,6 +121,9 @@ fxview-tab-list.with-context-menu::part(secondary-button) {
   top: 0;
   padding-block: var(--fxview-margin-top) 33px;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 35px;
 }
 
 .sticky-container.bottom-fade {
@@ -144,6 +149,10 @@ fxview-tab-list.with-context-menu::part(secondary-button) {
 
 .cards-container {
   padding-inline: var(--fxview-card-padding-inline);
+}
+
+view-opentabs-contextmenu {
+  display: contents;
 }
 
 /* This should be supported within panel-{item,list} rather than modifying it */

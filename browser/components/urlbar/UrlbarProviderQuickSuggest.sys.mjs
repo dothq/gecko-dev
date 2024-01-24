@@ -13,7 +13,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   CONTEXTUAL_SERVICES_PING_TYPES:
     "resource:///modules/PartnerLinkAttribution.sys.mjs",
   MerinoClient: "resource:///modules/MerinoClient.sys.mjs",
-  PartnerLinkAttribution: "resource:///modules/PartnerLinkAttribution.sys.mjs",
   QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
   UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
@@ -734,7 +733,7 @@ class ProviderQuickSuggest extends UrlbarProvider {
       valuesByGleanKey = { ...defaultValuesByGleanKey, ...valuesByGleanKey };
       for (let [gleanKey, value] of Object.entries(valuesByGleanKey)) {
         let glean = Glean.quickSuggest[gleanKey];
-        if (value !== undefined) {
+        if (value !== undefined && value !== "") {
           glean.set(value);
         }
       }
@@ -742,14 +741,6 @@ class ProviderQuickSuggest extends UrlbarProvider {
     };
 
     // impression
-    lazy.PartnerLinkAttribution.sendContextualServicesPing(
-      {
-        ...payload,
-        is_clicked: resultClicked,
-        reporting_url: result.payload.sponsoredImpressionUrl,
-      },
-      lazy.CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION
-    );
     sendGleanPing({
       pingType: lazy.CONTEXTUAL_SERVICES_PING_TYPES.QS_IMPRESSION,
       isClicked: resultClicked,
@@ -758,13 +749,6 @@ class ProviderQuickSuggest extends UrlbarProvider {
 
     // click
     if (resultClicked) {
-      lazy.PartnerLinkAttribution.sendContextualServicesPing(
-        {
-          ...payload,
-          reporting_url: result.payload.sponsoredClickUrl,
-        },
-        lazy.CONTEXTUAL_SERVICES_PING_TYPES.QS_SELECTION
-      );
       sendGleanPing({
         pingType: lazy.CONTEXTUAL_SERVICES_PING_TYPES.QS_SELECTION,
         reportingUrl: result.payload.sponsoredClickUrl,
@@ -773,13 +757,6 @@ class ProviderQuickSuggest extends UrlbarProvider {
 
     // dismiss
     if (resultSelType == "dismiss") {
-      lazy.PartnerLinkAttribution.sendContextualServicesPing(
-        {
-          ...payload,
-          iab_category: result.payload.sponsoredIabCategory,
-        },
-        lazy.CONTEXTUAL_SERVICES_PING_TYPES.QS_BLOCK
-      );
       sendGleanPing({
         pingType: lazy.CONTEXTUAL_SERVICES_PING_TYPES.QS_BLOCK,
         iabCategory: result.payload.sponsoredIabCategory,

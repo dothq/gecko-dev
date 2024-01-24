@@ -578,9 +578,10 @@ def get_raptor_test_list(args, oskey):
             and next_test.get("type") == "pageload"
         ):
             next_test["measure"] = (
-                "fnbpaint, fcp, dcf, loadtime,"
-                "ContentfulSpeedIndex, PerceptualSpeedIndex,"
-                "SpeedIndex, FirstVisualChange, LastVisualChange"
+                "fnbpaint, fcp, dcf, loadtime, "
+                "ContentfulSpeedIndex, PerceptualSpeedIndex, "
+                "SpeedIndex, FirstVisualChange, LastVisualChange, "
+                "largestContentfulPaint"
             )
 
         # convert 'measure =' test INI line to list
@@ -612,6 +613,7 @@ def get_raptor_test_list(args, oskey):
                 ).resolve()
             )
             next_test["support_class"] = support_class()
+            next_test["support_class"].setup_test(next_test, args)
 
         bool_settings = [
             "lower_is_better",

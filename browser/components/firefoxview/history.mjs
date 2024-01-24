@@ -5,8 +5,10 @@
 import {
   html,
   ifDefined,
+  repeat,
   when,
 } from "chrome://global/content/vendor/lit.all.mjs";
+import { escapeHtmlEntities, isSearchEnabled } from "./helpers.mjs";
 import { ViewPage } from "./viewpage.mjs";
 // eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/migration/migration-wizard.mjs";
@@ -28,11 +30,6 @@ let XPCOMUtils = ChromeUtils.importESModule(
 
 XPCOMUtils.defineLazyPreferenceGetter(
   lazy,
-  "searchEnabledPref",
-  "browser.firefox-view.search.enabled"
-);
-XPCOMUtils.defineLazyPreferenceGetter(
-  lazy,
   "maxRowsPref",
   "browser.firefox-view.max-history-rows",
   -1
@@ -45,6 +42,7 @@ const IMPORT_HISTORY_DISMISSED_PREF =
 
 const SEARCH_DEBOUNCE_RATE_MS = 500;
 const SEARCH_DEBOUNCE_TIMEOUT_MS = 1000;
+const SEARCH_RESULTS_LIMIT = 300;
 
 class HistoryInView extends ViewPage {
   constructor() {
@@ -77,6 +75,8 @@ class HistoryInView extends ViewPage {
       SEARCH_DEBOUNCE_RATE_MS,
       SEARCH_DEBOUNCE_TIMEOUT_MS
     );
+
+    this.toggleVisibilityInCardContainer();
   }
 
   async connectedCallback() {
@@ -119,6 +119,8 @@ class HistoryInView extends ViewPage {
     if (!this.searchTask.isFinalized) {
       this.searchTask.finalize();
     }
+
+    this.toggleVisibilityInCardContainer();
   }
 
   disconnectedCallback() {
@@ -146,7 +148,7 @@ class HistoryInView extends ViewPage {
       try {
         this.searchResults = await this.placesQuery.searchHistory(
           this.searchQuery,
-          lazy.maxRowsPref
+          SEARCH_RESULTS_LIMIT
         );
       } catch (e) {
         // Connection interrupted, ignore.
@@ -359,6 +361,9 @@ class HistoryInView extends ViewPage {
 
   updated() {
     this.fullyUpdated = true;
+    if (this.lists?.length) {
+      this.toggleVisibilityInCardContainer();
+    }
   }
 
   panelListTemplate() {
@@ -397,64 +402,66 @@ class HistoryInView extends ViewPage {
     if (this.searchResults) {
       return this.#searchResultsTemplate();
     } else if (this.allHistoryItems.size) {
-      return this.#historyCardsTemplate();
+      return html`${repeat(
+        this.sortOption === "date"
+          ? this.historyMapByDate
+          : this.historyMapBySite,
+        item => item,
+        item => this.#historyCardTemplate(item)
+      )} `;
     }
     return this.#emptyMessageTemplate();
   }
 
-  #historyCardsTemplate() {
-    let cardsTemplate = [];
+  #historyCardTemplate(cardItem) {
+    let cardTemplate = [];
     if (this.sortOption === "date" && this.historyMapByDate.length) {
-      this.historyMapByDate.forEach(historyItem => {
-        if (historyItem.items.length) {
-          let dateArg = JSON.stringify({ date: historyItem.items[0].time });
-          cardsTemplate.push(html`<card-container>
-            <h3
-              slot="header"
-              data-l10n-id=${historyItem.l10nId}
-              data-l10n-args=${dateArg}
-            ></h3>
-            <fxview-tab-list
-              slot="main"
-              class="with-context-menu"
-              dateTimeFormat=${historyItem.l10nId.includes("prev-month")
-                ? "dateTime"
-                : "time"}
-              hasPopup="menu"
-              maxTabsLength=${this.maxTabsLength}
-              .tabItems=${historyItem.items}
-              @fxview-tab-list-primary-action=${this.onPrimaryAction}
-              @fxview-tab-list-secondary-action=${this.onSecondaryAction}
-            >
-              ${this.panelListTemplate()}
-            </fxview-tab-list>
-          </card-container>`);
-        }
-      });
+      if (cardItem.items.length) {
+        let dateArg = JSON.stringify({ date: cardItem.items[0].time });
+        cardTemplate = html`<card-container>
+          <h2
+            slot="header"
+            data-l10n-id=${cardItem.l10nId}
+            data-l10n-args=${dateArg}
+          ></h2>
+          <fxview-tab-list
+            slot="main"
+            class="with-context-menu"
+            dateTimeFormat=${cardItem.l10nId.includes("prev-month")
+              ? "dateTime"
+              : "time"}
+            hasPopup="menu"
+            maxTabsLength=${this.maxTabsLength}
+            .tabItems=${cardItem.items}
+            @fxview-tab-list-primary-action=${this.onPrimaryAction}
+            @fxview-tab-list-secondary-action=${this.onSecondaryAction}
+          >
+            ${this.panelListTemplate()}
+          </fxview-tab-list>
+        </card-container>`;
+      }
     } else if (this.historyMapBySite.length) {
-      this.historyMapBySite.forEach(historyItem => {
-        if (historyItem.items.length) {
-          cardsTemplate.push(html`<card-container>
-            <h3 slot="header" data-l10n-id="${ifDefined(historyItem.l10nId)}">
-              ${historyItem.domain}
-            </h3>
-            <fxview-tab-list
-              slot="main"
-              class="with-context-menu"
-              dateTimeFormat="dateTime"
-              hasPopup="menu"
-              maxTabsLength=${this.maxTabsLength}
-              .tabItems=${historyItem.items}
-              @fxview-tab-list-primary-action=${this.onPrimaryAction}
-              @fxview-tab-list-secondary-action=${this.onSecondaryAction}
-            >
-              ${this.panelListTemplate()}
-            </fxview-tab-list>
-          </card-container>`);
-        }
-      });
+      if (cardItem.items.length) {
+        cardTemplate = html`<card-container>
+          <h3 slot="header" data-l10n-id="${ifDefined(cardItem.l10nId)}">
+            ${cardItem.domain}
+          </h3>
+          <fxview-tab-list
+            slot="main"
+            class="with-context-menu"
+            dateTimeFormat="dateTime"
+            hasPopup="menu"
+            maxTabsLength=${this.maxTabsLength}
+            .tabItems=${cardItem.items}
+            @fxview-tab-list-primary-action=${this.onPrimaryAction}
+            @fxview-tab-list-secondary-action=${this.onSecondaryAction}
+          >
+            ${this.panelListTemplate()}
+          </fxview-tab-list>
+        </card-container>`;
+      }
     }
-    return cardsTemplate;
+    return cardTemplate;
   }
 
   #emptyMessageTemplate() {
@@ -502,7 +509,7 @@ class HistoryInView extends ViewPage {
         slot="header"
         data-l10n-id="firefoxview-search-results-header"
         data-l10n-args=${JSON.stringify({
-          query: this.#escapeHtmlEntities(this.searchQuery),
+          query: escapeHtmlEntities(this.searchQuery),
         })}
       ></h3>
       ${when(
@@ -532,15 +539,6 @@ class HistoryInView extends ViewPage {
     </card-container>`;
   }
 
-  #escapeHtmlEntities(text) {
-    return (text || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
   render() {
     if (!this.selectedTab) {
       return null;
@@ -562,7 +560,7 @@ class HistoryInView extends ViewPage {
         ></h2>
         <div class="history-sort-options">
           ${when(
-            lazy.searchEnabledPref,
+            isSearchEnabled(),
             () => html` <div class="history-sort-option">
               <fxview-search-textbox
                 .query=${this.searchQuery}

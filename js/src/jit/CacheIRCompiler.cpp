@@ -1198,7 +1198,7 @@ void CacheIRWriter::copyStubData(uint8_t* dest) const {
   }
 }
 
-ICCacheIRStub* ICCacheIRStub::clone(JSContext* cx, ICStubSpace& newSpace) {
+ICCacheIRStub* ICCacheIRStub::clone(JSRuntime* rt, ICStubSpace& newSpace) {
   const CacheIRStubInfo* info = stubInfo();
   MOZ_ASSERT(info->makesGCCalls());
 
@@ -1217,7 +1217,7 @@ ICCacheIRStub* ICCacheIRStub::clone(JSContext* cx, ICStubSpace& newSpace) {
 
   // Because this can be called during sweeping when discarding JIT code, we
   // have to lock the store buffer
-  gc::AutoLockStoreBuffer lock(&cx->runtime()->gc.storeBuffer());
+  gc::AutoLockStoreBuffer lock(rt);
 
   uint32_t field = 0;
   while (true) {
@@ -5022,6 +5022,25 @@ bool CacheIRCompiler::emitObjectCreateResult(uint32_t templateObjectOffset) {
 
   using Fn = PlainObject* (*)(JSContext*, Handle<PlainObject*>);
   callvm.call<Fn, ObjectCreateWithTemplate>();
+  return true;
+}
+
+bool CacheIRCompiler::emitObjectKeysResult(ObjOperandId objId) {
+  JitSpew(JitSpew_Codegen, "%s", __FUNCTION__);
+
+  AutoCallVM callvm(masm, this, allocator);
+  Register obj = allocator.useRegister(masm, objId);
+
+  // Our goal is only to record calls to Object.keys, to elide it when
+  // partially used, not to provide an alternative implementation.
+  {
+    callvm.prepare();
+    masm.Push(obj);
+
+    using Fn = JSObject* (*)(JSContext*, HandleObject);
+    callvm.call<Fn, jit::ObjectKeys>();
+  }
+
   return true;
 }
 

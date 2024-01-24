@@ -203,6 +203,9 @@ addonsManager:
         e.g. install events with source "about:addons" may have "install-from-file" or "url" as method),
         one of "amWebAPI", "drag-and-drop", "installTrigger", "install-from-file", "link",
         "management-webext-api", "sideload", "synthetic-install", "url", "product-updates".
+        e.g. install events with source "about:addons" may have "install-from-file" or "drag-and-drop" as method),
+        one of "amWebAPI", "drag-and-drop", "installTrigger", "install-from-file", "link", "management-webext-api",
+        "sideload", "synthetic-install", "url", "product-updates", "manager".
       num_strings: The number of permission description strings in the extension permission doorhanger
       updated_from: Determine if an update has been requested by the user or the application ("app" / "user")
       install_origins: This flag indicates whether install_origins is defined in the addon manifest. ("1" / "0")
@@ -1497,7 +1500,7 @@ fxa_avatar_menu:
       - "firefox"
     record_in_processes: ["main"]
     description: This is recorded on interactions with the FxA avatar menu on the toolbar
-    bug_numbers: [1524665, 1585459, 1606203, 1867098]
+    bug_numbers: [1524665, 1585459, 1606203]
     notification_emails: ["vbudhram@mozilla.com", "loines@mozilla.com"]
     expiry_version: "never"
     extra_keys:
@@ -1532,7 +1535,7 @@ fxa_app_menu:
       - "firefox"
     record_in_processes: ["main"]
     description: This is recorded on interactions with the FxA menu in the app (hamburger) menu
-    bug_numbers: [1542334, 1606203, 1867098]
+    bug_numbers: [1542334, 1606203]
     notification_emails: ["vbudhram@mozilla.com", "loines@mozilla.com"]
     expiry_version: "never"
     extra_keys:
@@ -2904,6 +2907,9 @@ pictureinpicture:
     extra_keys:
       firstTimeToggle: If the user has used Picture-in-Picture before
       disableDialog: True when urlbar button opens the disable PiP dialog
+      callout: >
+        Boolean. True if PiP is being shown for the first time within 48 hours
+        of a feature callout message highlighting the urlbar toggle.
     notification_emails:
       - mconley@mozilla.com
     products:
@@ -2912,6 +2918,7 @@ pictureinpicture:
     bug_numbers:
       - 1749585
       - 1834554
+      - 1858471
     expiry_version: "never"
     release_channel_collection: opt-out
   closed_method:

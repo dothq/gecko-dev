@@ -32,6 +32,13 @@ ChromeUtils.defineESModuleGetters(lazy, {
  */
 
 /**
+ * @typedef {object} AuthCredentials
+ * @property {'password'} type
+ * @property {string} username
+ * @property {string} password
+ */
+
+/**
  * @typedef {object} BaseParameters
  * @property {string=} context
  * @property {Array<string>?} intercepts
@@ -64,6 +71,18 @@ const BytesValueType = {
  * @property {BytesValueType} type
  * @property {string} value
  */
+
+/**
+ * Enum of possible continueWithAuth actions.
+ *
+ * @readonly
+ * @enum {ContinueWithAuthAction}
+ */
+const ContinueWithAuthAction = {
+  Cancel: "cancel",
+  Default: "default",
+  ProvideCredentials: "provideCredentials",
+};
 
 /**
  * @typedef {object} Cookie
@@ -260,12 +279,14 @@ class NetworkModule extends Module {
     this.#subscribedEvents = new Set();
 
     this.#networkListener = new lazy.NetworkListener();
+    this.#networkListener.on("auth-required", this.#onAuthRequired);
     this.#networkListener.on("before-request-sent", this.#onBeforeRequestSent);
     this.#networkListener.on("response-completed", this.#onResponseEvent);
     this.#networkListener.on("response-started", this.#onResponseEvent);
   }
 
   destroy() {
+    this.#networkListener.off("auth-required", this.#onAuthRequired);
     this.#networkListener.off("before-request-sent", this.#onBeforeRequestSent);
     this.#networkListener.off("response-completed", this.#onResponseEvent);
     this.#networkListener.off("response-started", this.#onResponseEvent);
@@ -342,6 +363,101 @@ class NetworkModule extends Module {
     return {
       intercept: interceptId,
     };
+  }
+
+  /**
+   * Continues a response that is blocked by a network intercept at the
+   * authRequired phase.
+   *
+   * @param {object=} options
+   * @param {string} options.request
+   *     The id of the blocked request that should be continued.
+   * @param {string} options.action
+   *     The continueWithAuth action, one of ContinueWithAuthAction.
+   * @param {AuthCredentials=} options.credentials
+   *     The credentials to use for the ContinueWithAuthAction.ProvideCredentials
+   *     action.
+   *
+   * @throws {InvalidArgumentError}
+   *     Raised if an argument is of an invalid type or value.
+   * @throws {NoSuchRequestError}
+   *     Raised if the request id does not match any request in the blocked
+   *     requests map.
+   */
+  async continueWithAuth(options = {}) {
+    this.assertExperimentalCommandsEnabled("network.continueWithAuth");
+    const { action, credentials, request: requestId } = options;
+
+    lazy.assert.string(
+      requestId,
+      `Expected "request" to be a string, got ${requestId}`
+    );
+
+    if (!Object.values(ContinueWithAuthAction).includes(action)) {
+      throw new lazy.error.InvalidArgumentError(
+        `Expected "action" to be one of ${Object.values(
+          ContinueWithAuthAction
+        )} got ${action}`
+      );
+    }
+
+    if (action == ContinueWithAuthAction.ProvideCredentials) {
+      lazy.assert.object(
+        credentials,
+        `Expected "credentials" to be an object, got ${credentials}`
+      );
+
+      if (credentials.type !== "password") {
+        throw new lazy.error.InvalidArgumentError(
+          `Expected credentials "type" to be "password" got ${credentials.type}`
+        );
+      }
+
+      lazy.assert.string(
+        credentials.username,
+        `Expected credentials "username" to be a string, got ${credentials.username}`
+      );
+      lazy.assert.string(
+        credentials.password,
+        `Expected credentials "password" to be a string, got ${credentials.password}`
+      );
+    }
+
+    if (!this.#blockedRequests.has(requestId)) {
+      throw new lazy.error.NoSuchRequestError(
+        `Blocked request with id ${requestId} not found`
+      );
+    }
+
+    const { authCallbacks, phase, resolveBlockedEvent } =
+      this.#blockedRequests.get(requestId);
+
+    if (phase !== InterceptPhase.AuthRequired) {
+      throw new lazy.error.InvalidArgumentError(
+        `Expected blocked request to be in "authRequired" phase, got ${phase}`
+      );
+    }
+
+    switch (action) {
+      case ContinueWithAuthAction.Cancel: {
+        authCallbacks.cancelAuthPrompt();
+        break;
+      }
+      case ContinueWithAuthAction.Default: {
+        authCallbacks.forwardAuthPrompt();
+        break;
+      }
+      case ContinueWithAuthAction.ProvideCredentials: {
+        await authCallbacks.provideAuthCredentials(
+          credentials.username,
+          credentials.password
+        );
+
+        break;
+      }
+    }
+
+    resolveBlockedEvent();
   }
 
   /**
@@ -482,6 +598,103 @@ class NetworkModule extends Module {
     return navigation ? navigation.navigationId : null;
   }
 
+  #onAuthRequired = (name, data) => {
+    const {
+      authCallbacks,
+      contextId,
+      isNavigationRequest,
+      redirectCount,
+      requestChannel,
+      requestData,
+      responseChannel,
+      responseData,
+      timestamp,
+    } = data;
+
+    let isBlocked = false;
+    try {
+      const browsingContext = lazy.TabManager.getBrowsingContextById(contextId);
+      if (!browsingContext) {
+        // Do not emit events if the context id does not match any existing
+        // browsing context.
+        return;
+      }
+
+      const protocolEventName = "network.authRequired";
+
+      // Process the navigation to create potentially missing navigation ids
+      // before the early return below.
+      const navigation = this.#getNavigationId(
+        protocolEventName,
+        isNavigationRequest,
+        browsingContext,
+        requestData.url
+      );
+
+      const isListening = this.messageHandler.eventsDispatcher.hasListener(
+        protocolEventName,
+        { contextId }
+      );
+      if (!isListening) {
+        // If there are no listeners subscribed to this event and this context,
+        // bail out.
+        return;
+      }
+
+      const baseParameters = this.#processNetworkEvent(protocolEventName, {
+        contextId,
+        navigation,
+        redirectCount,
+        requestData,
+        timestamp,
+      });
+
+      const authRequiredEvent = this.#serializeNetworkEvent({
+        ...baseParameters,
+        response: responseData,
+      });
+
+      const authChallenges = this.#extractChallenges(responseData);
+      // authChallenges should never be null for a request which triggered an
+      // authRequired event.
+      authRequiredEvent.response.authChallenges = authChallenges;
+
+      this.emitEvent(
+        protocolEventName,
+        authRequiredEvent,
+        this.#getContextInfo(browsingContext)
+      );
+
+      if (authRequiredEvent.isBlocked) {
+        isBlocked = true;
+
+        const { promise: blockedEventPromise, resolve: resolveBlockedEvent } =
+          Promise.withResolvers();
+
+        // requestChannel.suspend() is not needed here because the request is
+        // already blocked on the authentication prompt notification until
+        // one of the authCallbacks is called.
+        this.#blockedRequests.set(authRequiredEvent.request.request, {
+          authCallbacks,
+          request: requestChannel,
+          response: responseChannel,
+          resolveBlockedEvent,
+          phase: InterceptPhase.AuthRequired,
+        });
+
+        blockedEventPromise.finally(() => {
+          this.#blockedRequests.delete(authRequiredEvent.request.request);
+        });
+      }
+    } finally {
+      if (!isBlocked) {
+        // If the request was not blocked, forward the auth prompt notification
+        // to the next consumer.
+        authCallbacks.forwardAuthPrompt();
+      }
+    }
+  };
+
   #onBeforeRequestSent = (name, data) => {
     const {
       contextId,
@@ -499,6 +712,7 @@ class NetworkModule extends Module {
       return;
     }
 
+    const internalEventName = "network._beforeRequestSent";
     const protocolEventName = "network.beforeRequestSent";
 
     // Process the navigation to create potentially missing navigation ids
@@ -508,6 +722,19 @@ class NetworkModule extends Module {
       isNavigationRequest,
       browsingContext,
       requestData.url
+    );
+
+    // Always emit internal events, they are used to support the browsingContext
+    // navigate command.
+    // Bug 1861922: Replace internal events with a Network listener helper
+    // directly using the NetworkObserver.
+    this.emitEvent(
+      internalEventName,
+      {
+        navigation,
+        url: requestData.url,
+      },
+      this.#getContextInfo(browsingContext)
     );
 
     const isListening = this.messageHandler.eventsDispatcher.hasListener(
@@ -584,6 +811,11 @@ class NetworkModule extends Module {
         ? "network.responseStarted"
         : "network.responseCompleted";
 
+    const internalEventName =
+      name === "response-started"
+        ? "network._responseStarted"
+        : "network._responseCompleted";
+
     // Process the navigation to create potentially missing navigation ids
     // before the early return below.
     const navigation = this.#getNavigationId(
@@ -591,6 +823,19 @@ class NetworkModule extends Module {
       isNavigationRequest,
       browsingContext,
       requestData.url
+    );
+
+    // Always emit internal events, they are used to support the browsingContext
+    // navigate command.
+    // Bug 1861922: Replace internal events with a Network listener helper
+    // directly using the NetworkObserver.
+    this.emitEvent(
+      internalEventName,
+      {
+        navigation,
+        url: requestData.url,
+      },
+      this.#getContextInfo(browsingContext)
     );
 
     const isListening = this.messageHandler.eventsDispatcher.hasListener(
@@ -639,9 +884,9 @@ class NetworkModule extends Module {
         phase: InterceptPhase.ResponseStarted,
       });
 
-      // TODO: Once we implement network.continueRequest, we should create a
+      // TODO: Once we implement network.continueResponse, we should create a
       // promise here which will wait until the request is resumed and removes
-      // the request from the blockedRequests. See Bug 1850680.
+      // the request from the blockedRequests. See Bug 1853887.
     }
   };
 
@@ -804,6 +1049,7 @@ class NetworkModule extends Module {
 
   static get supportedEvents() {
     return [
+      "network.authRequired",
       "network.beforeRequestSent",
       "network.responseCompleted",
       "network.responseStarted",

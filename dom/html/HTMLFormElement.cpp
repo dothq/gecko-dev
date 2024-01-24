@@ -1655,7 +1655,7 @@ nsresult HTMLFormElement::GetActionURL(nsIURI** aActionURL,
         u""_ns,  // aSourceFile
         u""_ns,  // aScriptSample
         0,       // aLineNumber
-        0,       // aColumnNumber
+        1,       // aColumnNumber
         nsIScriptError::warningFlag, "upgradeInsecureRequest"_ns,
         document->InnerWindowID(),
         !!document->NodePrincipal()->OriginAttributesRef().mPrivateBrowsingId);
@@ -2072,9 +2072,9 @@ void HTMLFormElement::MaybeFireFormRemoved() {
     return;
   }
 
-  // Right now, only the password manager listens to the event and only listen
-  // to it under certain circumstances. So don't fire this event unless
-  // necessary.
+  // Right now, only the password manager and formautofill listen to the event
+  // and only listen to it under certain circumstances. So don't fire this event
+  // unless necessary.
   if (!doc->ShouldNotifyFormOrPasswordRemoved()) {
     return;
   }

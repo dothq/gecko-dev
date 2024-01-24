@@ -196,6 +196,8 @@ pub struct VariableValue {
     references: VarOrEnvReferences,
 }
 
+trivial_to_computed_value!(VariableValue);
+
 // For all purposes, we want values to be considered equal if their css text is equal.
 impl PartialEq for VariableValue {
     fn eq(&self, other: &Self) -> bool {
@@ -844,9 +846,17 @@ pub struct CustomPropertiesBuilder<'a, 'b: 'a> {
 impl<'a, 'b: 'a> CustomPropertiesBuilder<'a, 'b> {
     /// Create a new builder, inheriting from a given custom properties map.
     pub fn new(stylist: &'a Stylist, computed_context: &'a computed::Context<'b>) -> Self {
+        let is_root_element = computed_context.is_root_element();
+
         let inherited = computed_context.inherited_custom_properties();
         let initial_values = stylist.get_custom_property_initial_values();
-        let is_root_element = computed_context.is_root_element();
+
+        // Reuse flags from computing registered custom properties initial values, such as whether
+        // they depend on viewport units.
+        computed_context
+            .style()
+            .add_flags(stylist.get_custom_property_initial_values_flags());
+
         Self {
             seen: PrecomputedHashSet::default(),
             reverted: Default::default(),
@@ -912,9 +922,13 @@ impl<'a, 'b: 'a> CustomPropertiesBuilder<'a, 'b> {
                     if let Some(registration) = custom_registration {
                         let mut input = ParserInput::new(&unparsed_value.css);
                         let mut input = Parser::new(&mut input);
+                        // TODO(bug 1856522): Substitute custom property references in font-*
+                        // declarations before computing registered custom properties containing
+                        // font-relative units.
                         if let Ok(value) = SpecifiedRegisteredValue::compute(
                             &mut input,
                             registration,
+                            &unparsed_value.url_data,
                             self.computed_context,
                             AllowComputationallyDependent::Yes,
                         ) {
@@ -1284,19 +1298,25 @@ fn substitute_all(
                 break;
             }
             // Anything here is in a loop which can traverse to the
-            // variable we are handling, so remove it from the map, it's invalid
-            // at computed-value time.
-            context.map.remove(
-                context.stylist.get_custom_property_registration(&var_name),
+            // variable we are handling, so it's invalid at
+            // computed-value time.
+            handle_invalid_at_computed_value_time(
                 &var_name,
+                context.map,
+                context.computed_context.inherited_custom_properties(),
+                context.stylist,
+                context.computed_context.is_root_element()
             );
             in_loop = true;
         }
         if in_loop {
             // This variable is in loop. Resolve to invalid.
-            context.map.remove(
-                context.stylist.get_custom_property_registration(&name),
+            handle_invalid_at_computed_value_time(
                 &name,
+                context.map,
+                context.computed_context.inherited_custom_properties(),
+                context.stylist,
+                context.computed_context.is_root_element()
             );
             return None;
         }
@@ -1478,6 +1498,7 @@ fn substitute_references_in_value_and_apply(
                 if let Ok(value) = SpecifiedRegisteredValue::compute(
                     &mut input,
                     registration,
+                    &computed_value.url_data,
                     computed_context,
                     AllowComputationallyDependent::Yes,
                 ) {
@@ -1600,6 +1621,7 @@ fn substitute_block<'i>(
                                 if let Err(_) = SpecifiedRegisteredValue::compute(
                                     &mut fallback_input,
                                     registration,
+                                    &partial_computed_value.url_data,
                                     computed_context,
                                     AllowComputationallyDependent::Yes,
                                 ) {
@@ -1631,6 +1653,7 @@ fn substitute_block<'i>(
                             if let Ok(fallback) = SpecifiedRegisteredValue::compute(
                                 &mut fallback_input,
                                 registration,
+                                &fallback.url_data,
                                 computed_context,
                                 AllowComputationallyDependent::Yes,
                             ) {

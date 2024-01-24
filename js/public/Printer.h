@@ -386,7 +386,7 @@ template <typename Delegate, typename Escape>
 class JS_PUBLIC_API EscapePrinter final : public GenericPrinter {
   size_t lengthOfSafeChars(const char* s, size_t len) {
     for (size_t i = 0; i < len; i++) {
-      if (!esc.isSafeChar(s[i])) {
+      if (!esc.isSafeChar(uint8_t(s[i]))) {
         return i;
       }
     }
@@ -412,7 +412,7 @@ class JS_PUBLIC_API EscapePrinter final : public GenericPrinter {
         b += index;
       }
       if (len) {
-        esc.convertInto(out, char16_t(*b));
+        esc.convertInto(out, char16_t(uint8_t(*b)));
         len -= 1;
         b += 1;
       }
@@ -420,11 +420,11 @@ class JS_PUBLIC_API EscapePrinter final : public GenericPrinter {
   }
 
   inline void putChar(const char c) override {
-    if (esc.isSafeChar(char16_t(c))) {
+    if (esc.isSafeChar(char16_t(uint8_t(c)))) {
       out.putChar(char(c));
       return;
     }
-    esc.convertInto(out, char16_t(c));
+    esc.convertInto(out, char16_t(uint8_t(c)));
   }
 
   inline void putChar(const JS::Latin1Char c) override {
@@ -469,6 +469,48 @@ class JS_PUBLIC_API StringEscape {
 
   bool isSafeChar(char16_t c);
   void convertInto(GenericPrinter& out, char16_t c);
+};
+
+// A GenericPrinter that formats everything at a nested indentation level.
+class JS_PUBLIC_API IndentedPrinter final : public GenericPrinter {
+  GenericPrinter& out_;
+  // The number of indents to insert at the beginning of each line.
+  uint32_t indentLevel_;
+  // The number of spaces to insert for each indent.
+  uint32_t indentAmount_;
+  // Whether we have seen a line ending and should insert an indent at the
+  // next line fragment.
+  bool pendingIndent_;
+
+  // Put an indent to `out_`
+  void putIndent();
+  // Put `s` to `out_`, inserting an indent if we need to
+  void putWithMaybeIndent(const char* s, size_t len);
+
+ public:
+  explicit IndentedPrinter(GenericPrinter& out, uint32_t indentLevel = 0,
+                           uint32_t indentAmount = 2)
+      : out_(out),
+        indentLevel_(indentLevel),
+        indentAmount_(indentAmount),
+        pendingIndent_(false) {}
+
+  // Automatically insert and remove and indent for a scope
+  class AutoIndent {
+    IndentedPrinter& printer_;
+
+   public:
+    explicit AutoIndent(IndentedPrinter& printer) : printer_(printer) {
+      printer_.setIndentLevel(printer_.indentLevel() + 1);
+    }
+    ~AutoIndent() { printer_.setIndentLevel(printer_.indentLevel() - 1); }
+  };
+
+  uint32_t indentLevel() const { return indentLevel_; }
+  void setIndentLevel(uint32_t indentLevel) { indentLevel_ = indentLevel; }
+
+  virtual void put(const char* s, size_t len) override;
+  using GenericPrinter::put;  // pick up |inline void put(const char* s);|
 };
 
 // Map escaped code to the letter/symbol escaped with a backslash.

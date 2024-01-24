@@ -10,6 +10,10 @@ import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
  * search query trigger a `fxview-search-textbox-query` event with the current
  * query value.
  *
+ * There is no actual searching done here. That needs to be implemented by the
+ * `fxview-search-textbox-query` event handler. `searchTabList()` from
+ * `helpers.mjs` can be used as a starting point.
+ *
  * @property {string} placeholder
  *   The placeholder text for the search box.
  * @property {string} query
@@ -37,9 +41,15 @@ export default class FxviewSearchTextbox extends MozLitElement {
   }
 
   clear(event) {
-    this.query = "";
-    event.preventDefault();
-    this.#dispatchQueryEvent();
+    if (
+      event.type == "click" ||
+      (event.type == "keydown" && event.code == "Enter") ||
+      (event.type == "keydown" && event.code == "Space")
+    ) {
+      this.query = "";
+      event.preventDefault();
+      this.#dispatchQueryEvent();
+    }
   }
 
   #dispatchQueryEvent() {
@@ -65,8 +75,11 @@ export default class FxviewSearchTextbox extends MozLitElement {
       ></input>
       <div
         class="clear-icon"
+        role="button"
+        tabindex="0"
         ?hidden=${!this.query}
         @click=${this.clear}
+        @keydown=${this.clear}
         data-l10n-id="firefoxview-search-text-box-clear-button"
       ></div>
     </div>`;

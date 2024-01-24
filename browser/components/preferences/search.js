@@ -67,16 +67,33 @@ var gSearchPane = {
 
     let suggestsPref = Preferences.get("browser.search.suggest.enabled");
     let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
+    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
     let privateSuggestsPref = Preferences.get(
       "browser.search.suggest.enabled.private"
     );
+
     let updateSuggestionCheckboxes =
       this._updateSuggestionCheckboxes.bind(this);
     suggestsPref.on("change", updateSuggestionCheckboxes);
     urlbarSuggestsPref.on("change", updateSuggestionCheckboxes);
+    searchBarPref.on("change", updateSuggestionCheckboxes);
     let urlbarSuggests = document.getElementById("urlBarSuggestion");
     urlbarSuggests.addEventListener("command", () => {
       urlbarSuggestsPref.value = urlbarSuggests.checked;
+    });
+    let suggestionsInSearchFieldsCheckbox = document.getElementById(
+      "suggestionsInSearchFieldsCheckbox"
+    );
+    // We only want to call _updateSuggestionCheckboxes once after updating
+    // all prefs.
+    suggestionsInSearchFieldsCheckbox.addEventListener("command", () => {
+      this._skipUpdateSuggestionCheckboxesFromPrefChanges = true;
+      if (!searchBarPref.value) {
+        urlbarSuggestsPref.value = suggestionsInSearchFieldsCheckbox.checked;
+      }
+      suggestsPref.value = suggestionsInSearchFieldsCheckbox.checked;
+      this._skipUpdateSuggestionCheckboxesFromPrefChanges = false;
+      this._updateSuggestionCheckboxes();
     });
     let privateWindowCheckbox = document.getElementById(
       "showSearchSuggestionsPrivateWindows"
@@ -177,19 +194,33 @@ var gSearchPane = {
   },
 
   _updateSuggestionCheckboxes() {
+    if (this._skipUpdateSuggestionCheckboxesFromPrefChanges) {
+      return;
+    }
     let suggestsPref = Preferences.get("browser.search.suggest.enabled");
     let permanentPB = Services.prefs.getBoolPref(
       "browser.privatebrowsing.autostart"
     );
     let urlbarSuggests = document.getElementById("urlBarSuggestion");
+    let suggestionsInSearchFieldsCheckbox = document.getElementById(
+      "suggestionsInSearchFieldsCheckbox"
+    );
     let positionCheckbox = document.getElementById(
       "showSearchSuggestionsFirstCheckbox"
     );
     let privateWindowCheckbox = document.getElementById(
       "showSearchSuggestionsPrivateWindows"
     );
+    let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
+    let searchBarPref = Preferences.get("browser.search.widget.inNavBar");
+
+    suggestionsInSearchFieldsCheckbox.checked =
+      suggestsPref.value &&
+      (searchBarPref.value ? true : urlbarSuggestsPref.value);
 
     urlbarSuggests.disabled = !suggestsPref.value || permanentPB;
+    urlbarSuggests.hidden = !searchBarPref.value;
+
     privateWindowCheckbox.disabled = !suggestsPref.value;
     privateWindowCheckbox.checked = Preferences.get(
       "browser.search.suggest.enabled.private"
@@ -198,12 +229,10 @@ var gSearchPane = {
       privateWindowCheckbox.checked = false;
     }
 
-    let urlbarSuggestsPref = Preferences.get("browser.urlbar.suggest.searches");
     urlbarSuggests.checked = urlbarSuggestsPref.value;
     if (urlbarSuggests.disabled) {
       urlbarSuggests.checked = false;
     }
-
     if (urlbarSuggests.checked) {
       positionCheckbox.disabled = false;
       // Update the checked state of the show-suggestions-first checkbox.  Note
@@ -214,6 +243,13 @@ var gSearchPane = {
     } else {
       positionCheckbox.disabled = true;
       positionCheckbox.checked = false;
+    }
+    if (
+      suggestionsInSearchFieldsCheckbox.checked &&
+      !searchBarPref.value &&
+      !urlbarSuggests.checked
+    ) {
+      urlbarSuggestsPref.value = true;
     }
 
     let permanentPBLabel = document.getElementById(
@@ -815,12 +851,6 @@ EngineStore.prototype = {
 
     this._engines[index][aProp] = aNewValue;
     aEngine.originalEngine[aProp] = aNewValue;
-  },
-
-  reloadIcons() {
-    this._engines.forEach(function (e) {
-      e.iconURI = e.originalEngine.iconURI;
-    });
   },
 };
 

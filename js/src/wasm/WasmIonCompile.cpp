@@ -32,12 +32,12 @@
 #include "jit/ShuffleAnalysis.h"
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "wasm/WasmBaselineCompile.h"
+#include "wasm/WasmBuiltinModule.h"
 #include "wasm/WasmBuiltins.h"
 #include "wasm/WasmCodegenTypes.h"
 #include "wasm/WasmGC.h"
 #include "wasm/WasmGcObject.h"
 #include "wasm/WasmGenerator.h"
-#include "wasm/WasmIntrinsic.h"
 #include "wasm/WasmOpIter.h"
 #include "wasm/WasmSignalHandlers.h"
 #include "wasm/WasmStubs.h"
@@ -3852,6 +3852,31 @@ class FunctionCompiler {
 
   /********************************************** WasmGC: struct helpers ***/
 
+  [[nodiscard]] MDefinition* createStructObject(uint32_t typeIndex,
+                                                bool zeroFields) {
+    const TypeDef& typeDef = (*moduleEnv().types)[typeIndex];
+    gc::AllocKind allocKind = WasmStructObject::allocKindForTypeDef(&typeDef);
+    bool isOutline =
+        WasmStructObject::requiresOutlineBytes(typeDef.structType().size_);
+
+    // Allocate an uninitialized struct.  This requires the type definition
+    // for the struct.
+    MDefinition* typeDefData = loadTypeDefInstanceData(typeIndex);
+    if (!typeDefData) {
+      return nullptr;
+    }
+
+    auto* structObject =
+        MWasmNewStructObject::New(alloc(), instancePointer_, typeDefData,
+                                  isOutline, zeroFields, allocKind);
+    if (!structObject) {
+      return nullptr;
+    }
+    curBlock_->add(structObject);
+
+    return structObject;
+  }
+
   // Helper function for EmitStruct{New,Set}: given a MIR pointer to a
   // WasmStructObject, a MIR pointer to a value, and a field descriptor,
   // generate MIR to write the value to the relevant field in the object.
@@ -6977,27 +7002,12 @@ static bool EmitStructNew(FunctionCompiler& f) {
     return true;
   }
 
-  const StructType& structType = (*f.moduleEnv().types)[typeIndex].structType();
+  const TypeDef& typeDef = (*f.moduleEnv().types)[typeIndex];
+  const StructType& structType = typeDef.structType();
   MOZ_ASSERT(args.length() == structType.fields_.length());
 
-  // Allocate an uninitialized struct.  This requires the type definition
-  // for the struct.
-  MDefinition* typeDefData = f.loadTypeDefInstanceData(typeIndex);
-  if (!typeDefData) {
-    return false;
-  }
-
-  // Figure out whether we need an OOL storage area, and hence which routine
-  // to call.
-  SymbolicAddressSignature calleeSASig =
-      WasmStructObject::requiresOutlineBytes(structType.size_)
-          ? SASigStructNewOOL_false
-          : SASigStructNewIL_false;
-
-  // Create call: structObject = Instance::structNew{IL,OOL}<false>(typeDefData)
-  MDefinition* structObject;
-  if (!f.emitInstanceCall1(lineOrBytecode, calleeSASig, typeDefData,
-                           &structObject)) {
+  MDefinition* structObject = f.createStructObject(typeIndex, false);
+  if (!structObject) {
     return false;
   }
 
@@ -7646,8 +7656,8 @@ static bool EmitBrOnCast(FunctionCompiler& f, bool onSuccess) {
                           labelType, values);
 }
 
-static bool EmitExternInternalize(FunctionCompiler& f) {
-  // extern.internalize is a no-op because anyref and extern share the same
+static bool EmitAnyConvertExtern(FunctionCompiler& f) {
+  // any.convert_extern is a no-op because anyref and extern share the same
   // representation
   MDefinition* ref;
   if (!f.iter().readRefConversion(RefType::extern_(), RefType::any(), &ref)) {
@@ -7658,8 +7668,8 @@ static bool EmitExternInternalize(FunctionCompiler& f) {
   return true;
 }
 
-static bool EmitExternExternalize(FunctionCompiler& f) {
-  // extern.externalize is a no-op because anyref and extern share the same
+static bool EmitExternConvertAny(FunctionCompiler& f) {
+  // extern.convert_any is a no-op because anyref and extern share the same
   // representation
   MDefinition* ref;
   if (!f.iter().readRefConversion(RefType::any(), RefType::extern_(), &ref)) {
@@ -7672,42 +7682,55 @@ static bool EmitExternExternalize(FunctionCompiler& f) {
 
 #endif  // ENABLE_WASM_GC
 
-static bool EmitIntrinsic(FunctionCompiler& f) {
+static bool EmitCallBuiltinModuleFunc(FunctionCompiler& f) {
   // It's almost possible to use FunctionCompiler::emitInstanceCallN here.
   // Unfortunately not currently possible though, since ::emitInstanceCallN
   // expects an array of arguments along with a size, and that's not what is
   // available here.  It would be possible if we were prepared to copy
-  // `intrinsic->params` into a fixed-sized (16 element?) array, add
+  // `builtinModuleFunc->params` into a fixed-sized (16 element?) array, add
   // `memoryBase`, and make the call.
-  const Intrinsic* intrinsic;
+  const BuiltinModuleFunc* builtinModuleFunc;
 
   DefVector params;
-  if (!f.iter().readIntrinsic(&intrinsic, &params)) {
+  if (!f.iter().readCallBuiltinModuleFunc(&builtinModuleFunc, &params)) {
     return false;
   }
 
   uint32_t bytecodeOffset = f.readBytecodeOffset();
-  const SymbolicAddressSignature& callee = intrinsic->signature;
+  const SymbolicAddressSignature& callee = builtinModuleFunc->signature;
 
   CallCompileState args;
   if (!f.passInstance(callee.argTypes[0], &args)) {
     return false;
   }
 
-  if (!f.passArgs(params, intrinsic->params, &args)) {
+  if (!f.passArgs(params, builtinModuleFunc->params, &args)) {
     return false;
   }
 
-  MDefinition* memoryBase = f.memoryBase(0);
-  if (!f.passArg(memoryBase, MIRType::Pointer, &args)) {
-    return false;
+  if (builtinModuleFunc->usesMemory) {
+    MDefinition* memoryBase = f.memoryBase(0);
+    if (!f.passArg(memoryBase, MIRType::Pointer, &args)) {
+      return false;
+    }
   }
 
   if (!f.finishCall(&args)) {
     return false;
   }
 
-  return f.builtinInstanceMethodCall(callee, bytecodeOffset, args);
+  bool hasResult = builtinModuleFunc->result.isSome();
+  MDefinition* result = nullptr;
+  MDefinition** resultOutParam = hasResult ? &result : nullptr;
+  if (!f.builtinInstanceMethodCall(callee, bytecodeOffset, args,
+                                   resultOutParam)) {
+    return false;
+  }
+
+  if (hasResult) {
+    f.iter().setResult(result);
+  }
+  return true;
 }
 
 static bool EmitBodyExprs(FunctionCompiler& f) {
@@ -8322,10 +8345,10 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
             CHECK(EmitRefCast(f, /*nullable=*/false));
           case uint32_t(GcOp::RefCastNull):
             CHECK(EmitRefCast(f, /*nullable=*/true));
-          case uint16_t(GcOp::ExternInternalize):
-            CHECK(EmitExternInternalize(f));
-          case uint16_t(GcOp::ExternExternalize):
-            CHECK(EmitExternExternalize(f));
+          case uint16_t(GcOp::AnyConvertExtern):
+            CHECK(EmitAnyConvertExtern(f));
+          case uint16_t(GcOp::ExternConvertAny):
+            CHECK(EmitExternConvertAny(f));
           default:
             return f.iter().unrecognizedOpcode(&op);
         }  // switch (op.b1)
@@ -8919,11 +8942,11 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
 
       // asm.js-specific operators
       case uint16_t(Op::MozPrefix): {
-        if (op.b1 == uint32_t(MozOp::Intrinsic)) {
-          if (!f.moduleEnv().intrinsicsEnabled()) {
+        if (op.b1 == uint32_t(MozOp::CallBuiltinModuleFunc)) {
+          if (!f.moduleEnv().isBuiltinModule()) {
             return f.iter().unrecognizedOpcode(&op);
           }
-          CHECK(EmitIntrinsic(f));
+          CHECK(EmitCallBuiltinModuleFunc(f));
         }
 
         if (!f.moduleEnv().isAsmJS()) {

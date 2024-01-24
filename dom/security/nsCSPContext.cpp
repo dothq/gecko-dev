@@ -210,13 +210,13 @@ bool nsCSPContext::permitsInternal(
       // nonce, and will incorrectly fail the unit tests.
       if (aSendViolationReports) {
         uint32_t lineNumber = 0;
-        uint32_t columnNumber = 0;
+        uint32_t columnNumber = 1;
         nsAutoString spec;
         JSContext* cx = nsContentUtils::GetCurrentJSContext();
         if (cx) {
           nsJSUtils::GetCallingLocation(cx, spec, &lineNumber, &columnNumber);
-          // If GetCallingLocation fails linenumber & columnNumber are set to 0
-          // anyway so we can skip checking if that is the case.
+          // If GetCallingLocation fails linenumber & columnNumber are set to
+          // (0, 1) anyway so we can skip checking if that is the case.
         }
         AsyncReportViolation(
             aTriggeringElement, aCSPEventListener,
@@ -494,11 +494,6 @@ nsCSPContext::GetAllowsWasmEval(bool* outShouldReportViolation,
   *outShouldReportViolation = false;
   *outAllowsWasmEval = true;
 
-  if (!StaticPrefs::security_csp_wasm_unsafe_eval_enabled()) {
-    // Allow and don't report when wasm-unsafe-eval isn't supported.
-    return NS_OK;
-  }
-
   for (uint32_t i = 0; i < mPolicies.Length(); i++) {
     // Either 'unsafe-eval' or 'wasm-unsafe-eval' can allow this
     if (!mPolicies[i]->allows(SCRIPT_SRC_DIRECTIVE, CSP_WASM_UNSAFE_EVAL,
@@ -732,13 +727,13 @@ nsCSPContext::GetAllowsNavigateTo(nsIURI* aURI, bool aIsFormSubmission,
 
       // Lines numbers and source file for the violation report
       uint32_t lineNumber = 0;
-      uint32_t columnNumber = 0;
+      uint32_t columnNumber = 1;
       nsAutoCString spec;
       JSContext* cx = nsContentUtils::GetCurrentJSContext();
       if (cx) {
         nsJSUtils::GetCallingLocation(cx, spec, &lineNumber, &columnNumber);
-        // If GetCallingLocation fails linenumber & columnNumber are set to 0
-        // anyway so we can skip checking if that is the case.
+        // If GetCallingLocation fails linenumber & columnNumber are set to
+        // (0, 1) anyway so we can skip checking if that is the case.
       }
 
       // Report the violation
@@ -1848,7 +1843,7 @@ nsCSPContext::GetCSPSandboxFlags(uint32_t* aOutSandboxFlags) {
            NS_ConvertUTF16toUTF8(policy).get()));
 
       AutoTArray<nsString, 1> params = {policy};
-      logToConsole("ignoringReportOnlyDirective", params, u""_ns, u""_ns, 0, 0,
+      logToConsole("ignoringReportOnlyDirective", params, u""_ns, u""_ns, 0, 1,
                    nsIScriptError::warningFlag);
     }
   }

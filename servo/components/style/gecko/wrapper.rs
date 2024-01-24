@@ -304,7 +304,8 @@ impl<'ln> GeckoNode<'ln> {
 
     #[inline]
     fn set_selector_flags(&self, flags: u32) {
-        self.selector_flags_atomic().fetch_or(flags, Ordering::Relaxed);
+        self.selector_flags_atomic()
+            .fetch_or(flags, Ordering::Relaxed);
     }
 
     #[inline]
@@ -396,6 +397,45 @@ impl<'ln> GeckoNode<'ln> {
     #[inline]
     fn contains_non_whitespace_content(&self) -> bool {
         unsafe { Gecko_IsSignificantChild(self.0, false) }
+    }
+
+    /// Returns the previous sibling of this node that is an element.
+    #[inline]
+    pub fn prev_sibling_element(&self) -> Option<GeckoElement> {
+        let mut prev = self.prev_sibling();
+        while let Some(p) = prev {
+            if let Some(e) = p.as_element() {
+                return Some(e);
+            }
+            prev = p.prev_sibling();
+        }
+        None
+    }
+
+    /// Returns the next sibling of this node that is an element.
+    #[inline]
+    pub fn next_sibling_element(&self) -> Option<GeckoElement> {
+        let mut next = self.next_sibling();
+        while let Some(n) = next {
+            if let Some(e) = n.as_element() {
+                return Some(e);
+            }
+            next = n.next_sibling();
+        }
+        None
+    }
+
+    /// Returns last child sibling of this node that is an element.
+    #[inline]
+    pub fn last_child_element(&self) -> Option<GeckoElement<'ln>> {
+        let last = match self.last_child() {
+            Some(n) => n,
+            None => return None,
+        };
+        if let Some(e) = last.as_element() {
+            return Some(e);
+        }
+        None
     }
 }
 
@@ -1250,9 +1290,7 @@ impl<'le> TElement for GeckoElement<'le> {
         F: FnMut(&AtomIdent),
     {
         for attr in self.attrs() {
-            unsafe {
-                AtomIdent::with(attr.mName.name(), |a| callback(a))
-            }
+            unsafe { AtomIdent::with(attr.mName.name(), |a| callback(a)) }
         }
     }
 
@@ -1366,7 +1404,10 @@ impl<'le> TElement for GeckoElement<'le> {
             return None;
         }
 
-        PseudoElement::from_pseudo_type(unsafe { bindings::Gecko_GetImplementedPseudo(self.0) }, None)
+        PseudoElement::from_pseudo_type(
+            unsafe { bindings::Gecko_GetImplementedPseudo(self.0) },
+            None,
+        )
     }
 
     #[inline]
@@ -1889,7 +1930,8 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
         // Handle flags that apply to the element.
         let self_flags = flags.for_self();
         if !self_flags.is_empty() {
-            self.as_node().set_selector_flags(selector_flags_to_node_flags(flags))
+            self.as_node()
+                .set_selector_flags(selector_flags_to_node_flags(flags))
         }
 
         // Handle flags that apply to the parent.
@@ -2016,7 +2058,9 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
             NonTSPseudoClass::MozRevealed |
             NonTSPseudoClass::MozValueEmpty => self.state().intersects(pseudo_class.state_flag()),
             // TODO: This applying only to HTML elements is weird.
-            NonTSPseudoClass::Dir(ref dir) => self.is_html_element() && self.state().intersects(dir.element_state()),
+            NonTSPseudoClass::Dir(ref dir) => {
+                self.is_html_element() && self.state().intersects(dir.element_state())
+            },
             NonTSPseudoClass::AnyLink => self.is_link(),
             NonTSPseudoClass::Link => {
                 self.is_link() && context.visited_handling().matches_unvisited()
@@ -2069,7 +2113,6 @@ impl<'le> ::selectors::Element for GeckoElement<'le> {
             NonTSPseudoClass::MozTableBorderNonzero => unsafe {
                 bindings::Gecko_IsTableBorderNonzero(self.0)
             },
-            NonTSPseudoClass::MozBrowserFrame => unsafe { bindings::Gecko_IsBrowserFrame(self.0) },
             NonTSPseudoClass::MozSelectListBox => unsafe {
                 bindings::Gecko_IsSelectListBox(self.0)
             },

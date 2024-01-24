@@ -116,9 +116,12 @@ urlbar:
           `rs_adm_nonsponsored`,
           `rs_adm_sponsored`,
           `rs_amo`,
+          `rs_mdn`,
           `rs_pocket`,
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
+          `rust_amo`,
+          `rust_pocket`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -246,9 +249,12 @@ urlbar:
           `rs_adm_nonsponsored`,
           `rs_adm_sponsored`,
           `rs_amo`,
+          `rs_mdn`,
           `rs_pocket`,
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
+          `rust_amo`,
+          `rust_pocket`,
           `search_engine`,
           `search_history`,
           `search_shortcut_button`,
@@ -363,9 +369,12 @@ urlbar:
           `rs_adm_nonsponsored`,
           `rs_adm_sponsored`,
           `rs_amo`,
+          `rs_mdn`,
           `rs_pocket`,
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
+          `rust_amo`,
+          `rust_pocket`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -506,9 +515,12 @@ urlbar:
           `rs_adm_nonsponsored`,
           `rs_adm_sponsored`,
           `rs_amo`,
+          `rs_mdn`,
           `rs_pocket`,
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
+          `rust_amo`,
+          `rust_pocket`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -589,7 +601,7 @@ urlbar:
       - interaction
     notification_emails:
       - fx-search-telemetry@mozilla.com
-    expires: 123
+    expires: 128
 
   pref_max_results:
     lifetime: application

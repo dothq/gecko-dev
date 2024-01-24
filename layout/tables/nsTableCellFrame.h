@@ -217,21 +217,9 @@ class nsTableCellFrame : public nsContainerFrame,
 
   virtual LogicalMargin GetBorderWidth(WritingMode aWM) const;
 
-  virtual ImgDrawResult PaintBackground(gfxContext& aRenderingContext,
-                                        const nsRect& aDirtyRect, nsPoint aPt,
-                                        uint32_t aFlags);
-
   void DecorateForSelection(DrawTarget* aDrawTarget, nsPoint aPt);
 
   bool ComputeCustomOverflow(mozilla::OverflowAreas& aOverflowAreas) override;
-
-  bool IsFrameOfType(uint32_t aFlags) const override {
-    if (aFlags & eSupportsAspectRatio) {
-      return false;
-    }
-
-    return nsContainerFrame::IsFrameOfType(aFlags & ~(nsIFrame::eTablePart));
-  }
 
   void InvalidateFrame(uint32_t aDisplayItemKey = 0,
                        bool aRebuildDisplayItems = true) override;
@@ -323,10 +311,6 @@ class nsBCTableCellFrame final : public nsTableCellFrame {
 #ifdef DEBUG_FRAME_DUMP
   nsresult GetFrameName(nsAString& aResult) const override;
 #endif
-
-  ImgDrawResult PaintBackground(gfxContext& aRenderingContext,
-                                const nsRect& aDirtyRect, nsPoint aPt,
-                                uint32_t aFlags) override;
 
  private:
   // These are the entire width of the border (the cell edge contains only

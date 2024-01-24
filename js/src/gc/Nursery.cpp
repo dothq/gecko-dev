@@ -597,81 +597,91 @@ bool Nursery::moveToNextChunk() {
   return true;
 }
 
-void* js::Nursery::allocateBuffer(Zone* zone, size_t nbytes) {
+std::tuple<void*, bool> js::Nursery::allocateBuffer(Zone* zone, size_t nbytes,
+                                                    arena_id_t arenaId) {
   MOZ_ASSERT(nbytes > 0);
+  MOZ_ASSERT(nbytes <= SIZE_MAX - gc::CellAlignBytes);
+  nbytes = RoundUp(nbytes, gc::CellAlignBytes);
 
   if (nbytes <= MaxNurseryBufferSize) {
     void* buffer = allocate(nbytes);
     if (buffer) {
-      return buffer;
+      return {buffer, false};
     }
   }
 
-  void* buffer = zone->pod_malloc<uint8_t>(nbytes);
-  if (buffer && !registerMallocedBuffer(buffer, nbytes)) {
+  void* buffer = zone->pod_arena_malloc<uint8_t>(arenaId, nbytes);
+  return {buffer, bool(buffer)};
+}
+
+void* js::Nursery::allocateBuffer(Zone* zone, Cell* owner, size_t nbytes,
+                                  arena_id_t arenaId) {
+  MOZ_ASSERT(owner);
+  MOZ_ASSERT(nbytes > 0);
+
+  if (!IsInsideNursery(owner)) {
+    return zone->pod_arena_malloc<uint8_t>(arenaId, nbytes);
+  }
+
+  auto [buffer, isMalloced] = allocateBuffer(zone, nbytes, arenaId);
+  if (isMalloced && !registerMallocedBuffer(buffer, nbytes)) {
     js_free(buffer);
     return nullptr;
   }
   return buffer;
 }
 
-void* js::Nursery::allocateBuffer(Zone* zone, Cell* cell, size_t nbytes) {
-  MOZ_ASSERT(cell);
-  MOZ_ASSERT(nbytes > 0);
-
-  if (!IsInsideNursery(cell)) {
-    return zone->pod_malloc<uint8_t>(nbytes);
-  }
-
-  return allocateBuffer(zone, nbytes);
-}
-
-void* js::Nursery::allocateBufferSameLocation(Cell* cell, size_t nbytes) {
-  MOZ_ASSERT(cell);
+void* js::Nursery::allocateBufferSameLocation(Cell* owner, size_t nbytes,
+                                              arena_id_t arenaId) {
+  MOZ_ASSERT(owner);
   MOZ_ASSERT(nbytes > 0);
   MOZ_ASSERT(nbytes <= MaxNurseryBufferSize);
 
-  if (!IsInsideNursery(cell)) {
-    return cell->asTenured().zone()->pod_malloc<uint8_t>(nbytes);
+  if (!IsInsideNursery(owner)) {
+    return owner->asTenured().zone()->pod_arena_malloc<uint8_t>(arenaId,
+                                                                nbytes);
   }
 
   return allocate(nbytes);
 }
 
-void* js::Nursery::allocateZeroedBuffer(
-    Zone* zone, size_t nbytes, arena_id_t arena /*= js::MallocArena*/) {
+std::tuple<void*, bool> js::Nursery::allocateZeroedBuffer(Zone* zone,
+                                                          size_t nbytes,
+                                                          arena_id_t arena) {
   MOZ_ASSERT(nbytes > 0);
 
   if (nbytes <= MaxNurseryBufferSize) {
     void* buffer = allocate(nbytes);
     if (buffer) {
       memset(buffer, 0, nbytes);
-      return buffer;
+      return {buffer, false};
     }
   }
 
   void* buffer = zone->pod_arena_calloc<uint8_t>(arena, nbytes);
-  if (buffer && !registerMallocedBuffer(buffer, nbytes)) {
+  return {buffer, bool(buffer)};
+}
+
+void* js::Nursery::allocateZeroedBuffer(Cell* owner, size_t nbytes,
+                                        arena_id_t arena) {
+  MOZ_ASSERT(owner);
+  MOZ_ASSERT(nbytes > 0);
+
+  if (!IsInsideNursery(owner)) {
+    return owner->asTenured().zone()->pod_arena_calloc<uint8_t>(arena, nbytes);
+  }
+  auto [buffer, isMalloced] =
+      allocateZeroedBuffer(owner->nurseryZone(), nbytes, arena);
+  if (isMalloced && !registerMallocedBuffer(buffer, nbytes)) {
     js_free(buffer);
     return nullptr;
   }
   return buffer;
 }
 
-void* js::Nursery::allocateZeroedBuffer(
-    Cell* cell, size_t nbytes, arena_id_t arena /*= js::MallocArena*/) {
-  MOZ_ASSERT(cell);
-  MOZ_ASSERT(nbytes > 0);
-
-  if (!IsInsideNursery(cell)) {
-    return cell->asTenured().zone()->pod_arena_calloc<uint8_t>(arena, nbytes);
-  }
-
-  return allocateZeroedBuffer(cell->nurseryZone(), nbytes, arena);
-}
-
 void* js::Nursery::reallocateBuffer(Zone* zone, Cell* cell, void* oldBuffer,
-                                    size_t oldBytes, size_t newBytes) {
+                                    size_t oldBytes, size_t newBytes,
+                                    arena_id_t arena) {
   if (!IsInsideNursery(cell)) {
     MOZ_ASSERT(!isInside(oldBuffer));
     return zone->pod_realloc<uint8_t>((uint8_t*)oldBuffer, oldBytes, newBytes);
@@ -697,7 +707,7 @@ void* js::Nursery::reallocateBuffer(Zone* zone, Cell* cell, void* oldBuffer,
     return oldBuffer;
   }
 
-  void* newBuffer = allocateBuffer(zone, newBytes);
+  auto newBuffer = allocateBuffer(zone, cell, newBytes, js::MallocArena);
   if (newBuffer) {
     PodCopy((uint8_t*)newBuffer, (uint8_t*)oldBuffer, oldBytes);
   }
@@ -1458,10 +1468,6 @@ js::Nursery::CollectionResult js::Nursery::doCollection(AutoGCSession& session,
   clear();
   endProfile(ProfileKey::ClearNursery);
 
-  startProfile(ProfileKey::ClearStoreBuffer);
-  gc->storeBuffer().clear();
-  endProfile(ProfileKey::ClearStoreBuffer);
-
   // Purge the StringToAtomCache. This has to happen at the end because the
   // cache is used when tenuring strings.
   startProfile(ProfileKey::PurgeStringToAtomCache);
@@ -1487,8 +1493,20 @@ void js::Nursery::traceRoots(AutoGCSession& session, TenuringTracer& mover) {
     AutoSuppressProfilerSampling suppressProfiler(
         runtime()->mainContextFromOwnThread());
 
-    // Trace the store buffer. This must happen first.
-    StoreBuffer& sb = gc->storeBuffer();
+    // Trace the store buffer, which must happen first.
+
+    // Create an empty store buffer on the stack and swap it with the main store
+    // buffer, clearing it.
+    StoreBuffer sb(runtime());
+    {
+      AutoEnterOOMUnsafeRegion oomUnsafe;
+      if (!sb.enable()) {
+        oomUnsafe.crash("Nursery::traceRoots");
+      }
+    }
+    std::swap(sb, gc->storeBuffer());
+    MOZ_ASSERT(gc->storeBuffer().isEnabled());
+    MOZ_ASSERT(gc->storeBuffer().isEmpty());
 
     // Strings in the whole cell buffer must be traced first, in order to mark
     // tenured dependent strings' bases as non-deduplicatable. The rest of
@@ -1522,6 +1540,8 @@ void js::Nursery::traceRoots(AutoGCSession& session, TenuringTracer& mover) {
     gc->traceRuntimeForMinorGC(&mover, session);
     endProfile(ProfileKey::MarkRuntime);
   }
+
+  MOZ_ASSERT(gc->storeBuffer().isEmpty());
 
   startProfile(ProfileKey::MarkDebugger);
   {
@@ -1600,6 +1620,7 @@ size_t js::Nursery::doPretenuring(JSRuntime* rt, JS::GCReason reason,
 bool js::Nursery::registerMallocedBuffer(void* buffer, size_t nbytes) {
   MOZ_ASSERT(buffer);
   MOZ_ASSERT(nbytes > 0);
+  MOZ_ASSERT(!isInside(buffer));
   if (!mallocedBuffers.putNew(buffer)) {
     return false;
   }

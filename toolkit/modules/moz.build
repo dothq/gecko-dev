@@ -130,7 +130,7 @@ with Files("WindowsRegistry.sys.mjs"):
     BUG_COMPONENT = ("Toolkit", "General")
 
 
-XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.ini"]
+XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell/xpcshell.toml"]
 BROWSER_CHROME_MANIFESTS += ["tests/browser/browser.toml"]
 MOCHITEST_CHROME_MANIFESTS += ["tests/chrome/chrome.toml"]
 
@@ -245,7 +245,8 @@ EXTRA_PP_JS_MODULES += [
 
 if "Android" != CONFIG["OS_TARGET"]:
     EXTRA_JS_MODULES += [
-        "GMPExtractorWorker.js",
+        "ClipboardContextMenu.sys.mjs",
+        "GMPExtractor.worker.js",
         "GMPInstallManager.sys.mjs",
         "GMPUtils.sys.mjs",
         "LightweightThemeConsumer.sys.mjs",

@@ -13,6 +13,8 @@ prefs = [
   "security.webauth.webauthn_enable_softtoken=true",
   "security.webauth.webauthn_enable_usbtoken=false",
   "security.webauthn.ctap2=true",
+  "security.webauthn.enable_conditional_mediation=true",
+  "security.webauthn.enable_macos_passkeys=false",
 ]
 
 ["test_webauthn_abort_signal.html"]
@@ -46,6 +48,9 @@ skip-if = [
 
 ["test_webauthn_crossorigin_featurepolicy.html"]
 fail-if = ["xorigin"] # Cross-origin use of WebAuthn requires a feature policy.
+
+["test_webauthn_ctap2_omitted_credential_id.html"]
+fail-if = ["xorigin"] # NotAllowedError
 
 ["test_webauthn_get_assertion.html"]
 fail-if = ["xorigin"] # NotAllowedError

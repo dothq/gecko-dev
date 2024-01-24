@@ -199,6 +199,53 @@ class JSString : public js::gc::CellWithLengthAndFlags {
   MOZ_ALWAYS_INLINE
   uint32_t flags() const { return headerFlagsField(); }
 
+  // Class for temporarily holding character data that will be used for JSString
+  // contents. The data may be allocated in the nursery, the malloc heap, or in
+  // externally owned memory (perhaps on the stack). The class instance must be
+  // passed to the JSString constructor as a MutableHandle, so that if a GC
+  // occurs between the construction of the content and the construction of the
+  // JSString Cell to hold it, the contents can be transparently moved to the
+  // malloc heap before the nursery is reset.
+  template <typename CharT>
+  class OwnedChars {
+    mozilla::Span<CharT> chars_;
+    bool needsFree_;
+    bool isMalloced_;
+
+   public:
+    // needsFree: the chars pointer should be passed to js_free() if OwnedChars
+    // dies while still possessing ownership.
+    //
+    // isMalloced: the chars pointer does not point into the nursery.
+    //
+    // These are not quite the same, since you might have non-nursery characters
+    // that are owned by something else. needsFree implies isMalloced.
+    OwnedChars(CharT* chars, size_t length, bool isMalloced, bool needsFree);
+    OwnedChars(js::UniquePtr<CharT[], JS::FreePolicy>&& chars, size_t length,
+               bool isMalloced);
+    OwnedChars(OwnedChars&&);
+    OwnedChars(const OwnedChars&) = delete;
+    ~OwnedChars() { reset(); }
+
+    explicit operator bool() const { return !chars_.empty(); }
+    mozilla::Span<CharT> span() const { return chars_; }
+    CharT* data() const { return chars_.data(); }
+    size_t length() const { return chars_.Length(); }
+    size_t size() const { return length() * sizeof(CharT); }
+    bool isMalloced() const { return isMalloced_; }
+
+    // Return the data and release ownership to the caller.
+    inline CharT* release();
+    // Discard any owned data.
+    inline void reset();
+    // Move any nursery data into the malloc heap.
+    inline void ensureNonNursery();
+
+    // If we GC with a live OwnedChars, copy the data out of the nursery to a
+    // safely malloced location.
+    void trace(JSTracer* trc) { ensureNonNursery(); }
+  };
+
  protected:
   /* Fields only apply to string types commented on the right. */
   struct Data {
@@ -444,6 +491,7 @@ class JSString : public js::gc::CellWithLengthAndFlags {
   bool empty() const { return length() == 0; }
 
   inline bool getChar(JSContext* cx, size_t index, char16_t* code);
+  inline bool getCodePoint(JSContext* cx, size_t index, char32_t* codePoint);
 
   /* Strings have either Latin1 or TwoByte chars. */
   bool hasLatin1Chars() const { return flags() & LATIN1_CHARS_BIT; }
@@ -587,9 +635,11 @@ class JSString : public js::gc::CellWithLengthAndFlags {
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf);
 
-  bool ownsMallocedChars() const {
+  bool hasOutOfLineChars() const {
     return isLinear() && !isInline() && !isDependent() && !isExternal();
   }
+
+  inline bool ownsMallocedChars() const;
 
   /* Encode as many scalar values of the string as UTF-8 as can fit
    * into the caller-provided buffer replacing unpaired surrogates
@@ -708,6 +758,38 @@ class JSString : public js::gc::CellWithLengthAndFlags {
   JSString() = default;
 };
 
+namespace js {
+
+template <typename Wrapper, typename CharT>
+class WrappedPtrOperations<JSString::OwnedChars<CharT>, Wrapper> {
+  const JSString::OwnedChars<CharT>& get() const {
+    return static_cast<const Wrapper*>(this)->get();
+  }
+
+ public:
+  explicit operator bool() const { return !!get(); }
+  mozilla::Span<CharT> span() const { return get().span(); }
+  CharT* data() const { return get().data(); }
+  size_t length() const { return get().length(); }
+  size_t size() const { return get().size(); }
+  bool isMalloced() const { return get().isMalloced(); }
+};
+
+template <typename Wrapper, typename CharT>
+class MutableWrappedPtrOperations<JSString::OwnedChars<CharT>, Wrapper>
+    : public WrappedPtrOperations<JSString::OwnedChars<CharT>, Wrapper> {
+  JSString::OwnedChars<CharT>& get() {
+    return static_cast<Wrapper*>(this)->get();
+  }
+
+ public:
+  CharT* release() { return get().release(); }
+  void reset() { get().reset(); }
+  void ensureNonNursery() { get().ensureNonNursery(); }
+};
+
+} /* namespace js */
+
 class JSRope : public JSString {
   friend class js::gc::CellAllocator;
 
@@ -812,6 +894,8 @@ class JSLinearString : public JSString {
 
   JSLinearString(const char16_t* chars, size_t length);
   JSLinearString(const JS::Latin1Char* chars, size_t length);
+  template <typename CharT>
+  explicit inline JSLinearString(JS::MutableHandle<OwnedChars<CharT>> chars);
 
  protected:
   // Used to construct subclasses that do a full initialization themselves.
@@ -833,14 +917,14 @@ class JSLinearString : public JSString {
 
  public:
   template <js::AllowGC allowGC, typename CharT>
-  static inline JSLinearString* new_(
-      JSContext* cx, js::UniquePtr<CharT[], JS::FreePolicy> chars,
-      size_t length, js::gc::Heap heap);
+  static inline JSLinearString* new_(JSContext* cx,
+                                     JS::MutableHandle<OwnedChars<CharT>> chars,
+                                     js::gc::Heap heap);
 
   template <js::AllowGC allowGC, typename CharT>
   static inline JSLinearString* newValidLength(
-      JSContext* cx, js::UniquePtr<CharT[], JS::FreePolicy> chars,
-      size_t length, js::gc::Heap heap);
+      JSContext* cx, JS::MutableHandle<OwnedChars<CharT>> chars,
+      js::gc::Heap heap);
 
   // Convert a plain linear string to an extensible string. For testing. The
   // caller must ensure that it is a plain or extensible string already, and
@@ -923,6 +1007,10 @@ class JSLinearString : public JSString {
   // be a string equal to this string.)
   inline bool isIndex(uint32_t* indexp) const;
 
+  // Return whether the characters of this string can be moved by minor or
+  // compacting GC.
+  inline bool hasMovableChars() const;
+
   void maybeInitializeIndexValue(uint32_t index, bool allowAtom = false) {
     MOZ_ASSERT(JSString::isLinear());
     MOZ_ASSERT_IF(hasIndexValue(), getIndexValue() == index);
@@ -946,6 +1034,12 @@ class JSLinearString : public JSString {
    * this method.
    */
   inline js::PropertyName* toPropertyName(JSContext* cx);
+
+  // Make sure chars are not in the nursery, mallocing and copying if necessary.
+  // Should only be called during minor GC on a string that has been promoted
+  // to the tenured heap and may still point to nursery-allocated chars.
+  template <typename CharT>
+  inline size_t maybeMallocCharsOnPromotion(js::Nursery* nursery);
 
   inline void finalize(JS::GCContext* gcx);
   inline size_t allocSize() const;
@@ -1164,6 +1258,8 @@ static_assert(sizeof(JSFatInlineString) % js::gc::CellAlignBytes == 0,
 class JSExternalString : public JSLinearString {
   friend class js::gc::CellAllocator;
 
+  JSExternalString(const JS::Latin1Char* chars, size_t length,
+                   const JSExternalStringCallbacks* callbacks);
   JSExternalString(const char16_t* chars, size_t length,
                    const JSExternalStringCallbacks* callbacks);
 
@@ -1171,7 +1267,15 @@ class JSExternalString : public JSLinearString {
   bool isExternal() const = delete;
   JSExternalString& asExternal() const = delete;
 
+  template <typename CharT>
+  static inline JSExternalString* newImpl(
+      JSContext* cx, const CharT* chars, size_t length,
+      const JSExternalStringCallbacks* callbacks);
+
  public:
+  static inline JSExternalString* new_(
+      JSContext* cx, const JS::Latin1Char* chars, size_t length,
+      const JSExternalStringCallbacks* callbacks);
   static inline JSExternalString* new_(
       JSContext* cx, const char16_t* chars, size_t length,
       const JSExternalStringCallbacks* callbacks);
@@ -1183,6 +1287,7 @@ class JSExternalString : public JSLinearString {
 
   // External chars are never allocated inline or in the nursery, so we can
   // safely expose this without requiring an AutoCheckCannotGC argument.
+  const JS::Latin1Char* latin1Chars() const { return rawLatin1Chars(); }
   const char16_t* twoByteChars() const { return rawTwoByteChars(); }
 
   // Only called by the GC for strings with the AllocKind::EXTERNAL_STRING
@@ -1533,7 +1638,8 @@ inline JSLinearString* NewStringCopyUTF8Z(
       cx, JS::UTF8Chars(utf8.c_str(), strlen(utf8.c_str())), heap);
 }
 
-JSString* NewMaybeExternalString(JSContext* cx, const char16_t* s, size_t n,
+template <typename CharT>
+JSString* NewMaybeExternalString(JSContext* cx, const CharT* s, size_t n,
                                  const JSExternalStringCallbacks* callbacks,
                                  bool* allocatedExternal,
                                  js::gc::Heap heap = js::gc::Heap::Default);
@@ -1744,6 +1850,34 @@ MOZ_ALWAYS_INLINE bool JSString::getChar(JSContext* cx, size_t index,
   return true;
 }
 
+MOZ_ALWAYS_INLINE bool JSString::getCodePoint(JSContext* cx, size_t index,
+                                              char32_t* code) {
+  // C++ implementation of https://tc39.es/ecma262/#sec-codepointat
+  size_t size = length();
+  MOZ_ASSERT(index < size);
+
+  char16_t first;
+  if (!getChar(cx, index, &first)) {
+    return false;
+  }
+  if (!js::unicode::IsLeadSurrogate(first) || index + 1 == size) {
+    *code = first;
+    return true;
+  }
+
+  char16_t second;
+  if (!getChar(cx, index + 1, &second)) {
+    return false;
+  }
+  if (!js::unicode::IsTrailSurrogate(second)) {
+    *code = first;
+    return true;
+  }
+
+  *code = js::unicode::UTF16Decode(first, second);
+  return true;
+}
+
 MOZ_ALWAYS_INLINE JSLinearString* JSString::ensureLinear(JSContext* cx) {
   return isLinear() ? &asLinear() : asRope().flatten(cx);
 }
@@ -1912,19 +2046,6 @@ inline bool JSLinearString::isIndex(uint32_t* indexp) const {
   }
 
   return isIndexSlow(indexp);
-}
-
-inline size_t JSLinearString::allocSize() const {
-  MOZ_ASSERT(ownsMallocedChars());
-
-  size_t charSize =
-      hasLatin1Chars() ? sizeof(JS::Latin1Char) : sizeof(char16_t);
-  size_t count = isExtensible() ? asExtensible().capacity() : length();
-  return count * charSize;
-}
-
-inline size_t JSString::allocSize() const {
-  return ownsMallocedChars() ? asLinear().allocSize() : 0;
 }
 
 namespace js {

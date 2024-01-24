@@ -529,6 +529,17 @@ windowsLaunchOnLogin:
       setPref: browser.startup.windowsLaunchOnLogin.enabled
       description: Should users see the Windows launch on login checkbox.
 
+windowsJumpList:
+  description: "Controls for the Windows Jump List integration."
+  owner: mconley@mozilla.com
+  hasExposure: false
+  isEarlyStartup: true
+  variables:
+    legacyBackend:
+      type: boolean
+      setPref: browser.taskbar.lists.legacyBackend
+      description: True if users should use the legacy Windows Jump List backend.
+
 abouthomecache:
   description: "The startup about:home cache."
   owner: omc@mozilla.com
@@ -756,6 +767,14 @@ pocketNewtab:
       description: The URL for the spocs endpoint.
       type: string
       setPref: "browser.newtabpage.activity-stream.discoverystream.spocs-endpoint"
+    spocsEndpointAllowlist:
+      description: Comma separated list of allowed endpoints for fetching spocs
+      type: string
+      setPref: "browser.newtabpage.activity-stream.discoverystream.endpoints"
+    spocsClearEndpoint:
+      description: URL for deleting any server data when a user opts out of sponsored content
+      type: string
+      setPref: "browser.newtabpage.activity-stream.discoverystream.endpointSpocsClear"
     regionStoriesConfig:
       description: A comma-separated list of region to get stories for.
       type: string
@@ -841,6 +860,17 @@ cm-csv-import:
       type: boolean
       description: Can show CSV Import in about:logins or Migration Wizard
       setPref: "signon.management.page.fileImport.enabled"
+
+# This feature flag mirrors the one used for ios
+# https://github.com/mozilla-mobile/firefox-ios/blob/main/nimbus-features/addressAutofillFeature.yaml
+address-autofill-feature:
+  description: Enabling address autofill feature
+  owner: issozi@mozilla.com
+  hasExposure: false
+  variables:
+    status:
+      type: boolean
+      description: If true, we will allow user to use address autofill
 
 shellService:
   description: "Interface with OS, e.g., pinning and set default"
@@ -1141,6 +1171,23 @@ backgroundTaskMessage:
     uri: "resource://activity-stream/schemas/BackgroundTaskMessagingExperiment.schema.json"
     path: "browser/components/newtab/content-src/asrouter/schemas/BackgroundTaskMessagingExperiment.schema.json"
   variables: {}
+
+backgroundUpdateAutomaticRestart:
+  description: "Whether to automatically restart when the background update task could make more progress."
+  owner: nalexander@mozilla.com
+  applications:
+    - firefox-desktop-background-task
+  hasExposure: false
+  isEarlyStartup: false
+  variables:
+    enabled:
+      type: boolean
+      fallbackPref: app.update.background.automaticRestartEnabled
+      description: >-
+        When true, make the background update task restart when the final update state is `READY_FOR_RESTART`.
+        Generally, this will finish applying a staged update, completing the update earlier than it
+        otherwise would have been completed.
+
 
 pictureinpicture:
   description: Message for first time Picture-in-Picture users
@@ -1985,16 +2032,6 @@ feltPrivacy:
       description: >-
         Enables the reset PBM feature button and confirmation panel.
 
-attribution:
-  description: Prefs related to install attribution
-  hasExposure: false
-  isEarlyStartup: true
-  variables:
-    macosEnabled:
-      type: boolean
-      description: Whether or not macOS attribution data will be processed and sent in Telemetry
-      fallbackPref: browser.attribution.macos.enabled
-
 phc:
   description: Prefs to control the Probabalistic Heap Checker (PHC)
   owner: pbone@mozilla.com
@@ -2005,6 +2042,10 @@ phc:
       description: Whether to enable PHC
       type: boolean
       setPref: memory.phc.enabled
+    phcMinRamMB:
+      description: The minimum amount of RAM required to enable PHC
+      type: int
+      setPref: memory.phc.min_ram_mb
 
 mailto:
   description: Prefs to control aspects of the mailto handler
@@ -2027,4 +2068,3 @@ mailto:
         application and another prompt to set the current site as default
         webmail site in Firefox.
       fallbackPref: browser.mailto.dualPrompt.os
-

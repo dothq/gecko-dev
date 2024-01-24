@@ -21,12 +21,14 @@ export class GeckoViewContent extends GeckoViewModule {
       "GeckoView:RestoreState",
       "GeckoView:ContainsFormData",
       "GeckoView:RequestCreateAnalysis",
+      "GeckoView:RequestAnalysisStatus",
       "GeckoView:RequestAnalysisCreationStatus",
       "GeckoView:PollForAnalysisCompleted",
       "GeckoView:SendClickAttributionEvent",
       "GeckoView:SendImpressionAttributionEvent",
       "GeckoView:RequestAnalysis",
       "GeckoView:RequestRecommendations",
+      "GeckoView:ReportBackInStock",
       "GeckoView:ScrollBy",
       "GeckoView:ScrollTo",
       "GeckoView:SetActive",
@@ -241,6 +243,9 @@ export class GeckoViewContent extends GeckoViewModule {
       case "GeckoView:RequestCreateAnalysis":
         this._requestCreateAnalysis(aData, aCallback);
         break;
+      case "GeckoView:RequestAnalysisStatus":
+        this._requestAnalysisStatus(aData, aCallback);
+        break;
       case "GeckoView:RequestAnalysisCreationStatus":
         this._requestAnalysisCreationStatus(aData, aCallback);
         break;
@@ -255,6 +260,9 @@ export class GeckoViewContent extends GeckoViewModule {
         break;
       case "GeckoView:RequestRecommendations":
         this._requestRecommendations(aData, aCallback);
+        break;
+      case "GeckoView:ReportBackInStock":
+        this._reportBackInStock(aData, aCallback);
         break;
       case "GeckoView:IsPdfJs":
         aCallback.onSuccess(this.isPdfJs);
@@ -377,6 +385,25 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestAnalysis(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const analysis = {
+        analysis_url: "https://www.example.com/mock_analysis_url",
+        product_id: "ABCDEFG123",
+        grade: "B",
+        adjusted_rating: 4.5,
+        needs_analysis: true,
+        page_not_supported: true,
+        not_enough_reviews: true,
+        highlights: null,
+        last_analysis_time: 12345,
+        deleted_product_reported: true,
+        deleted_product: true,
+      };
+      aCallback.onSuccess({ analysis });
+      return;
+    }
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(`Cannot requestAnalysis on a non-product url.`);
@@ -392,6 +419,13 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestCreateAnalysis(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const status = "pending";
+      aCallback.onSuccess(status);
+      return;
+    }
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(`Cannot requestCreateAnalysis on a non-product url.`);
@@ -407,6 +441,13 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestAnalysisCreationStatus(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const status = "in_progress";
+      aCallback.onSuccess(status);
+      return;
+    }
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(
@@ -422,6 +463,28 @@ export class GeckoViewContent extends GeckoViewModule {
         return;
       }
       aCallback.onSuccess(status.status);
+    }
+  }
+
+  async _requestAnalysisStatus(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const status = { status: "in_progress", progress: 90.9 };
+      aCallback.onSuccess({ status });
+      return;
+    }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(`Cannot requestAnalysisStatus on a non-product url.`);
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const status = await product.requestAnalysisCreationStatus();
+      if (!status) {
+        aCallback.onError(`Status of product analysis returned null.`);
+        return;
+      }
+      aCallback.onSuccess({ status });
     }
   }
 
@@ -446,7 +509,9 @@ export class GeckoViewContent extends GeckoViewModule {
 
   async _sendAttributionEvent(aEvent, aData, aCallback) {
     let result;
-    if (Services.prefs.getBoolPref("geckoview.shopping.test_response", true)) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
       result = { TEST_AID: "TEST_AID_RESPONSE" };
     } else {
       result = await lazy.ShoppingProduct.sendAttributionEvent(
@@ -463,6 +528,26 @@ export class GeckoViewContent extends GeckoViewModule {
   }
 
   async _requestRecommendations(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const recommendations = [
+        {
+          name: "Mock Product",
+          url: "https://example.com/mock_url",
+          image_url: "https://example.com/mock_image_url",
+          price: "450",
+          currency: "USD",
+          grade: "C",
+          adjusted_rating: 3.5,
+          analysis_url: "https://example.com/mock_analysis_url",
+          sponsored: true,
+          aid: "mock_aid",
+        },
+      ];
+      aCallback.onSuccess({ recommendations });
+      return;
+    }
     const url = Services.io.newURI(aData.url);
     if (!lazy.isProductURL(url)) {
       aCallback.onError(`Cannot requestRecommendations on a non-product url.`);
@@ -474,6 +559,28 @@ export class GeckoViewContent extends GeckoViewModule {
         return;
       }
       aCallback.onSuccess({ recommendations });
+    }
+  }
+
+  async _reportBackInStock(aData, aCallback) {
+    if (
+      Services.prefs.getBoolPref("geckoview.shopping.mock_test_response", false)
+    ) {
+      const message = "report created";
+      aCallback.onSuccess(message);
+      return;
+    }
+    const url = Services.io.newURI(aData.url);
+    if (!lazy.isProductURL(url)) {
+      aCallback.onError(`Cannot reportBackInStock on a non-product url.`);
+    } else {
+      const product = new lazy.ShoppingProduct(url);
+      const message = await product.sendReport();
+      if (!message) {
+        aCallback.onError(`Reporting back in stock returned null.`);
+        return;
+      }
+      aCallback.onSuccess(message.message);
     }
   }
 

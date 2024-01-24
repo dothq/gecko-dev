@@ -127,7 +127,7 @@ using mozilla::glean::perf::PageLoadExtra from "mozilla/glean/GleanMetrics.h";
 using mozilla::dom::MaybeDiscardedBrowsingContext from "mozilla/dom/BrowsingContext.h";
 using mozilla::dom::BrowsingContextTransaction from "mozilla/dom/BrowsingContext.h";
 using mozilla::dom::BrowsingContextInitializer from "mozilla/dom/BrowsingContext.h";
-using mozilla::dom::PermitUnloadResult from "nsIContentViewer.h";
+using mozilla::dom::PermitUnloadResult from "nsIDocumentViewer.h";
 using mozilla::dom::MaybeDiscardedWindowContext from "mozilla/dom/WindowContext.h";
 using mozilla::dom::WindowContextTransaction from "mozilla/dom/WindowContext.h";
 [MoveOnly] using base::SharedMemoryHandle from "base/shared_memory.h";
@@ -301,6 +301,10 @@ struct JSWindowActorInfo
   // False if `url` is for JSM or nothing.
   bool isESModule;
 
+  // This is to align with JSProcessActorInfo.
+  // This attribute isn't used for JSWindow Actors.
+  bool loadInDevToolsLoader;
+
   // The module of the url.
   nsCString? url;
 
@@ -321,6 +325,9 @@ struct JSProcessActorInfo
     // True if `url` is for ESM.
     // False if `url` is for JSM or nothing.
     bool isESModule;
+
+    // True if the actor should be loaded in the distinct loader dedicated to DevTools.
+    bool loadInDevToolsLoader;
 
     // The module of the url.
     nsCString? url;
@@ -1132,9 +1139,6 @@ parent:
                           bool hasValidUserGestureActivation);
     async ExtProtocolChannelConnectParent(uint64_t registrarId);
 
-    // PrefService message
-    sync GetGfxVars() returns (GfxVarUpdate[] vars);
-
     sync SyncMessage(nsString aMessage, ClonedMessageData aData)
       returns (StructuredCloneData[] retval);
 
@@ -1220,7 +1224,9 @@ parent:
     sync GetExternalClipboardFormats(int32_t aWhichClipboard, bool aPlainTextOnly) returns (nsCString[] aTypes);
 
     // Requests getting data from clipboard.
-    async GetClipboardAsync(nsCString[] aTypes, int32_t aWhichClipboard)
+    async GetClipboardAsync(nsCString[] aTypes, int32_t aWhichClipboard,
+                            MaybeDiscardedWindowContext aRequestingWindowContext,
+                            nsIPrincipal aRequestingPrincipal)
         returns (PClipboardReadRequestOrError aClipboardReadRequest);
 
     // Clears the clipboard.
@@ -1325,21 +1331,6 @@ parent:
      * This sends any collected perf stats data on shutdown.
      */
     async ShutdownPerfStats(nsCString aPerfStats);
-
-    /**
-     * Request graphics initialization information from the parent.
-     */
-    sync GetGraphicsDeviceInitData()
-        returns (ContentDeviceData aData);
-
-    /**
-     * Request a buffer containing the contents of the output color profile.
-     * If set, this is the file pointed to by
-     * gfx.color_management.display_profile, otherwise it contains a
-     * platform-specific default
-     */
-    sync GetOutputColorProfileData()
-        returns (uint8_t[] aOutputColorProfileData);
 
     /**
      * A shared font list (see gfx/thebes/SharedFontList.*) contains a list

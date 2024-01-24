@@ -14,7 +14,7 @@
 #include "base/compiler_specific.h"
 #include "DisplayItemClip.h"
 #include "nsCOMPtr.h"
-#include "nsIContentViewer.h"
+#include "nsIDocumentViewer.h"
 #include "nsPresContext.h"
 #include "nsView.h"
 #include "nsViewportInfo.h"
@@ -2831,6 +2831,9 @@ static nscoord ClampAndAlignWithPixels(nscoord aDesired, nscoord aBoundLower,
   nscoord destUpper = clamped(aDestUpper, aBoundLower, aBoundUpper);
 
   nscoord desired = clamped(aDesired, destLower, destUpper);
+  if (StaticPrefs::layout_scroll_disable_pixel_alignment()) {
+    return desired;
+  }
 
   double currentLayerVal = (aRes * aCurrent) / aAppUnitsPerPixel;
   double desiredLayerVal = (aRes * desired) / aAppUnitsPerPixel;
@@ -5315,11 +5318,11 @@ auto nsHTMLScrollFrame::GetPageLoadingState() -> LoadingState {
   bool loadCompleted = false, stopped = false;
   nsCOMPtr<nsIDocShell> ds = GetContent()->GetComposedDoc()->GetDocShell();
   if (ds) {
-    nsCOMPtr<nsIContentViewer> cv;
-    ds->GetContentViewer(getter_AddRefs(cv));
-    if (cv) {
-      loadCompleted = cv->GetLoadCompleted();
-      stopped = cv->GetIsStopped();
+    nsCOMPtr<nsIDocumentViewer> viewer;
+    ds->GetDocViewer(getter_AddRefs(viewer));
+    if (viewer) {
+      loadCompleted = viewer->GetLoadCompleted();
+      stopped = viewer->GetIsStopped();
     }
   }
   return loadCompleted
@@ -6832,6 +6835,9 @@ bool nsHTMLScrollFrame::GetBorderRadii(const nsSize& aFrameSize,
 
 static nscoord SnapCoord(nscoord aCoord, double aRes,
                          nscoord aAppUnitsPerPixel) {
+  if (StaticPrefs::layout_scroll_disable_pixel_alignment()) {
+    return aCoord;
+  }
   double snappedToLayerPixels = NS_round((aRes * aCoord) / aAppUnitsPerPixel);
   return NSToCoordRoundWithClamp(snappedToLayerPixels * aAppUnitsPerPixel /
                                  aRes);

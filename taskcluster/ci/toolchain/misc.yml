@@ -206,7 +206,7 @@ macosx64-custom-car:
     treeherder:
         symbol: TM(custom-car)
     worker:
-        max-run-time: 30000
+        max-run-time: 35000
     run-on-projects: []
     run:
         script: build-custom-car.sh
@@ -224,12 +224,49 @@ macosx64-custom-car:
             is_official_build=true,
             symbol_level=0,
             target_cpu="x64",
+            use_v8_context_snapshot=false,
             v8_symbol_level=0
         ]
         toolchain-artifact: public/build/car_macosx.tar.zst
     fetches:
         toolchain:
-            - MacOSX14.0.sdk
+            - macosx64-sdk-14.0
+            - macosx64-python-3.8
+
+macosx-arm64-custom-car:
+    description: "Custom chromium-as-release build for mac (apple silicon)"
+    worker-type: b-osx-1015
+    attributes:
+        cached_task: false
+    treeherder:
+        symbol: TM(custom-car-arm)
+        tier: 3
+    worker:
+        max-run-time: 50000
+    run-on-projects: []
+    run:
+        script: build-custom-car.sh
+        arguments: [
+            car_macosx_arm.tar.zst,
+            blink_symbol_level=0,
+            chrome_pgo_phase=2,
+            dcheck_always_on=false,
+            enable_nacl=false,
+            enable_resource_allowlist_generation=false,
+            is_chrome_branded=false,
+            is_clang=true,
+            is_component_build=false,
+            is_debug=false,
+            is_official_build=true,
+            symbol_level=0,
+            target_cpu="arm64",
+            use_v8_context_snapshot=false,
+            v8_symbol_level=0
+        ]
+        toolchain-artifact: public/build/car_macosx_arm.tar.zst
+    fetches:
+        toolchain:
+            - macosx64-sdk-14.0
             - macosx64-python-3.8
 
 android-custom-car:
@@ -261,6 +298,7 @@ android-custom-car:
             target_os="android",
             is_android=true,
             is_high_end_android=true,
+            use_v8_context_snapshot=false,
             v8_symbol_level=0
         ]
         toolchain-artifact: public/build/car_android.tar.zst
@@ -291,6 +329,7 @@ linux64-custom-car:
             is_official_build=true,
             symbol_level=0,
             target_cpu="x64",
+            use_v8_context_snapshot=false,
             v8_symbol_level=0
         ]
         toolchain-artifact: public/build/car_linux.tar.zst
@@ -357,6 +396,7 @@ wrench-deps:
         script: wrench-deps-vendoring.sh
         sparse-profile: null
         resources:
+            - 'gfx/wr/**/Cargo.toml'
             - 'gfx/wr/Cargo.lock'
             - 'gfx/wr/ci-scripts/install-meson.sh'
         toolchain-artifact: public/build/wrench-deps.tar.zst

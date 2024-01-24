@@ -35,6 +35,10 @@ class InvalidArgumentException(BidiException):
     error_code = "invalid argument"
 
 
+class InvalidSelectorError(BidiException):
+    error_code = "invalid selector"
+
+
 class InvalidSessionIDError(BidiException):
     error_code = "invalid session id"
 
@@ -61,6 +65,10 @@ class NoSuchInterceptException(BidiException):
 
 class NoSuchHandleException(BidiException):
     error_code = "no such handle"
+
+
+class NoSuchHistoryEntryException(BidiException):
+    error_code = "no such history entry"
 
 
 class NoSuchNodeException(BidiException):

@@ -6,6 +6,8 @@
 
 #include "jit/TrialInlining.h"
 
+#include "mozilla/DebugOnly.h"
+
 #include "jit/BaselineCacheIRCompiler.h"
 #include "jit/BaselineFrame.h"
 #include "jit/BaselineIC.h"
@@ -92,7 +94,7 @@ bool DoTrialInlining(JSContext* cx, BaselineFrame* frame) {
         "Trial inlining for %s script '%s' (%s:%u:%u (%p)) (inliningRoot=%p)",
         (isRecursive ? "inner" : "outer"),
         funName ? funName.get() : "<unnamed>", script->filename(),
-        script->lineno(), script->column().zeroOriginValue(), frame->script(),
+        script->lineno(), script->column().oneOriginValue(), frame->script(),
         root);
     JitSpewIndent spewIndent(JitSpew_WarpTrialInlining);
   }
@@ -461,6 +463,28 @@ static uint32_t GetMaxCalleeNumActuals(BytecodeLocation loc) {
 }
 
 /*static*/
+bool TrialInliner::IsValidInliningOp(JSOp op) {
+  switch (op) {
+    case JSOp::GetProp:
+    case JSOp::GetElem:
+    case JSOp::SetProp:
+    case JSOp::StrictSetProp:
+    case JSOp::Call:
+    case JSOp::CallContent:
+    case JSOp::CallIgnoresRv:
+    case JSOp::CallIter:
+    case JSOp::CallContentIter:
+    case JSOp::New:
+    case JSOp::NewContent:
+    case JSOp::SuperCall:
+      return true;
+    default:
+      break;
+  }
+  return false;
+}
+
+/*static*/
 bool TrialInliner::canInline(JSFunction* target, HandleScript caller,
                              BytecodeLocation loc) {
   if (!target->hasJitScript()) {
@@ -491,6 +515,10 @@ bool TrialInliner::canInline(JSFunction* target, HandleScript caller,
   }
   if (JitOptions.onlyInlineSelfHosted && !script->selfHosted()) {
     JitSpew(JitSpew_WarpTrialInlining, "SKIP: only inlining self hosted");
+    return false;
+  }
+  if (!IsValidInliningOp(loc.getOp())) {
+    JitSpew(JitSpew_WarpTrialInlining, "SKIP: non inlineable op");
     return false;
   }
 
@@ -547,7 +575,7 @@ TrialInliningDecision TrialInliner::getInliningDecision(JSFunction* target,
             funName ? funName.get() : "<unnamed>",
             baseScript ? baseScript->filename() : "<not-scripted>",
             baseScript ? baseScript->lineno() : 0,
-            baseScript ? baseScript->column().zeroOriginValue() : 0);
+            baseScript ? baseScript->column().oneOriginValue() : 0);
     JitSpewIndent spewIndent(JitSpew_WarpTrialInlining);
   }
 #endif
@@ -661,8 +689,9 @@ ICScript* TrialInliner::createInlinedICScript(JSFunction* target,
   uint32_t initialWarmUpCount = JitOptions.trialInliningInitialWarmUpCount;
 
   uint32_t depth = icScript_->depth() + 1;
-  UniquePtr<ICScript> inlinedICScript(new (raw) ICScript(
-      initialWarmUpCount, fallbackStubsOffset, allocSize, depth, root));
+  UniquePtr<ICScript> inlinedICScript(
+      new (raw) ICScript(initialWarmUpCount, fallbackStubsOffset, allocSize,
+                         depth, targetScript->length(), root));
 
   inlinedICScript->initICEntries(cx(), targetScript);
 
@@ -924,16 +953,29 @@ bool InliningRoot::traceWeak(JSTracer* trc) {
   return allSurvived;
 }
 
-void InliningRoot::purgeStubs(Zone* zone) {
-  for (auto& inlinedScript : inlinedScripts_) {
-    inlinedScript->purgeStubs(zone);
-  }
-}
+void InliningRoot::purgeInactiveICScripts() {
+  mozilla::DebugOnly<uint32_t> totalSize = owningScript_->length();
 
-void InliningRoot::resetWarmUpCounts(uint32_t count) {
   for (auto& inlinedScript : inlinedScripts_) {
-    inlinedScript->resetWarmUpCount(count);
+    if (inlinedScript->active()) {
+      totalSize += inlinedScript->bytecodeSize();
+    } else {
+      MOZ_ASSERT(inlinedScript->bytecodeSize() < totalBytecodeSize_);
+      totalBytecodeSize_ -= inlinedScript->bytecodeSize();
+    }
   }
+
+  MOZ_ASSERT(totalBytecodeSize_ == totalSize);
+
+  Zone* zone = owningScript_->zone();
+
+  inlinedScripts_.eraseIf([zone](auto& inlinedScript) {
+    if (inlinedScript->active()) {
+      return false;
+    }
+    inlinedScript->prepareForDestruction(zone);
+    return true;
+  });
 }
 
 }  // namespace jit

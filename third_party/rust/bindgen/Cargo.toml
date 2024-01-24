@@ -13,7 +13,7 @@
 edition = "2018"
 rust-version = "1.60.0"
 name = "bindgen"
-version = "0.68.1"
+version = "0.69.1"
 authors = [
     "Jyun-Yan You <jyyou.tw@gmail.com>",
     "Emilio Cobos Álvarez <emilio@crisal.io>",
@@ -24,7 +24,7 @@ build = "build.rs"
 description = "Automatically generates Rust FFI bindings to C and C++ libraries."
 homepage = "https://rust-lang.github.io/rust-bindgen/"
 documentation = "https://docs.rs/bindgen"
-readme = "README.md"
+readme = "../README.md"
 keywords = [
     "bindings",
     "ffi",
@@ -41,39 +41,50 @@ repository = "https://github.com/rust-lang/rust-bindgen"
 features = ["experimental"]
 
 [package.metadata.release]
+pre-release-hook = [
+    "../node_modules/doctoc/doctoc.js",
+    "../CHANGELOG.md",
+]
 release = true
+
+[[package.metadata.release.pre-release-replacements]]
+file = "../CHANGELOG.md"
+replace = """
+# Unreleased
+## Added
+## Changed
+## Removed
+## Fixed
+## Security
+
+# {{version}} ({{date}})"""
+search = "# Unreleased"
 
 [lib]
 name = "bindgen"
 path = "lib.rs"
+
+[dependencies]
+bitflags = "2.2.1"
+cexpr = "0.6"
+lazy_static = "1"
+lazycell = "1"
+peeking_take_while = "0.1.2"
+rustc-hash = "1.0.1"
+shlex = "1"
 
 [dependencies.annotate-snippets]
 version = "0.9.1"
 features = ["color"]
 optional = true
 
-[dependencies.bitflags]
-version = "2.2.1"
-
-[dependencies.cexpr]
-version = "0.6"
-
 [dependencies.clang-sys]
 version = "1"
 features = ["clang_6_0"]
 
-[dependencies.lazy_static]
-version = "1"
-
-[dependencies.lazycell]
-version = "1"
-
 [dependencies.log]
 version = "0.4"
 optional = true
-
-[dependencies.peeking_take_while]
-version = "0.1.2"
 
 [dependencies.prettyplease]
 version = "0.2.7"
@@ -95,12 +106,6 @@ features = [
     "unicode",
 ]
 default-features = false
-
-[dependencies.rustc-hash]
-version = "1.0.1"
-
-[dependencies.shlex]
-version = "1"
 
 [dependencies.syn]
 version = "2.0"

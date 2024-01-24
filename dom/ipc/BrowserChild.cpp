@@ -292,9 +292,6 @@ BrowserChild::BrowserChild(ContentChild* aManager, const TabId& aTabId,
 #if defined(XP_WIN) && defined(ACCESSIBILITY)
       mNativeWindowHandle(0),
 #endif
-#if defined(ACCESSIBILITY)
-      mTopLevelDocAccessibleChild(nullptr),
-#endif
       mCancelContentJSEpoch(0) {
   mozilla::HoldJSObjects(this);
 
@@ -818,7 +815,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvLoadURL(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankContentViewer(
+mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankDocumentViewer(
     nsIPrincipal* aPrincipal, nsIPrincipal* aPartitionedPrincipal) {
   if (aPrincipal->GetIsExpandedPrincipal() ||
       aPartitionedPrincipal->GetIsExpandedPrincipal()) {
@@ -827,7 +824,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankContentViewer(
   if (aPrincipal->IsSystemPrincipal() ||
       aPartitionedPrincipal->IsSystemPrincipal()) {
     MOZ_ASSERT_UNREACHABLE(
-        "Cannot use CreateAboutBlankContentViewer to create system principal "
+        "Cannot use CreateAboutBlankDocumentViewer to create system principal "
         "document in content");
     return IPC_OK();
   }
@@ -846,8 +843,8 @@ mozilla::ipc::IPCResult BrowserChild::RecvCreateAboutBlankContentViewer(
     return IPC_OK();
   }
 
-  docShell->CreateAboutBlankContentViewer(aPrincipal, aPartitionedPrincipal,
-                                          nullptr);
+  docShell->CreateAboutBlankDocumentViewer(aPrincipal, aPartitionedPrincipal,
+                                           nullptr);
   return IPC_OK();
 }
 
@@ -887,9 +884,9 @@ nsresult BrowserChild::CloneDocumentTreeIntoSelf(
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIContentViewer> cv;
-  ourDocShell->GetContentViewer(getter_AddRefs(cv));
-  if (NS_WARN_IF(!cv)) {
+  nsCOMPtr<nsIDocumentViewer> viewer;
+  ourDocShell->GetDocViewer(getter_AddRefs(viewer));
+  if (NS_WARN_IF(!viewer)) {
     return NS_ERROR_FAILURE;
   }
 
@@ -913,8 +910,8 @@ nsresult BrowserChild::CloneDocumentTreeIntoSelf(
     AutoPrintEventDispatcher dispatcher(*sourceDocument);
     nsAutoScriptBlocker scriptBlocker;
     bool hasInProcessCallbacks = false;
-    clone = sourceDocument->CreateStaticClone(ourDocShell, cv, printSettings,
-                                              &hasInProcessCallbacks);
+    clone = sourceDocument->CreateStaticClone(
+        ourDocShell, viewer, printSettings, &hasInProcessCallbacks);
     if (NS_WARN_IF(!clone)) {
       return NS_ERROR_FAILURE;
     }
@@ -978,9 +975,9 @@ nsresult BrowserChild::UpdateRemotePrintSettings(
 
   bc->PreOrderWalk([&](BrowsingContext* aBc) {
     if (nsCOMPtr<nsIDocShell> inProcess = aBc->GetDocShell()) {
-      nsCOMPtr<nsIContentViewer> cv;
-      inProcess->GetContentViewer(getter_AddRefs(cv));
-      if (NS_WARN_IF(!cv)) {
+      nsCOMPtr<nsIDocumentViewer> viewer;
+      inProcess->GetDocViewer(getter_AddRefs(viewer));
+      if (NS_WARN_IF(!viewer)) {
         return BrowsingContext::WalkFlag::Skip;
       }
       // The CanRunScript analysis is not smart enough to see across
@@ -992,7 +989,7 @@ nsresult BrowserChild::UpdateRemotePrintSettings(
         RefPtr<RemotePrintJobChild> printJob =
             static_cast<RemotePrintJobChild*>(
                 aPrintData.remotePrintJob().AsChild());
-        cv->SetPrintSettingsForSubdocument(printSettings, printJob);
+        viewer->SetPrintSettingsForSubdocument(printSettings, printJob);
       }());
     } else if (RefPtr<BrowserBridgeChild> remoteChild =
                    BrowserBridgeChild::GetFrom(aBc->GetEmbedderElement())) {
@@ -1256,7 +1253,8 @@ mozilla::ipc::IPCResult BrowserChild::RecvSuppressDisplayport(
 
 void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
                                    const Modifiers& aModifiers,
-                                   const ScrollableLayerGuid& aGuid) {
+                                   const ScrollableLayerGuid& aGuid,
+                                   const DoubleTapToZoomMetrics& aMetrics) {
   MOZ_LOG(
       sApzChildLog, LogLevel::Debug,
       ("Handling double tap at %s with %p %p\n", ToString(aPoint).c_str(),
@@ -1271,7 +1269,7 @@ void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
   // Note: there is nothing to do with the modifiers here, as we are not
   // synthesizing any sort of mouse event.
   RefPtr<Document> document = GetTopLevelDocument();
-  ZoomTarget zoomTarget = CalculateRectToZoomTo(document, aPoint);
+  ZoomTarget zoomTarget = CalculateRectToZoomTo(document, aPoint, aMetrics);
   // The double-tap can be dispatched by any scroll frame (so |aGuid| could be
   // the guid of any scroll frame), but the zoom-to-rect operation must be
   // performed by the root content scroll frame, so query its identifiers
@@ -1291,7 +1289,8 @@ void BrowserChild::HandleDoubleTap(const CSSPoint& aPoint,
 mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
     const GeckoContentController::TapType& aType,
     const LayoutDevicePoint& aPoint, const Modifiers& aModifiers,
-    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId) {
+    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId,
+    const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics) {
   // IPDL doesn't hold a strong reference to protocols as they're not required
   // to be refcounted. This function can run script, which may trigger a nested
   // event loop, which may release this, so we hold a strong reference here.
@@ -1319,7 +1318,7 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
       }
       break;
     case GeckoContentController::TapType::eDoubleTap:
-      HandleDoubleTap(point, aModifiers, aGuid);
+      HandleDoubleTap(point, aModifiers, aGuid, *aDoubleTapToZoomMetrics);
       break;
     case GeckoContentController::TapType::eSecondTap:
       if (mBrowserChildMessageManager) {
@@ -1348,12 +1347,14 @@ mozilla::ipc::IPCResult BrowserChild::RecvHandleTap(
 mozilla::ipc::IPCResult BrowserChild::RecvNormalPriorityHandleTap(
     const GeckoContentController::TapType& aType,
     const LayoutDevicePoint& aPoint, const Modifiers& aModifiers,
-    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId) {
+    const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId,
+    const Maybe<DoubleTapToZoomMetrics>& aDoubleTapToZoomMetrics) {
   // IPDL doesn't hold a strong reference to protocols as they're not required
   // to be refcounted. This function can run script, which may trigger a nested
   // event loop, which may release this, so we hold a strong reference here.
   RefPtr<BrowserChild> kungFuDeathGrip(this);
-  return RecvHandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId);
+  return RecvHandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId,
+                       aDoubleTapToZoomMetrics);
 }
 
 void BrowserChild::NotifyAPZStateChange(

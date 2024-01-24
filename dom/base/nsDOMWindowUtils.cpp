@@ -410,12 +410,12 @@ nsDOMWindowUtils::UpdateLayerTree() {
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::GetContentViewerSize(uint32_t* aDisplayWidth,
-                                       uint32_t* aDisplayHeight) {
+nsDOMWindowUtils::GetDocumentViewerSize(uint32_t* aDisplayWidth,
+                                        uint32_t* aDisplayHeight) {
   PresShell* presShell = GetPresShell();
   LayoutDeviceIntSize displaySize;
 
-  if (!presShell || !nsLayoutUtils::GetContentViewerSize(
+  if (!presShell || !nsLayoutUtils::GetDocumentViewerSize(
                         presShell->GetPresContext(), displaySize)) {
     return NS_ERROR_FAILURE;
   }
@@ -3597,21 +3597,22 @@ static void PrepareForFullscreenChange(nsIDocShell* aDocShell,
     rd->ScheduleViewManagerFlush();
   }
   if (!aSize.IsEmpty()) {
-    nsCOMPtr<nsIContentViewer> cv;
-    aDocShell->GetContentViewer(getter_AddRefs(cv));
-    if (cv) {
-      nsIntRect cvBounds;
-      cv->GetBounds(cvBounds);
+    nsCOMPtr<nsIDocumentViewer> viewer;
+    aDocShell->GetDocViewer(getter_AddRefs(viewer));
+    if (viewer) {
+      nsIntRect viewerBounds;
+      viewer->GetBounds(viewerBounds);
       nscoord auPerDev = presShell->GetPresContext()->AppUnitsPerDevPixel();
       if (aOldSize) {
         *aOldSize = LayoutDeviceIntSize::ToAppUnits(
-            LayoutDeviceIntSize::FromUnknownSize(cvBounds.Size()), auPerDev);
+            LayoutDeviceIntSize::FromUnknownSize(viewerBounds.Size()),
+            auPerDev);
       }
       LayoutDeviceIntSize newSize =
           LayoutDeviceIntSize::FromAppUnitsRounded(aSize, auPerDev);
 
-      cvBounds.SizeTo(newSize.width, newSize.height);
-      cv->SetBounds(cvBounds);
+      viewerBounds.SizeTo(newSize.width, newSize.height);
+      viewer->SetBounds(viewerBounds);
     }
   }
 }

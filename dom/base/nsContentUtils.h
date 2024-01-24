@@ -94,7 +94,6 @@ class nsIInterfaceRequestor;
 class nsILoadGroup;
 class nsILoadInfo;
 class nsIObserver;
-class nsIPluginTag;
 class nsIPrincipal;
 class nsIReferrerInfo;
 class nsIRequest;
@@ -177,6 +176,7 @@ class DOMArena;
 class Element;
 class Event;
 class EventTarget;
+class FragmentOrElement;
 class HTMLElement;
 class HTMLInputElement;
 class IPCTransferable;
@@ -188,6 +188,7 @@ class MessageBroadcaster;
 class NodeInfo;
 class OwningFileOrUSVStringOrFormData;
 class Selection;
+enum class ShadowRootMode : uint8_t;
 struct StructuredSerializeOptions;
 class WorkerPrivate;
 enum class ElementCallbackType;
@@ -1178,7 +1179,7 @@ class nsContentUtils {
               contains the error (may be empty).
    *   @param [aLineNumber=0] (Optional) Line number within resource
               containing error.
-   *   @param [aColumnNumber=0] (Optional) Column number within resource
+   *   @param [aColumnNumber=1] (Optional) Column number within resource
               containing error.
               If aURI is null, then aDocument->GetDocumentURI() is used.
    *   @param [aLocationMode] (Optional) Specifies the behavior if
@@ -1188,7 +1189,7 @@ class nsContentUtils {
       const nsAString& aErrorText, uint32_t aErrorFlags,
       const nsACString& aCategory, uint64_t aInnerWindowID,
       nsIURI* aURI = nullptr, const nsString& aSourceLine = u""_ns,
-      uint32_t aLineNumber = 0, uint32_t aColumnNumber = 0,
+      uint32_t aLineNumber = 0, uint32_t aColumnNumber = 1,
       MissingErrorLocationMode aLocationMode = eUSE_CALLING_LOCATION);
 
   /**
@@ -1803,6 +1804,9 @@ class nsContentUtils {
                            bool aPreventScriptExecution,
                            mozilla::ErrorResult& aRv);
 
+  MOZ_CAN_RUN_SCRIPT
+  static void SetHTMLUnsafe(mozilla::dom::FragmentOrElement* aTarget,
+                            Element* aContext, const nsAString& aSource);
   /**
    * Invoke the fragment parsing algorithm (innerHTML) using the HTML parser.
    *
@@ -2315,12 +2319,6 @@ class nsContentUtils {
     return WrapNative(cx, native, cache, nullptr, vp, aAllowWrapping);
   }
 
-  /**
-   * Creates an arraybuffer from a binary string.
-   */
-  static nsresult CreateArrayBuffer(JSContext* aCx, const nsACString& aData,
-                                    JSObject** aResult);
-
   static void StripNullChars(const nsAString& aInStr, nsAString& aOutStr);
 
   /**
@@ -2523,15 +2521,15 @@ class nsContentUtils {
    */
   static bool IsSWFPlayerEnabled();
 
-  enum ContentViewerType {
+  enum DocumentViewerType {
     TYPE_UNSUPPORTED,
     TYPE_CONTENT,
     TYPE_FALLBACK,
     TYPE_UNKNOWN
   };
 
-  static already_AddRefed<nsIDocumentLoaderFactory> FindInternalContentViewer(
-      const nsACString& aType, ContentViewerType* aLoaderType = nullptr);
+  static already_AddRefed<nsIDocumentLoaderFactory> FindInternalDocumentViewer(
+      const nsACString& aType, DocumentViewerType* aLoaderType = nullptr);
 
   /**
    * This helper method returns true if the aPattern pattern matches aValue.
@@ -3172,16 +3170,6 @@ class nsContentUtils {
   static bool ShouldBlockReservedKeys(mozilla::WidgetKeyboardEvent* aKeyEvent);
 
   /**
-   * Returns the nsIPluginTag for the plugin we should try to use for a given
-   * MIME type.
-   *
-   * @param aMIMEType  The MIME type of the document being loaded.
-   * @param aNoFakePlugin  If false then this method should consider JS plugins.
-   */
-  static already_AddRefed<nsIPluginTag> PluginTagForType(
-      const nsCString& aMIMEType, bool aNoFakePlugin);
-
-  /**
    * Returns one of the nsIObjectLoadingContent::TYPE_ values describing the
    * content type which will be used for the given MIME type when loaded within
    * an nsObjectLoadingContent.
@@ -3473,6 +3461,11 @@ class nsContentUtils {
   static int32_t CompareTreePosition(nsIContent* aContent1,
                                      nsIContent* aContent2,
                                      const nsIContent* aCommonAncestor);
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  static nsIContent* AttachDeclarativeShadowRoot(
+      nsIContent* aHost, mozilla::dom::ShadowRootMode aMode,
+      bool aDelegatesFocus);
 
  private:
   static bool InitializeEventTable();

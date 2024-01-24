@@ -4109,6 +4109,25 @@ void LIRGenerator::visitArrayJoin(MArrayJoin* ins) {
   assignSafepoint(lir, ins);
 }
 
+void LIRGenerator::visitObjectKeys(MObjectKeys* ins) {
+  MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+  MOZ_ASSERT(ins->type() == MIRType::Object);
+
+  auto* lir = new (alloc()) LObjectKeys(useRegisterAtStart(ins->object()));
+  defineReturn(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitObjectKeysLength(MObjectKeysLength* ins) {
+  MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+  MOZ_ASSERT(ins->type() == MIRType::Int32);
+
+  auto* lir =
+      new (alloc()) LObjectKeysLength(useRegisterAtStart(ins->object()));
+  defineReturn(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
 void LIRGenerator::visitStringSplit(MStringSplit* ins) {
   MOZ_ASSERT(ins->type() == MIRType::Object);
   MOZ_ASSERT(ins->string()->type() == MIRType::String);
@@ -7305,6 +7324,14 @@ void LIRGenerator::visitWasmRefIsSubtypeOfConcrete(
   define(new (alloc())
              LWasmRefIsSubtypeOfConcrete(ref, superSTV, scratch1, scratch2),
          ins);
+}
+
+void LIRGenerator::visitWasmNewStructObject(MWasmNewStructObject* ins) {
+  LWasmNewStructObject* lir = new (alloc())
+      LWasmNewStructObject(useFixed(ins->instance(), InstanceReg),
+                           useRegister(ins->typeDefData()), temp(), temp());
+  define(lir, ins);
+  assignWasmSafepoint(lir);
 }
 
 #ifdef FUZZING_JS_FUZZILLI

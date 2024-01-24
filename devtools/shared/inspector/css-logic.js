@@ -101,6 +101,8 @@ exports.getCSSAtRuleTypeName = function (cssRule) {
  * @returns {String} A localized version of the given key.
  */
 exports.l10n = name => styleInspectorL10N.getStr(name);
+exports.l10nFormatStr = (name, ...args) =>
+  styleInspectorL10N.getFormatStr(name, ...args);
 
 /**
  * Is the given property sheet an author stylesheet?
@@ -810,3 +812,25 @@ function getXPath(ele) {
   return parts.length ? "/" + parts.reverse().join("/") : "";
 }
 exports.getXPath = getXPath;
+
+/**
+ * Build up a regular expression that matches a CSS variable token. This is an
+ * ident token that starts with two dashes "--".
+ *
+ * https://www.w3.org/TR/css-syntax-3/#ident-token-diagram
+ */
+var NON_ASCII = "[^\\x00-\\x7F]";
+var ESCAPE = "\\\\[^\n\r]";
+var VALID_CHAR = ["[_a-z0-9-]", NON_ASCII, ESCAPE].join("|");
+var IS_VARIABLE_TOKEN = new RegExp(`^--(${VALID_CHAR})*$`, "i");
+
+/**
+ * Check that this is a CSS variable.
+ *
+ * @param {String} input
+ * @return {Boolean}
+ */
+function isCssVariable(input) {
+  return !!input.match(IS_VARIABLE_TOKEN);
+}
+exports.isCssVariable = isCssVariable;

@@ -16,12 +16,14 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs",
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
   EventPromise: "chrome://remote/content/shared/Sync.sys.mjs",
+  getTimeoutMultiplier: "chrome://remote/content/shared/AppInfo.sys.mjs",
   Log: "chrome://remote/content/shared/Log.sys.mjs",
   modal: "chrome://remote/content/shared/Prompt.sys.mjs",
   registerNavigationId:
     "chrome://remote/content/shared/NavigationManager.sys.mjs",
   NavigationListener:
     "chrome://remote/content/shared/listeners/NavigationListener.sys.mjs",
+  PollPromise: "chrome://remote/content/shared/Sync.sys.mjs",
   pprint: "chrome://remote/content/shared/Format.sys.mjs",
   print: "chrome://remote/content/shared/PDF.sys.mjs",
   ProgressListener: "chrome://remote/content/shared/Navigate.sys.mjs",
@@ -88,6 +90,8 @@ export const OriginType = {
   document: "document",
   viewport: "viewport",
 };
+
+const TIMEOUT_SET_HISTORY_INDEX = 1000;
 
 /**
  * Enum of user prompt types supported by the browsingContext.handleUserPrompt
@@ -1003,7 +1007,7 @@ class BrowsingContextModule extends Module {
    *
    * @throws {InvalidArgumentError}
    *     Raised if an argument is of an invalid type or value.
-   * @throws UnsupportedOperationError
+   * @throws {UnsupportedOperationError}
    *     Raised when the command is called on Android.
    */
   async setViewport(options = {}) {
@@ -1027,25 +1031,37 @@ class BrowsingContextModule extends Module {
         `Browsing Context with id ${contextId} is not top-level`
       );
     }
-    const browser = context.embedderElement;
 
-    if (typeof viewport !== "object") {
-      throw new lazy.error.InvalidArgumentError(
-        `Expected "viewport" to be an object or null, got ${viewport}`
-      );
-    }
+    const browser = context.embedderElement;
+    const currentHeight = browser.clientHeight;
+    const currentWidth = browser.clientWidth;
 
     let targetHeight, targetWidth;
-    if (viewport !== null) {
-      const { height, width } = viewport;
+    if (viewport === undefined) {
+      // Don't modify the viewport's size.
+      targetHeight = currentHeight;
+      targetWidth = currentWidth;
+    } else if (viewport === null) {
+      // Reset viewport to the original dimensions.
+      targetHeight = browser.parentElement.clientHeight;
+      targetWidth = browser.parentElement.clientWidth;
 
+      browser.style.removeProperty("height");
+      browser.style.removeProperty("width");
+    } else {
+      lazy.assert.object(
+        viewport,
+        `Expected "viewport" to be an object, got ${viewport}`
+      );
+
+      const { height, width } = viewport;
       targetHeight = lazy.assert.positiveInteger(
         height,
-        `Expected "height" to be a positive integer, got ${height}`
+        `Expected viewport's "height" to be a positive integer, got ${height}`
       );
       targetWidth = lazy.assert.positiveInteger(
         width,
-        `Expected "width" to be a positive integer, got ${width}`
+        `Expected viewport's "width" to be a positive integer, got ${width}`
       );
 
       if (targetHeight > MAX_WINDOW_SIZE || targetWidth > MAX_WINDOW_SIZE) {
@@ -1056,28 +1072,81 @@ class BrowsingContextModule extends Module {
 
       browser.style.setProperty("height", targetHeight + "px");
       browser.style.setProperty("width", targetWidth + "px");
-    } else {
-      // Reset viewport to the original dimensions
-      targetHeight = browser.parentElement.clientHeight;
-      targetWidth = browser.parentElement.clientWidth;
-
-      browser.style.removeProperty("height");
-      browser.style.removeProperty("width");
     }
 
-    // Wait until the viewport has been resized
-    await this.messageHandler.forwardCommand({
-      moduleName: "browsingContext",
-      commandName: "_awaitViewportDimensions",
-      destination: {
-        type: lazy.WindowGlobalMessageHandler.type,
-        id: context.id,
+    if (targetHeight !== currentHeight || targetWidth !== currentWidth) {
+      // Wait until the viewport has been resized
+      await this.messageHandler.forwardCommand({
+        moduleName: "browsingContext",
+        commandName: "_awaitViewportDimensions",
+        destination: {
+          type: lazy.WindowGlobalMessageHandler.type,
+          id: context.id,
+        },
+        params: {
+          height: targetHeight,
+          width: targetWidth,
+        },
+      });
+    }
+  }
+
+  /**
+   * Traverses the history of a given context by a given delta.
+   *
+   * @param {object=} options
+   * @param {string} options.context
+   *     Id of the browsing context.
+   * @param {number} options.delta
+   *     The number of steps we have to traverse.
+   *
+   * @throws {InvalidArgumentError}
+   *     Raised if an argument is of an invalid type or value.
+   * @throws {NoSuchFrameException}
+   *     When a context is not available.
+   * @throws {NoSuchHistoryEntryError}
+   *     When a requested history entry does not exist.
+   */
+  async traverseHistory(options = {}) {
+    const { context: contextId, delta } = options;
+
+    lazy.assert.string(
+      contextId,
+      `Expected "context" to be a string, got ${contextId}`
+    );
+
+    const context = this.#getBrowsingContext(contextId);
+
+    lazy.assert.integer(delta);
+
+    const sessionHistory = context.sessionHistory;
+    const allSteps = sessionHistory.count;
+    const currentIndex = sessionHistory.index;
+    const targetIndex = currentIndex + delta;
+    const validEntry = targetIndex >= 0 && targetIndex < allSteps;
+
+    if (!validEntry) {
+      throw new lazy.error.NoSuchHistoryEntryError(
+        `History entry with delta ${delta} not found`
+      );
+    }
+
+    context.goToIndex(targetIndex);
+
+    // On some platforms the requested index isn't set immediately.
+    await lazy.PollPromise(
+      (resolve, reject) => {
+        if (sessionHistory.index == targetIndex) {
+          resolve();
+        } else {
+          reject();
+        }
       },
-      params: {
-        height: targetHeight,
-        width: targetWidth,
-      },
-    });
+      {
+        errorMessage: `History was not updated for index "${targetIndex}"`,
+        timeout: TIMEOUT_SET_HISTORY_INDEX * lazy.getTimeoutMultiplier(),
+      }
+    );
   }
 
   /**
@@ -1137,8 +1206,91 @@ class BrowsingContextModule extends Module {
       );
     }
 
+    // If WaitCondition is Complete, we should try to wait for the corresponding
+    // responseCompleted event to be received.
+    let onNavigationRequestCompleted;
+
+    // However, a navigation will not necessarily have network events.
+    // For instance: same document navigation, or when using file or data
+    // protocols (for which we don't have network events yet).
+    // Therefore we will not unconditionally wait for a navigation request and
+    // this flag should only be set when a responseCompleted event should be
+    // expected.
+    let shouldWaitForNavigationRequest = false;
+
+    // Cleaning up the listeners will be done at the end of this method.
+    let unsubscribeNavigationListeners;
+
+    if (wait === WaitCondition.Complete) {
+      let resolveOnNetworkEvent;
+      onNavigationRequestCompleted = new Promise(
+        r => (resolveOnNetworkEvent = r)
+      );
+      const onBeforeRequestSent = (name, data) => {
+        if (data.navigation) {
+          shouldWaitForNavigationRequest = true;
+        }
+      };
+      const onResponseCompleted = (name, data) => {
+        if (data.navigation) {
+          resolveOnNetworkEvent();
+        }
+      };
+
+      await this.messageHandler.eventsDispatcher.on(
+        "network._beforeRequestSent",
+        contextDescriptor,
+        onBeforeRequestSent
+      );
+      await this.messageHandler.eventsDispatcher.on(
+        "network._responseCompleted",
+        contextDescriptor,
+        onResponseCompleted
+      );
+
+      unsubscribeNavigationListeners = async () => {
+        await this.messageHandler.eventsDispatcher.off(
+          "network._beforeRequestSent",
+          contextDescriptor,
+          onBeforeRequestSent
+        );
+
+        await this.messageHandler.eventsDispatcher.off(
+          "network._responseCompleted",
+          contextDescriptor,
+          onResponseCompleted
+        );
+      };
+    }
+
     const navigated = listener.start();
-    navigated.finally(async () => {
+
+    try {
+      const navigationId = lazy.registerNavigationId({
+        contextDetails: { context: webProgress.browsingContext },
+      });
+
+      await startNavigationFn();
+      await navigated;
+
+      if (shouldWaitForNavigationRequest) {
+        await onNavigationRequestCompleted;
+      }
+
+      let url;
+      if (wait === WaitCondition.None) {
+        // If wait condition is None, the navigation resolved before the current
+        // context has navigated.
+        url = listener.targetURI.spec;
+      } else {
+        url = listener.currentURI.spec;
+      }
+
+      return {
+        navigation: navigationId,
+        url,
+      };
+    } finally {
       if (listener.isStarted) {
         listener.stop();
       }
@@ -1149,29 +1301,13 @@ class BrowsingContextModule extends Module {
           contextDescriptor,
           onDocumentInteractive
         );
+      } else if (
+        wait === WaitCondition.Complete &&
+        shouldWaitForNavigationRequest
+      ) {
+        await unsubscribeNavigationListeners();
       }
-    });
-
-    const navigationId = lazy.registerNavigationId({
-      contextDetails: { context: webProgress.browsingContext },
-    });
-
-    await startNavigationFn();
-    await navigated;
-
-    let url;
-    if (wait === WaitCondition.None) {
-      // If wait condition is None, the navigation resolved before the current
-      // context has navigated.
-      url = listener.targetURI.spec;
-    } else {
-      url = listener.currentURI.spec;
     }
-
-    return {
-      navigation: navigationId,
-      url,
-    };
   }
 
   /**

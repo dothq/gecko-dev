@@ -150,6 +150,7 @@
                      class="subviewbutton subviewbutton-nav"
                      data-l10n-id="appmenuitem-report-broken-site"
                      closemenu="none"
+                     hidden="true"
                      command="cmd_reportBrokenSite"/>
       <toolbarbutton id="appMenu-help-button2"
                      class="subviewbutton subviewbutton-nav"
@@ -623,7 +624,7 @@
         <toolbarbutton id="PanelUI-fxa-menu-monitor-button" class="subviewbutton subviewbutton-iconic"
           oncommand="gSync.openMonitorLink(this)">
           <vbox flex="1">
-            <hbox>
+            <hbox align="center">
               <image class="PanelUI-fxa-menu-monitor-button ctaMenuLogo" role="presentation" />
               <label id="fxa-menu-header-title" crop="end" data-l10n-id="pxi-menu-monitor-title" />
             </hbox>
@@ -633,7 +634,7 @@
         <toolbarbutton id="PanelUI-fxa-menu-relay-button" class="subviewbutton subviewbutton-iconic"
           oncommand="gSync.openRelayLink(this)">
           <vbox flex="1">
-            <hbox>
+            <hbox align="center">
               <image class="PanelUI-fxa-menu-relay-button ctaMenuLogo" role="presentation" />
               <label id="fxa-menu-header-title" crop="end" data-l10n-id="pxi-menu-relay-title" />
             </hbox>
@@ -643,7 +644,7 @@
         <toolbarbutton id="PanelUI-fxa-menu-vpn-button" class="subviewbutton subviewbutton-iconic"
           oncommand="gSync.openVPNLink(this)">
           <vbox flex="1">
-            <hbox>
+            <hbox align="center">
               <image class="PanelUI-fxa-menu-vpn-button ctaMenuLogo" role="presentation" />
               <label id="fxa-menu-header-title" crop="end" data-l10n-id="pxi-menu-vpn-title" />
             </hbox>
@@ -762,4 +763,6 @@
       </html:moz-button-group>
     </vbox>
   </panelview>
+
+#include ../../components/reportbrokensite/content/reportBrokenSitePanel.inc.xhtml
 </html:template>

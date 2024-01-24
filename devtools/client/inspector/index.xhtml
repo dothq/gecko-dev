@@ -180,11 +180,15 @@
                   id="pseudo-class-panel-toggle"
                   data-localization="title=inspector.togglePseudo.tooltip"
                   class="devtools-button"
+                  aria-controls="pseudo-class-panel"
+                  aria-pressed="false"
                 ></button>
                 <button
                   id="class-panel-toggle"
                   data-localization="title=inspector.classPanel.toggleClass.tooltip"
                   class="devtools-button"
+                  aria-controls="ruleview-class-panel"
+                  aria-pressed="false"
                 ></button>
                 <button
                   id="ruleview-add-rule-button"
@@ -196,18 +200,21 @@
                   data-localization="title=inspector.colorSchemeSimulationLight.tooltip"
                   class="devtools-button"
                   hidden=""
+                  aria-pressed="false"
                 ></button>
                 <button
                   id="color-scheme-simulation-dark-toggle"
                   data-localization="title=inspector.colorSchemeSimulationDark.tooltip"
                   class="devtools-button"
                   hidden=""
+                  aria-pressed="false"
                 ></button>
                 <button
                   id="print-simulation-toggle"
                   data-localization="title=inspector.printSimulation.tooltip"
                   class="devtools-button"
                   hidden=""
+                  aria-pressed="false"
                 ></button>
               </div>
             </div>
@@ -228,6 +235,23 @@
           <div id="ruleview-container" class="ruleview" role="document">
             <div id="ruleview-container-focusable" tabindex="-1"></div>
           </div>
+
+          <aside id="ruleview-kbd-enter-notice" hidden="">
+            <img src="chrome://devtools/skin/images/fox-smiling.svg" />
+            <p>
+              <kbd>Enter</kbd> no longer moves focus to the next input. Use
+              <kbd id="ruleview-kbd-enter-notice-ctrl-cmd"></kbd> +
+              <kbd>Enter</kbd> or <kbd>Tab</kbd>.
+              <a href="https://fxdx.dev/rules-view-enter-key/" target="_blank"
+                >Read why</a
+              >
+            </p>
+            <button
+              id="ruleview-kbd-enter-notice-dismiss-button"
+              class="devtools-button"
+              title="Hide"
+            ></button>
+          </aside>
         </div>
 
         <div

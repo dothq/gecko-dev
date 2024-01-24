@@ -70,10 +70,10 @@ let searchConfigSchema;
 
 add_setup(async function () {
   searchConfigSchemaV1 = await IOUtils.readJSON(
-    PathUtils.join(do_get_cwd().path, "search-engine-config-schema.json")
+    PathUtils.join(do_get_cwd().path, "search-config-schema.json")
   );
   searchConfigSchema = await IOUtils.readJSON(
-    PathUtils.join(do_get_cwd().path, "search-engine-config-v2-schema.json")
+    PathUtils.join(do_get_cwd().path, "search-config-v2-schema.json")
   );
 });
 
@@ -113,12 +113,26 @@ async function checkSearchConfigValidates(schema, searchConfig) {
   }
 }
 
-async function checkUISchemaValid(configSchema, uiSchema) {
-  for (let key of Object.keys(configSchema.properties)) {
-    Assert.ok(
-      uiSchema["ui:order"].includes(key),
-      `Should have ${key} listed at the top-level of the ui schema`
-    );
+async function checkSearchConfigOverrideValidates(
+  schema,
+  searchConfigOverride
+) {
+  let validator = new JsonSchema.Validator(schema);
+
+  for (let entry of searchConfigOverride) {
+    // Records in Remote Settings contain additional properties independent of
+    // the schema. Hence, we don't want to validate their presence.
+    delete entry.schema;
+    delete entry.id;
+    delete entry.last_modified;
+
+    let result = validator.validate(entry);
+
+    let message = `Should validate ${entry.identifier ?? entry.telemetryId}`;
+    if (!result.valid) {
+      message += `:\n${JSON.stringify(result.errors, null, 2)}`;
+    }
+    Assert.ok(result.valid, message);
   }
 }
 
@@ -131,10 +145,23 @@ add_task(async function test_search_config_validates_to_schema_v1() {
 
 add_task(async function test_ui_schema_valid_v1() {
   let uiSchema = await IOUtils.readJSON(
-    PathUtils.join(do_get_cwd().path, "search-engine-config-ui-schema.json")
+    PathUtils.join(do_get_cwd().path, "search-config-ui-schema.json")
   );
 
   await checkUISchemaValid(searchConfigSchemaV1, uiSchema);
+});
+
+add_task(async function test_search_config_override_validates_to_schema_v1() {
+  let selector = new SearchEngineSelectorOld(() => {});
+  let searchConfigOverrides = await selector.getEngineConfigurationOverrides();
+  let overrideSchema = await IOUtils.readJSON(
+    PathUtils.join(do_get_cwd().path, "search-config-overrides-schema.json")
+  );
+
+  await checkSearchConfigOverrideValidates(
+    overrideSchema,
+    searchConfigOverrides
+  );
 });
 
 add_task(
@@ -154,12 +181,29 @@ add_task(
   { skip_if: () => !SearchUtils.newSearchConfigEnabled },
   async function test_ui_schema_valid() {
     let uiSchema = await IOUtils.readJSON(
-      PathUtils.join(
-        do_get_cwd().path,
-        "search-engine-config-v2-ui-schema.json"
-      )
+      PathUtils.join(do_get_cwd().path, "search-config-v2-ui-schema.json")
     );
 
     await checkUISchemaValid(searchConfigSchema, uiSchema);
+  }
+);
+
+add_task(
+  { skip_if: () => !SearchUtils.newSearchConfigEnabled },
+  async function test_search_config_override_validates_to_schema() {
+    let selector = new SearchEngineSelector(() => {});
+    let searchConfigOverrides =
+      await selector.getEngineConfigurationOverrides();
+    let overrideSchema = await IOUtils.readJSON(
+      PathUtils.join(
+        do_get_cwd().path,
+        "search-config-overrides-v2-schema.json"
+      )
+    );
+
+    await checkSearchConfigOverrideValidates(
+      overrideSchema,
+      searchConfigOverrides
+    );
   }
 );

@@ -220,18 +220,30 @@ var AboutWebauthnManagerJS = {
         row.insertCell(0).appendChild(key_node);
         row.insertCell(1).appendChild(value_node);
         var delete_button = document.createElement("button");
+        delete_button.classList.add("delete-button");
         delete_button.classList.add("credentials-button");
-        // TODO: Garbage-can symbol instead? See https://bugzilla.mozilla.org/show_bug.cgi?id=1859727
-        delete_button.setAttribute(
+        let garbage_icon = document.createElement("img");
+        garbage_icon.setAttribute(
+          "src",
+          "chrome://global/skin/icons/delete.svg"
+        );
+        garbage_icon.classList.add("delete-icon");
+        delete_button.appendChild(garbage_icon);
+        let delete_text = document.createElement("span");
+        delete_text.setAttribute(
           "data-l10n-id",
           "about-webauthn-delete-button"
         );
+        delete_button.appendChild(delete_text);
         delete_button.addEventListener("click", function () {
+          let context = document.getElementById("confirmation-context");
+          context.textContent = key_text + " - " + value_text;
           credential_management_in_progress(true);
           let cmd = {
             CredentialManagement: { DeleteCredential: cred.credential_id },
           };
-          AboutWebauthnService.runCommand(JSON.stringify(cmd));
+          context.setAttribute("data-ctap-command", JSON.stringify(cmd));
+          open_delete_confirmation_tab();
         });
         row.insertCell(2).appendChild(delete_button);
       });
@@ -343,7 +355,7 @@ function check_pin_repeat_is_correct(button) {
 }
 
 function send_pin() {
-  close_pin_required_tab();
+  close_temporary_overlay_tab();
   let pin = document.getElementById("pin-required").value;
   AboutWebauthnService.pinCallback(0, pin);
 }
@@ -370,6 +382,17 @@ function list_credentials() {
 function cancel_transaction() {
   credential_management_in_progress(false);
   AboutWebauthnService.cancel(0);
+}
+
+function confirm_deletion() {
+  let context = document.getElementById("confirmation-context");
+  let cmd = context.getAttribute("data-ctap-command");
+  AboutWebauthnService.runCommand(cmd);
+}
+
+function cancel_confirmation() {
+  credential_management_in_progress(false);
+  close_temporary_overlay_tab();
 }
 
 async function onLoad() {
@@ -412,6 +435,12 @@ async function onLoad() {
   document
     .getElementById("cancel-send-pin-button")
     .addEventListener("click", cancel_transaction);
+  document
+    .getElementById("cancel-confirmation-button")
+    .addEventListener("click", cancel_confirmation);
+  document
+    .getElementById("confirm-deletion-button")
+    .addEventListener("click", confirm_deletion);
 }
 
 function open_tab(evt, tabName) {
@@ -467,12 +496,23 @@ function open_pin_required_tab() {
   // user to click away from it, unless via the Cancel-button.
   sidebar_set_disabled(true);
 }
-function close_pin_required_tab() {
+function close_temporary_overlay_tab() {
   const evt = new CustomEvent("click", {
     detail: { temporary_overlay: true },
   });
   open_tab(evt, AboutWebauthnManagerJS._previous_tab);
   sidebar_set_disabled(false);
+}
+function open_delete_confirmation_tab() {
+  const evt = new CustomEvent("click", {
+    detail: {
+      temporary_overlay: true,
+    },
+  });
+  open_tab(evt, "confirm-deletion-section");
+  // This is a temporary overlay, so we don't want the
+  // user to click away from it, unless via the Cancel-button.
+  sidebar_set_disabled(true);
 }
 
 try {

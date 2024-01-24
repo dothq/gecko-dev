@@ -23,6 +23,11 @@
 #include "mozilla/layers/TextureHost.h"
 
 namespace mozilla {
+
+namespace gfx {
+struct FenceInfo;
+}
+
 namespace gl {
 class GLBlitHelper;
 }
@@ -196,7 +201,6 @@ class DXGIYCbCrTextureData : public TextureData {
 
  protected:
   RefPtr<ID3D11Texture2D> mD3D11Textures[3];
-  RefPtr<IDirect3DTexture9> mD3D9Textures[3];
   HANDLE mHandles[3];
   gfx::IntSize mSize;
   gfx::IntSize mSizeY;
@@ -385,6 +389,7 @@ class DXGITextureHostD3D11 : public TextureHost {
   HANDLE mHandle;
   gfx::SurfaceFormat mFormat;
   bool mHasKeyedMutex;
+  gfx::FenceInfo mAcquireFenceInfo;
 
  public:
   const gfx::ColorSpace2 mColorSpace;

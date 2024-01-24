@@ -168,7 +168,7 @@ class Browsertime(Perftest):
                     "mac-x86_64": str(
                         pathlib.Path("{}chromedriver-mac-x64", "chromedriver")
                     ),
-                    "mac-arm": str(
+                    "mac-aarch64": str(
                         pathlib.Path("{}chromedriver-mac-arm64", "chromedriver")
                     ),
                     "default": str(
@@ -245,7 +245,7 @@ class Browsertime(Perftest):
         any test with the `expose_browser_profiler` field set true (e.g. benchmark tests).
         """
         return (
-            extra_profiler_run
+            (self.config["gecko_profile"] or extra_profiler_run)
             and test.get("expose_browser_profiler")
             and self.config["app"] in GECKO_PROFILER_APPS + TRACE_APPS
         )

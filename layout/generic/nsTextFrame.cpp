@@ -1125,8 +1125,8 @@ class BuildTextRunsScanner {
 };
 
 static nsIFrame* FindLineContainer(nsIFrame* aFrame) {
-  while (aFrame && (aFrame->IsFrameOfType(nsIFrame::eLineParticipant) ||
-                    aFrame->CanContinueTextRun())) {
+  while (aFrame &&
+         (aFrame->IsLineParticipant() || aFrame->CanContinueTextRun())) {
     aFrame = aFrame->GetParent();
   }
   return aFrame;
@@ -4211,7 +4211,7 @@ class nsContinuingTextFrame final : public nsTextFrame {
                                  nsPresContext* aPresContext)
       : nsTextFrame(aStyle, aPresContext, kClassID) {}
 
-  nsTextFrame* mPrevContinuation;
+  nsTextFrame* mPrevContinuation = nullptr;
   nsTextFrame* mFirstContinuation = nullptr;
 };
 
@@ -5015,8 +5015,7 @@ static already_AddRefed<gfxTextRun> GenerateTextRunForEmphasisMarks(
 static nsRubyFrame* FindFurthestInlineRubyAncestor(nsTextFrame* aFrame) {
   nsRubyFrame* rubyFrame = nullptr;
   for (nsIFrame* frame = aFrame->GetParent();
-       frame && frame->IsFrameOfType(nsIFrame::eLineParticipant);
-       frame = frame->GetParent()) {
+       frame && frame->IsLineParticipant(); frame = frame->GetParent()) {
     if (frame->IsRubyFrame()) {
       rubyFrame = static_cast<nsRubyFrame*>(frame);
     }

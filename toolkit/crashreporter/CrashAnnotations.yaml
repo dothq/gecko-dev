@@ -224,11 +224,6 @@ DeviceResetReason:
     Reason why a DirectX device has been reset, Windows only.
   type: string
 
-DistributionID:
-  description: >
-    Product application's distribution ID.
-  type: string
-
 DOMFissionEnabled:
   description: >
     Set to 1 when DOM fission is enabled, and subframes are potentially loaded
@@ -369,12 +364,6 @@ HasDeviceTouchScreen:
     desktop as on mobile devices we assume a touch-screen is always present.
   type: boolean
 
-IAccessibleConfig:
-  description: >
-    Set when something is seriously wrong with the IAccessible configuration in
-    the computer's registry. The value is always set to "NoSystemTypeLibOrPS"
-  type: string
-
 InstallTime:
   description: >
     The time when Firefox was installed expressed as seconds since the Epoch
@@ -386,11 +375,6 @@ ipc_channel_error:
     a description of the error.
   type: string
   ping: true
-
-IpcCreateEndpointsNsresult:
-  description: >
-    errno value retrieved after failing to create an IPC transport object.
-  type: integer
 
 IpcCreatePipeCloExecErrno:
   description: >
@@ -406,12 +390,6 @@ IpcCreatePipeFcntlErrno:
 IpcCreatePipeSocketPairErrno:
   description: >
     errno value retrieved after a socketpair() call failed while creating an IPC
-    transport object.
-  type: integer
-
-IpcCreateTransportDupErrno:
-  description: >
-    errno value retrieved after a dup() call failed while creating an IPC
     transport object.
   type: integer
 
@@ -449,11 +427,6 @@ IPCShutdownState:
 IPCSystemError:
   description: >
     Description of the last system error that occurred during IPC operation.
-  type: string
-
-IPCTransportFailureReason:
-  description: >
-    Reason why creating an IPC channel failed.
   type: string
 
 Hang:

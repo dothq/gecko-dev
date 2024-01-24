@@ -36,13 +36,14 @@ const MouseEvents = {
     {},
     {
       get: (target, name) =>
-        async function (x, y, selector = ":root") {
+        async function (x, y, options = {}) {
           if (name === "click") {
-            this.down(x, y);
-            this.up(x, y);
+            this.down(x, y, options);
+            this.up(x, y, options);
           } else {
-            await safeSynthesizeMouseEventInContentPage(selector, x, y, {
+            await safeSynthesizeMouseEventInContentPage(":root", x, y, {
               type: "mouse" + name,
+              ...options,
             });
           }
         },
@@ -259,15 +260,6 @@ class ScreenshotsHelper {
     await promise;
   }
 
-  getWindowPosition() {
-    return ContentTask.spawn(this.browser, [], () => {
-      return {
-        scrollX: content.window.scrollX,
-        scrollY: content.window.scrollY,
-      };
-    });
-  }
-
   async waitForScrollTo(x, y) {
     await ContentTask.spawn(this.browser, [x, y], async ([xPos, yPos]) => {
       await ContentTaskUtils.waitForCondition(() => {
@@ -438,10 +430,19 @@ class ScreenshotsHelper {
    *   clientWidth The visible width
    *   scrollHeight The scrollable height
    *   scrollWidth The scrollable width
+   *   scrollX The scroll x position
+   *   scrollY The scroll y position
    */
   getContentDimensions() {
     return SpecialPowers.spawn(this.browser, [], async function () {
-      let { innerWidth, innerHeight, scrollMaxX, scrollMaxY } = content.window;
+      let {
+        innerWidth,
+        innerHeight,
+        scrollMaxX,
+        scrollMaxY,
+        scrollX,
+        scrollY,
+      } = content.window;
       let width = innerWidth + scrollMaxX;
       let height = innerHeight + scrollMaxY;
 
@@ -462,6 +463,8 @@ class ScreenshotsHelper {
         clientWidth: innerWidth,
         scrollHeight: height,
         scrollWidth: width,
+        scrollX,
+        scrollY,
       };
     });
   }

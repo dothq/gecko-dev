@@ -359,7 +359,11 @@ where
         dependency: &'a Dependency,
         host: Option<OpaqueElement>,
     ) {
-        match self.invalidations.iter_mut().find(|(_, _, d)| dependency_selectors_match(dependency, d)) {
+        match self
+            .invalidations
+            .iter_mut()
+            .find(|(_, _, d)| dependency_selectors_match(dependency, d))
+        {
             Some((e, h, d)) => {
                 // Just keep one.
                 if d.selector_offset > dependency.selector_offset {
@@ -368,7 +372,7 @@ where
             },
             None => {
                 self.invalidations.push((element, host, dependency));
-            }
+            },
         }
     }
 
@@ -403,11 +407,7 @@ where
                 {
                     return;
                 }
-                self.insert_invalidation(
-                    element,
-                    dependency,
-                    host,
-                );
+                self.insert_invalidation(element, dependency, host);
             },
         };
     }
@@ -422,12 +422,7 @@ where
                 },
                 DependencyInvalidationKind::Relative(kind) => {
                     if let Some(context) = self.optimization_context.as_ref() {
-                        if context.can_be_ignored(
-                            element != self.top,
-                            element,
-                            host,
-                            dependency,
-                        ) {
+                        if context.can_be_ignored(element != self.top, element, host, dependency) {
                             continue;
                         }
                     }

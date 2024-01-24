@@ -158,7 +158,7 @@ const PREF_URLBAR_DEFAULTS = new Map([
   ["maxRichResults", 10],
 
   // Feature gate pref for mdn suggestions in the urlbar.
-  ["mdn.featureGate", false],
+  ["mdn.featureGate", true],
 
   // Comma-separated list of client variants to send to Merino
   ["merino.clientVariants", ""],
@@ -461,10 +461,10 @@ const PREF_URLBAR_DEFAULTS = new Map([
   ["trending.maxResultsNoSearchMode", 10],
 
   // Feature gate pref for rich suggestions being shown in the urlbar.
-  ["richSuggestions.featureGate", false],
+  ["richSuggestions.featureGate", true],
 
   // Feature gate pref for clipboard suggestions in the urlbar.
-  ["clipboard.featureGate", false],
+  ["clipboard.featureGate", true],
 
   // Feature gate pref for recent searches being shown in the urlbar.
   ["recentsearches.featureGate", false],
@@ -474,9 +474,6 @@ const PREF_URLBAR_DEFAULTS = new Map([
 
   // We only show recent searches within the past 31 days by default.
   ["recentsearches.expirationDays", 31],
-
-  // The last time (as ISO string) the user used the search bar.
-  ["browser.search.widget.lastUsed", ""],
 ]);
 
 const PREF_OTHER_DEFAULTS = new Map([
