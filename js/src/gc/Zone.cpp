@@ -159,9 +159,6 @@ JS::Zone::Zone(JSRuntime* rt, Kind kind)
     : ZoneAllocator(rt, kind),
       arenas(this),
       data(nullptr),
-      tenuredBigInts(0),
-      markedStrings(0),
-      finalizedStrings(0),
       suppressAllocationMetadataBuilder(false),
       allocNurseryObjects_(true),
       allocNurseryStrings_(true),
@@ -786,8 +783,8 @@ void ZoneList::clear() {
   }
 }
 
-JS_PUBLIC_API void JS::shadow::RegisterWeakCache(
-    JS::Zone* zone, detail::WeakCacheBase* cachep) {
+JS_PUBLIC_API void js::gc::RegisterWeakCache(JS::Zone* zone,
+                                             WeakCacheBase* cachep) {
   zone->registerWeakCache(cachep);
 }
 

@@ -12,6 +12,7 @@ const TypedArrayDict = {
   uint32: Uint32Array,
   int8: Int8Array,
   uint8: Uint8Array,
+  int64: BigInt64Array,
 };
 
 const getTypedArrayData = (type, data) => {
@@ -21,6 +22,11 @@ const getTypedArrayData = (type, data) => {
     outData = new TypedArrayDict[type](data.length);
     for (let i = 0; i < data.length; i++) {
       outData[i] = toHalf(data[i]);
+    }
+  } else if (type === 'int64') {
+    outData = new TypedArrayDict[type](data.length);
+    for (let i = 0; i < data.length; i++) {
+      outData[i] = BigInt(data[i]);
     }
   } else {
     outData = new TypedArrayDict[type](data);
@@ -280,6 +286,8 @@ const getReductionPrecisionTolerance = (resources, operationName) => {
 
 // Refer to precision metrics on https://github.com/webmachinelearning/webnn/issues/265#issuecomment-1256242643
 const PrecisionMetrics = {
+  argMax: {ULP: {int64: 0}},
+  argMin: {ULP: {int64: 0}},
   batchNormalization: {ULP: {float32: 6, float16: 6}},
   clamp: {ULP: {float32: 0, float16: 0}},
   concat: {ULP: {float32: 0, float16: 0}},
@@ -319,9 +327,11 @@ const PrecisionMetrics = {
   // End Element-wise unary operations
   elu: {ULP: {float32: 18, float16: 18}},
   expand: {ULP: {float32: 0, float16: 0}},
+  gather: {ULP: {float32: 0, float16: 0}},
   gemm: {ULP: {float32: getGemmPrecisionTolerance, float16: getGemmPrecisionTolerance}},
   hardSigmoid: {ULP: {float32: 2, float16: 2}},
   hardSwish: {ULP: {float32: 4, float16: 4}},
+  layerNormalization: {ATOL: {float32: 1/1024, float16: 1/512}},
   leakyRelu: {ULP: {float32: 1, float16: 1}},
   linear: {ULP: {float32: 2, float16: 2}},
   matmul: {ULP: {float32: getMatmulPrecisionTolerance, float16: getMatmulPrecisionTolerance}},
@@ -351,7 +361,6 @@ const PrecisionMetrics = {
   softplus: {ULP: {float32: 18, float16: 18}},
   softsign: {ULP: {float32: 3, float16: 3}},
   split: {ULP: {float32: 0, float16: 0}},
-  squeeze: {ULP: {float32: 0, float16: 0}},
   tanh: {ATOL: {float32: 1/1024, float16: 1/512}},
   transpose: {ULP: {float32: 0, float16: 0}},
   where: {ULP: {float32: 0, float16: 0}},
@@ -428,6 +437,9 @@ const assert_array_approx_equals_ulp = (actual, expected, nulp, dataType, descri
         actualBitwise = actual[i];
         // convert expected data of Float16 to Uint16
         expectedBitwise = toHalf(expected[i]);
+      } else if (dataType === 'int64') {
+        actualBitwise = actual[i];
+        expectedBitwise = BigInt(expected[i]);
       }
       distance = actualBitwise - expectedBitwise;
       distance = distance >= 0 ? distance : -distance;
@@ -515,7 +527,13 @@ const createConstantOperand = (builder, resources) => {
 const createSingleInputOperand = (builder, resources, inputOperandName) => {
   inputOperandName = inputOperandName ? inputOperandName : Object.keys(resources.inputs)[0];
   const inputResources = resources.inputs[inputOperandName];
-  return builder.input(inputOperandName, {dataType: inputResources.type, type: inputResources.type, dimensions: inputResources.shape});
+  let operand;
+  if (resources.inputs[inputOperandName].hasOwnProperty('constant') && resources.inputs[inputOperandName]['constant']) {
+    operand = createConstantOperand(builder, resources.inputs[inputOperandName]);
+  } else {
+    operand = builder.input(inputOperandName, {dataType: inputResources.type, type: inputResources.type, dimensions: inputResources.shape});
+  }
+  return operand;
 };
 
 /**
@@ -528,12 +546,7 @@ const createMultiInputOperands = (builder, resources) => {
   let inputOperands = [];
   const inputOperandNameArray = Object.keys(resources.inputs);
   inputOperandNameArray.forEach(inputOperandName => {
-    let operand;
-    if (resources.inputs[inputOperandName].hasOwnProperty('constant') && resources.inputs[inputOperandName]['constant']) {
-      operand = createConstantOperand(builder, resources.inputs[inputOperandName]);
-    } else {
-      operand = createSingleInputOperand(builder, resources, inputOperandName);
-    }
+    const operand = createSingleInputOperand(builder, resources, inputOperandName);
     inputOperands.push(operand);
   });
   return inputOperands;
@@ -597,8 +610,14 @@ const buildConcat = (operationName, builder, resources) => {
   // MLOperand concat(sequence<MLOperand> inputs, unsigned long axis);
   const namedOutputOperand = {};
   const inputOperands = [];
+  let operand;
   for (let input of resources.inputs) {
-    inputOperands.push(builder.input(input.name, {dataType: input.type, type: input.type, dimensions: input.shape}));
+    if (input.hasOwnProperty('constant') && input['constant']) {
+      operand = createConstantOperand(builder, input);
+    } else {
+      operand = builder.input(input.name, {dataType: input.type, type: input.type, dimensions: input.shape});
+    }
+    inputOperands.push(operand);
   }
   // invoke builder.concat()
   namedOutputOperand[resources.expected.name] = builder[operationName](inputOperands, resources.axis);
@@ -650,6 +669,22 @@ const buildGemm = (operationName, builder, resources) => {
     }
   }
   namedOutputOperand[resources.expected.name] = builder[operationName](inputOperandA, inputOperandB, gemmOptions);
+  return namedOutputOperand;
+};
+
+const buildLayerNorm = (operationName, builder, resources) => {
+  // MLOperand layerNormalization(MLOperand input, optional MLLayerNormalizationOptions options = {});
+  const namedOutputOperand = {};
+  const inputOperand = createSingleInputOperand(builder, resources);
+  const layerNormOptions = {...resources.options};
+  if (layerNormOptions.scale) {
+    layerNormOptions.scale = createConstantOperand(builder, layerNormOptions.scale);
+  }
+  if (layerNormOptions.bias) {
+    layerNormOptions.bias = createConstantOperand(builder, layerNormOptions.bias);
+  }
+  // invoke builder.layerNormalization()
+  namedOutputOperand[resources.expected.name] = builder[operationName](inputOperand, layerNormOptions);
   return namedOutputOperand;
 };
 

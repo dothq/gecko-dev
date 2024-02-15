@@ -102,6 +102,9 @@ DefaultJitOptions::DefaultJitOptions() {
   // Toggles whether instruction reordering is globally disabled.
   SET_DEFAULT(disableInstructionReordering, false);
 
+  // Toggles whether atomizing loads used as property keys is globally disabled.
+  SET_DEFAULT(disableMarkLoadsUsedAsPropertyKeys, false);
+
   // Toggles whether Range Analysis is globally disabled.
   SET_DEFAULT(disableRangeAnalysis, false);
 
@@ -294,7 +297,7 @@ DefaultJitOptions::DefaultJitOptions() {
   SET_DEFAULT(spectreObjectMitigations, true);
   SET_DEFAULT(spectreStringMitigations, true);
   SET_DEFAULT(spectreValueMasking, true);
-  SET_DEFAULT(spectreJitToCxxCalls, true);
+  SET_DEFAULT(spectreJitToCxxCalls, false);
 #endif
 
   // Whether the W^X policy is enforced to mark JIT code pages as either
@@ -346,9 +349,6 @@ DefaultJitOptions::DefaultJitOptions() {
 
   // Controls how much assertion checking code is emitted
   SET_DEFAULT(lessDebugCode, false);
-
-  // Whether the MegamorphicCache is enabled.
-  SET_DEFAULT(enableWatchtowerMegamorphic, true);
 
   SET_DEFAULT(onlyInlineSelfHosted, false);
 

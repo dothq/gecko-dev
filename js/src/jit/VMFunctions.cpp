@@ -29,6 +29,7 @@
 #include "js/Printf.h"
 #include "js/TraceKind.h"
 #include "proxy/ScriptedProxyHandler.h"
+#include "util/Unicode.h"
 #include "vm/ArrayObject.h"
 #include "vm/Compartment.h"
 #include "vm/Interpreter.h"
@@ -767,6 +768,77 @@ JSLinearString* LinearizeForCharAccess(JSContext* cx, JSString* str) {
   return str->ensureLinear(cx);
 }
 
+template <typename CharT>
+static size_t StringTrimStartIndex(mozilla::Range<CharT> chars) {
+  size_t begin = 0;
+  while (begin < chars.length() && unicode::IsSpace(chars[begin])) {
+    ++begin;
+  }
+  return begin;
+}
+
+template <typename CharT>
+static size_t StringTrimEndIndex(mozilla::Range<CharT> chars, size_t begin) {
+  size_t end = chars.length();
+  while (end > begin && unicode::IsSpace(chars[end - 1])) {
+    --end;
+  }
+  return end;
+}
+
+int32_t StringTrimStartIndex(const JSString* str) {
+  AutoUnsafeCallWithABI unsafe;
+
+  MOZ_ASSERT(str->isLinear());
+
+  const auto* linear = &str->asLinear();
+
+  size_t begin;
+  if (linear->hasLatin1Chars()) {
+    JS::AutoCheckCannotGC nogc;
+    begin = StringTrimStartIndex(linear->latin1Range(nogc));
+  } else {
+    JS::AutoCheckCannotGC nogc;
+    begin = StringTrimStartIndex(linear->twoByteRange(nogc));
+  }
+  return int32_t(begin);
+}
+
+int32_t StringTrimEndIndex(const JSString* str, int32_t start) {
+  AutoUnsafeCallWithABI unsafe;
+
+  MOZ_ASSERT(str->isLinear());
+  MOZ_ASSERT(start >= 0 && size_t(start) <= str->length());
+
+  const auto* linear = &str->asLinear();
+
+  size_t end;
+  if (linear->hasLatin1Chars()) {
+    JS::AutoCheckCannotGC nogc;
+    end = StringTrimEndIndex(linear->latin1Range(nogc), size_t(start));
+  } else {
+    JS::AutoCheckCannotGC nogc;
+    end = StringTrimEndIndex(linear->twoByteRange(nogc), size_t(start));
+  }
+  return int32_t(end);
+}
+
+JSString* CharCodeToLowerCase(JSContext* cx, int32_t code) {
+  RootedString str(cx, StringFromCharCode(cx, code));
+  if (!str) {
+    return nullptr;
+  }
+  return js::StringToLowerCase(cx, str);
+}
+
+JSString* CharCodeToUpperCase(JSContext* cx, int32_t code) {
+  RootedString str(cx, StringFromCharCode(cx, code));
+  if (!str) {
+    return nullptr;
+  }
+  return js::StringToUpperCase(cx, str);
+}
+
 bool SetProperty(JSContext* cx, HandleObject obj, Handle<PropertyName*> name,
                  HandleValue value, bool strict, jsbytecode* pc) {
   RootedId id(cx, NameToId(name));
@@ -1341,8 +1413,11 @@ void AssertValidStringPtr(JSContext* cx, JSString* str) {
 
   gc::AllocKind kind = str->getAllocKind();
   if (str->isFatInline()) {
-    MOZ_ASSERT(kind == gc::AllocKind::FAT_INLINE_STRING ||
-               kind == gc::AllocKind::FAT_INLINE_ATOM);
+    if (str->isAtom()) {
+      MOZ_ASSERT(kind == gc::AllocKind::FAT_INLINE_ATOM);
+    } else {
+      MOZ_ASSERT(kind == gc::AllocKind::FAT_INLINE_STRING);
+    }
   } else if (str->isExternal()) {
     MOZ_ASSERT(kind == gc::AllocKind::EXTERNAL_STRING);
   } else if (str->isAtom()) {
@@ -1610,7 +1685,7 @@ static MOZ_ALWAYS_INLINE bool GetNativeDataPropertyPureImpl(
   Shape* receiverShape = obj->shape();
   MegamorphicCache& cache = cx->caches().megamorphicCache;
 
-  MOZ_ASSERT_IF(JitOptions.enableWatchtowerMegamorphic, entry);
+  MOZ_ASSERT(entry);
 
   size_t numHops = 0;
   while (true) {
@@ -1622,11 +1697,8 @@ static MOZ_ALWAYS_INLINE bool GetNativeDataPropertyPureImpl(
       if (!prop.isDataProperty()) {
         return false;
       }
-      if (entry) {
-        TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
-        cache.initEntryForDataProperty(entry, receiverShape, id, numHops,
-                                       offset);
-      }
+      TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
+      cache.initEntryForDataProperty(entry, receiverShape, id, numHops, offset);
       *vp = nobj->getSlot(prop.slot());
       return true;
     }
@@ -1647,9 +1719,7 @@ static MOZ_ALWAYS_INLINE bool GetNativeDataPropertyPureImpl(
 
     JSObject* proto = nobj->staticPrototype();
     if (!proto) {
-      if (entry) {
-        cache.initEntryForMissingProperty(entry, receiverShape, id);
-      }
+      cache.initEntryForMissingProperty(entry, receiverShape, id);
       vp->setUndefined();
       return true;
     }
@@ -1670,33 +1740,31 @@ bool GetNativeDataPropertyPureWithCacheLookup(JSContext* cx, JSObject* obj,
 
   // If we're on x86, we didn't have enough registers to populate this
   // directly in Baseline JITted code, so we do the lookup here.
-  if (JitOptions.enableWatchtowerMegamorphic) {
-    Shape* receiverShape = obj->shape();
-    MegamorphicCache& cache = cx->caches().megamorphicCache;
+  Shape* receiverShape = obj->shape();
+  MegamorphicCache& cache = cx->caches().megamorphicCache;
 
-    if (cache.lookup(receiverShape, id, &entry)) {
-      NativeObject* nobj = &obj->as<NativeObject>();
-      VerifyCacheEntry(cx, nobj, id, *entry);
-      if (entry->isDataProperty()) {
-        for (size_t i = 0, numHops = entry->numHops(); i < numHops; i++) {
-          nobj = &nobj->staticPrototype()->as<NativeObject>();
-        }
-        uint32_t offset = entry->slotOffset().offset();
-        if (entry->slotOffset().isFixedSlot()) {
-          size_t index = NativeObject::getFixedSlotIndexFromOffset(offset);
-          *vp = nobj->getFixedSlot(index);
-        } else {
-          size_t index = NativeObject::getDynamicSlotIndexFromOffset(offset);
-          *vp = nobj->getDynamicSlot(index);
-        }
-        return true;
+  if (cache.lookup(receiverShape, id, &entry)) {
+    NativeObject* nobj = &obj->as<NativeObject>();
+    VerifyCacheEntry(cx, nobj, id, *entry);
+    if (entry->isDataProperty()) {
+      for (size_t i = 0, numHops = entry->numHops(); i < numHops; i++) {
+        nobj = &nobj->staticPrototype()->as<NativeObject>();
       }
-      if (entry->isMissingProperty()) {
-        vp->setUndefined();
-        return true;
+      uint32_t offset = entry->slotOffset().offset();
+      if (entry->slotOffset().isFixedSlot()) {
+        size_t index = NativeObject::getFixedSlotIndexFromOffset(offset);
+        *vp = nobj->getFixedSlot(index);
+      } else {
+        size_t index = NativeObject::getDynamicSlotIndexFromOffset(offset);
+        *vp = nobj->getDynamicSlot(index);
       }
-      MOZ_ASSERT(entry->isMissingOwnProperty());
+      return true;
     }
+    if (entry->isMissingProperty()) {
+      vp->setUndefined();
+      return true;
+    }
+    MOZ_ASSERT(entry->isMissingOwnProperty());
   }
 
   return GetNativeDataPropertyPureImpl(cx, obj, id, entry, vp);
@@ -1725,7 +1793,6 @@ bool CheckProxyGetByValueResult(JSContext* cx, HandleObject obj,
 bool GetNativeDataPropertyPure(JSContext* cx, JSObject* obj, PropertyKey id,
                                MegamorphicCacheEntry* entry, Value* vp) {
   AutoUnsafeCallWithABI unsafe;
-  MOZ_ASSERT_IF(JitOptions.enableWatchtowerMegamorphic, entry);
   return GetNativeDataPropertyPureImpl(cx, obj, id, entry, vp);
 }
 
@@ -1789,7 +1856,7 @@ bool GetNativeDataPropertyByValuePure(JSContext* cx, JSObject* obj,
 
   Shape* receiverShape = obj->shape();
   MegamorphicCache& cache = cx->caches().megamorphicCache;
-  if (!entry && JitOptions.enableWatchtowerMegamorphic) {
+  if (!entry) {
     cache.lookup(receiverShape, id, &entry);
   }
 
@@ -1857,7 +1924,7 @@ bool HasNativeDataPropertyPure(JSContext* cx, JSObject* obj,
 
   MegamorphicCache& cache = cx->caches().megamorphicCache;
   Shape* receiverShape = obj->shape();
-  if (!entry && JitOptions.enableWatchtowerMegamorphic) {
+  if (!entry) {
     if (cache.lookup(receiverShape, id, &entry)) {
       VerifyCacheEntry(cx, &obj->as<NativeObject>(), id, *entry);
     }
@@ -1874,13 +1941,11 @@ bool HasNativeDataPropertyPure(JSContext* cx, JSObject* obj,
     NativeObject* nobj = &obj->as<NativeObject>();
     uint32_t index;
     if (PropMap* map = nobj->shape()->lookup(cx, id, &index)) {
-      if (JitOptions.enableWatchtowerMegamorphic) {
-        PropertyInfo prop = map->getPropertyInfo(index);
-        if (prop.isDataProperty()) {
-          TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
-          cache.initEntryForDataProperty(entry, receiverShape, id, numHops,
-                                         offset);
-        }
+      PropertyInfo prop = map->getPropertyInfo(index);
+      if (prop.isDataProperty()) {
+        TaggedSlotOffset offset = nobj->getTaggedSlotOffset(prop.slot());
+        cache.initEntryForDataProperty(entry, receiverShape, id, numHops,
+                                       offset);
       }
       vp[1].setBoolean(true);
       return true;
@@ -2019,6 +2084,9 @@ static bool TryAddOrSetPlainObjectProperty(JSContext* cx,
       return true;
     }
     obj->setSlot(prop.slot(), value);
+    if (!Watchtower::watchPropertyModification<AllowGC::NoGC>(cx, obj, key)) {
+      return false;
+    }
     *optimized = true;
 
     if constexpr (UseCache) {

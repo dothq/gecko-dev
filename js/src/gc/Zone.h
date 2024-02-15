@@ -194,12 +194,6 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
   // Per-zone data for use by an embedder.
   js::MainThreadData<void*> data;
 
-  js::MainThreadData<uint32_t> tenuredBigInts;
-
-  // Number of marked/finalized JSStrings/JSFatInlineStrings during major GC.
-  js::MainThreadOrGCTaskData<size_t> markedStrings;
-  js::MainThreadOrGCTaskData<size_t> finalizedStrings;
-
   // When true, skip calling the metadata callback. We use this:
   // - to avoid invoking the callback recursively;
   // - to avoid observing lazy prototype setup (which confuses callbacks that
@@ -270,7 +264,7 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
 
   // List of non-ephemeron weak containers to sweep during
   // beginSweepingSweepGroup.
-  js::MainThreadOrGCTaskData<mozilla::LinkedList<detail::WeakCacheBase>>
+  js::MainThreadOrGCTaskData<mozilla::LinkedList<js::gc::WeakCacheBase>>
       weakCaches_;
 
   // Mapping from not yet marked keys to a vector of all values that the key
@@ -565,10 +559,10 @@ class Zone : public js::ZoneAllocator, public js::gc::GraphNodeBase<JS::Zone> {
     }
   }
 
-  mozilla::LinkedList<detail::WeakCacheBase>& weakCaches() {
+  mozilla::LinkedList<js::gc::WeakCacheBase>& weakCaches() {
     return weakCaches_.ref();
   }
-  void registerWeakCache(detail::WeakCacheBase* cachep) {
+  void registerWeakCache(js::gc::WeakCacheBase* cachep) {
     weakCaches().insertBack(cachep);
   }
 

@@ -506,6 +506,44 @@ topsites:
     send_in_pings:
       - newtab
 
+  sponsored_tiles_configured:
+    lifetime: application
+    type: quantity
+    unit: integer
+    description: >
+      The number of topsite tiles configured to be shown on newtab.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1862493
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - gleonard@mozilla.com
+    expires: never
+    send_in_pings:
+      - newtab
+
+  sponsored_tiles_received:
+    lifetime: application
+    type: text
+    description: >
+      The stringified JSON of tiles processed for display (array of objects).
+      Includes tiles not displayed and reason for not displaying.
+      Fields included: advertiser, provider, display_position,
+      display_fail_reason.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi
+    data_sensitivity:
+      - web_activity
+    notification_emails:
+      - gleonard@mozilla.com
+    expires: never
+    send_in_pings:
+      - newtab
+
 pocket:
   is_signed_in:
     lifetime: application
@@ -847,6 +885,87 @@ messaging_system:
     notification_emails:
       - dmosedale@mozilla.com
       - pmcmanis@mozilla.com
+    expires: never
+    send_in_pings:
+      - messaging-system
+
+  event_screen_family:
+    type: text
+    lifetime: ping
+    description: |
+      A string identifier of the message family derived from the message id
+      (e.g. MR_WELCOME_DEFAULT).
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1867627
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1825863
+    data_sensitivity:
+      - web_activity
+    notification_emails:
+      - pmcmanis@mozilla.com
+      - dmosedale@mozilla.com
+      - nsauermann@mozilla.com
+    expires: never
+    send_in_pings:
+      - messaging-system
+
+  event_screen_id:
+    type: text
+    lifetime: ping
+    description: |
+      A string identifier of the message screen id
+      (e.g. AW_MOBILE_DOWNLOAD).
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1867627
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1825863
+    data_sensitivity:
+      - web_activity
+    notification_emails:
+      - pmcmanis@mozilla.com
+      - dmosedale@mozilla.com
+      - nsauermann@mozilla.com
+    expires: never
+    send_in_pings:
+      - messaging-system
+
+  event_screen_initials:
+    type: text
+    lifetime: ping
+    description: |
+      A string identifier of the message screen initials
+      (e.g. 'EMAG' for EASY_SETUP, MOBILE_DOWNLOADS, AMO, GRATITUDE).
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1867627
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1825863
+    data_sensitivity:
+      - web_activity
+    notification_emails:
+      - pmcmanis@mozilla.com
+      - dmosedale@mozilla.com
+      - nsauermann@mozilla.com
+    expires: never
+    send_in_pings:
+      - messaging-system
+
+  event_screen_index:
+    type: quantity
+    unit: integer
+    lifetime: ping
+    description: |
+      A number identifier of the screen index in a sequence of screens
+      (e.g. 0 for first message).
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1825863
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1825863
+    data_sensitivity:
+      - web_activity
+    notification_emails:
+      - pmcmanis@mozilla.com
+      - dmosedale@mozilla.com
+      - nsauermann@mozilla.com
     expires: never
     send_in_pings:
       - messaging-system

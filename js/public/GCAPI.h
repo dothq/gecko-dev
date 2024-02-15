@@ -14,6 +14,7 @@
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Vector.h"
 
+#include "js/CharacterEncoding.h"  // JS::UTF8Chars
 #include "js/GCAnnotations.h"
 #include "js/shadow/Zone.h"
 #include "js/SliceBudget.h"
@@ -316,15 +317,6 @@ typedef enum JSGCParamKey {
   JSGC_NURSERY_FREE_THRESHOLD_FOR_IDLE_COLLECTION = 27,
 
   /**
-   * If this percentage of the nursery is tenured and the nursery is at least
-   * 4MB, then proceed to examine which groups we should pretenure.
-   *
-   * Default: PretenureThreshold
-   * Pref: None
-   */
-  JSGC_PRETENURE_THRESHOLD = 28,
-
-  /**
    * Attempt to run a minor GC in the idle time if the free space falls
    * below this percentage (from 0 to 99).
    *
@@ -410,19 +402,6 @@ typedef enum JSGCParamKey {
    * JSGC_HELPER_THREAD_RATIO and JSGC_MAX_HELPER_THREADS parameters.
    */
   JSGC_HELPER_THREAD_COUNT = 41,
-
-  /**
-   * If the percentage of the tenured strings exceeds this threshold, string
-   * will be allocated in tenured heap instead. (Default is allocated in
-   * nursery.)
-   */
-  JSGC_PRETENURE_STRING_THRESHOLD = 42,
-
-  /**
-   * If the finalization rate of the tenured strings exceeds this threshold,
-   * string will be allocated in nursery.
-   */
-  JSGC_STOP_PRETENURE_STRING_THRESHOLD = 43,
 
   /**
    * A number that is incremented on every major GC slice.
@@ -1292,6 +1271,16 @@ extern JS_PUBLIC_API JSString* JS_NewMaybeExternalStringLatin1(
     const JSExternalStringCallbacks* callbacks, bool* allocatedExternal);
 extern JS_PUBLIC_API JSString* JS_NewMaybeExternalUCString(
     JSContext* cx, const char16_t* chars, size_t length,
+    const JSExternalStringCallbacks* callbacks, bool* allocatedExternal);
+
+/**
+ * Similar to JS_NewMaybeExternalStringLatin1.
+ *
+ * Create an external Latin1 string if the utf8 buffer contains only ASCII
+ * chars, otherwise copy the chars into a non-external string.
+ */
+extern JS_PUBLIC_API JSString* JS_NewMaybeExternalStringUTF8(
+    JSContext* cx, const JS::UTF8Chars& utf8,
     const JSExternalStringCallbacks* callbacks, bool* allocatedExternal);
 
 /**

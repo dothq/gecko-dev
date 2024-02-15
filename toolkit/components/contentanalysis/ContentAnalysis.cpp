@@ -9,6 +9,7 @@
 #include "content_analysis/sdk/analysis_client.h"
 
 #include "base/process_util.h"
+#include "GMPUtils.h"  // ToHexString
 #include "mozilla/Components.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/Logging.h"
@@ -194,8 +195,8 @@ nsresult ContentAnalysis::CreateContentAnalysisClient(nsCString&& aPipePathName,
 }
 
 ContentAnalysisRequest::ContentAnalysisRequest(
-    AnalysisType aAnalysisType, nsString&& aString, bool aStringIsFilePath,
-    nsCString&& aSha256Digest, nsString&& aUrl, OperationType aOperationType,
+    AnalysisType aAnalysisType, nsString aString, bool aStringIsFilePath,
+    nsCString aSha256Digest, nsString aUrl, OperationType aOperationType,
     dom::WindowGlobalParent* aWindowGlobalParent)
     : mAnalysisType(aAnalysisType),
       mUrl(std::move(aUrl)),
@@ -216,6 +217,43 @@ ContentAnalysisRequest::ContentAnalysisRequest(
   }
 
   mRequestToken = GenerateRequestToken();
+}
+
+nsresult ContentAnalysisRequest::GetFileDigest(const nsAString& aFilePath,
+                                               nsCString& aDigestString) {
+  MOZ_DIAGNOSTIC_ASSERT(
+      !NS_IsMainThread(),
+      "ContentAnalysisRequest::GetFileDigest does file IO and should "
+      "not run on the main thread");
+  nsresult rv;
+  mozilla::Digest digest;
+  digest.Begin(SEC_OID_SHA256);
+  PRFileDesc* fd = nullptr;
+  nsCOMPtr<nsIFile> file = do_CreateInstance("@mozilla.org/file/local;1", &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = file->InitWithPath(aFilePath);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = file->OpenNSPRFileDesc(PR_RDONLY | nsIFile::OS_READAHEAD, 0, &fd);
+  NS_ENSURE_SUCCESS(rv, rv);
+  auto closeFile = MakeScopeExit([fd]() { PR_Close(fd); });
+  constexpr uint32_t kBufferSize = 1024 * 1024;
+  auto buffer = mozilla::MakeUnique<uint8_t[]>(kBufferSize);
+  if (!buffer) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+  PRInt32 bytesRead = PR_Read(fd, buffer.get(), kBufferSize);
+  while (bytesRead != 0) {
+    if (bytesRead == -1) {
+      return NS_ERROR_DOM_FILE_NOT_READABLE_ERR;
+    }
+    digest.Update(mozilla::Span<const uint8_t>(buffer.get(), bytesRead));
+    bytesRead = PR_Read(fd, buffer.get(), kBufferSize);
+  }
+  nsTArray<uint8_t> digestResults;
+  rv = digest.End(digestResults);
+  NS_ENSURE_SUCCESS(rv, rv);
+  aDigestString = mozilla::ToHexString(digestResults);
+  return NS_OK;
 }
 
 static nsresult ConvertToProtobuf(
@@ -557,6 +595,11 @@ void ContentAnalysisResponse::SetOwner(RefPtr<ContentAnalysis> aOwner) {
   mOwner = std::move(aOwner);
 }
 
+void ContentAnalysisResponse::ResolveWarnAction(bool aAllowContent) {
+  MOZ_ASSERT(mAction == Action::eWarn);
+  mAction = aAllowContent ? Action::eAllow : Action::eBlock;
+}
+
 ContentAnalysisAcknowledgement::ContentAnalysisAcknowledgement(
     Result aResult, FinalAction aFinalAction)
     : mResult(aResult), mFinalAction(aFinalAction) {}
@@ -616,7 +659,8 @@ ContentAnalysis::ContentAnalysis()
     : mCaClientPromise(
           new ClientPromise::Private("ContentAnalysis::ContentAnalysis")),
       mClientCreationAttempted(false),
-      mCallbackMap("ContentAnalysis::mCallbackMap") {}
+      mCallbackMap("ContentAnalysis::mCallbackMap"),
+      mWarnResponseDataMap("ContentAnalysis::mWarnResponseDataMap") {}
 
 ContentAnalysis::~ContentAnalysis() {
   // Accessing mClientCreationAttempted so need to be on the main thread
@@ -788,6 +832,25 @@ void ContentAnalysis::DoAnalyzeRequest(
     owner->CancelWithError(std::move(aRequestToken), NS_ERROR_NOT_AVAILABLE);
     return;
   }
+
+  if (aRequest.has_file_path() && !aRequest.file_path().empty() &&
+      (!aRequest.request_data().has_digest() ||
+       aRequest.request_data().digest().empty())) {
+    // Calculate the digest
+    nsCString digest;
+    nsCString fileCPath(aRequest.file_path().data(),
+                        aRequest.file_path().length());
+    nsString filePath = NS_ConvertUTF8toUTF16(fileCPath);
+    nsresult rv = ContentAnalysisRequest::GetFileDigest(filePath, digest);
+    if (NS_FAILED(rv)) {
+      owner->CancelWithError(std::move(aRequestToken), rv);
+      return;
+    }
+    if (!digest.IsEmpty()) {
+      aRequest.mutable_request_data()->set_digest(digest.get());
+    }
+  }
+
   {
     auto callbackMap = owner->mCallbackMap.Lock();
     if (!callbackMap->Contains(aRequestToken)) {
@@ -855,12 +918,8 @@ void ContentAnalysis::DoAnalyzeRequest(
               "because it was already cancelled for token %s",
               responseRequestToken.get());
           // Note that we always acknowledge here, even if
-          // autoAcknowledge isn't set. From the caller's perspective
-          // the request has already been
-          // cancelled and the caller isn't going to get any
-          // notification that the DLP agent sent a response, so
-          // the caller wouldn't be able to send an
-          // acknowledgment.
+          // autoAcknowledge isn't set, since we raise an exception
+          // at the caller on cancellation.
           auto acknowledgement = MakeRefPtr<ContentAnalysisAcknowledgement>(
               nsIContentAnalysisAcknowledgement::Result::eTooLate,
               nsIContentAnalysisAcknowledgement::FinalAction::eBlock);
@@ -872,12 +931,22 @@ void ContentAnalysis::DoAnalyzeRequest(
             "Content analysis resolving response promise for "
             "token %s",
             responseRequestToken.get());
+        nsIContentAnalysisResponse::Action action = response->GetAction();
         nsCOMPtr<nsIObserverService> obsServ =
             mozilla::services::GetObserverService();
+        if (action == nsIContentAnalysisResponse::Action::eWarn) {
+          {
+            auto warnResponseDataMap = owner->mWarnResponseDataMap.Lock();
+            warnResponseDataMap->InsertOrUpdate(
+                responseRequestToken,
+                WarnResponseData(std::move(*maybeCallbackData), response));
+          }
+          obsServ->NotifyObservers(response, "dlp-response", nullptr);
+          return;
+        }
 
         obsServ->NotifyObservers(response, "dlp-response", nullptr);
         if (maybeCallbackData->AutoAcknowledge()) {
-          nsIContentAnalysisResponse::Action action = response->GetAction();
           auto acknowledgement = MakeRefPtr<ContentAnalysisAcknowledgement>(
               nsIContentAnalysisAcknowledgement::Result::eSuccess,
               ConvertResult(action));
@@ -928,35 +997,77 @@ ContentAnalysis::AnalyzeContentRequestCallback(
 
 NS_IMETHODIMP
 ContentAnalysis::CancelContentAnalysisRequest(const nsACString& aRequestToken) {
+  MOZ_ASSERT(NS_IsMainThread());
+  nsCString requestToken(aRequestToken);
+
+  auto callbackMap = mCallbackMap.Lock();
+  auto entry = callbackMap->Lookup(requestToken);
+  LOGD("Content analysis cancelling request %s", requestToken.get());
+  // Make sure the entry hasn't been cancelled already
+  if (entry && !entry->Canceled()) {
+    nsMainThreadPtrHandle<nsIContentAnalysisCallback> callbackHolder =
+        entry->TakeCallbackHolder();
+    entry->SetCanceled();
+    // Should only be called once
+    MOZ_ASSERT(callbackHolder);
+    if (callbackHolder) {
+      callbackHolder->Error(NS_ERROR_ABORT);
+    }
+  } else {
+    LOGD("Content analysis request not found when trying to cancel %s",
+         requestToken.get());
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ContentAnalysis::RespondToWarnDialog(const nsACString& aRequestToken,
+                                     bool aAllowContent) {
+  nsCString requestToken(aRequestToken);
   NS_DispatchToMainThread(NS_NewCancelableRunnableFunction(
-      "CancelContentAnalysisRequest",
-      [requestToken = nsCString{aRequestToken}]() {
+      "RespondToWarnDialog",
+      [aAllowContent, requestToken = std::move(requestToken)]() {
         RefPtr<ContentAnalysis> self = GetContentAnalysisFromService();
         if (!self) {
           // May be shutting down
           return;
         }
 
-        auto callbackMap = self->mCallbackMap.Lock();
-        auto entry = callbackMap->Lookup(requestToken);
-        LOGD("Content analysis cancelling request %s", requestToken.get());
-        // Make sure the entry hasn't been cancelled already
-        if (entry && !entry->Canceled()) {
-          RefPtr<ContentAnalysisResponse> cancelResponse =
-              ContentAnalysisResponse::FromAction(
-                  nsIContentAnalysisResponse::Action::eCanceled, requestToken);
-          cancelResponse->SetOwner(self);
-          nsMainThreadPtrHandle<nsIContentAnalysisCallback> callbackHolder =
-              entry->TakeCallbackHolder();
-          entry->SetCanceled();
-          // Should only be called once
-          MOZ_ASSERT(callbackHolder);
-          if (callbackHolder) {
-            callbackHolder->ContentResult(cancelResponse.get());
-          }
+        LOGD("Content analysis getting warn response %d for request %s",
+             aAllowContent ? 1 : 0, requestToken.get());
+        Maybe<WarnResponseData> entry;
+        {
+          auto warnResponseDataMap = self->mWarnResponseDataMap.Lock();
+          entry = warnResponseDataMap->Extract(requestToken);
+        }
+        if (!entry) {
+          LOGD(
+              "Content analysis request not found when trying to send warn "
+              "response for request %s",
+              requestToken.get());
+          return;
+        }
+        entry->mResponse->ResolveWarnAction(aAllowContent);
+        auto action = entry->mResponse->GetAction();
+        if (entry->mCallbackData.AutoAcknowledge()) {
+          RefPtr<ContentAnalysisAcknowledgement> acknowledgement =
+              new ContentAnalysisAcknowledgement(
+                  nsIContentAnalysisAcknowledgement::Result::eSuccess,
+                  ConvertResult(action));
+          entry->mResponse->Acknowledge(acknowledgement);
+        }
+        nsMainThreadPtrHandle<nsIContentAnalysisCallback> callbackHolder =
+            entry->mCallbackData.TakeCallbackHolder();
+        if (callbackHolder) {
+          RefPtr<ContentAnalysisResponse> response =
+              ContentAnalysisResponse::FromAction(action, requestToken);
+          response->SetOwner(self);
+          callbackHolder.get()->ContentResult(response.get());
         } else {
-          LOGD("Content analysis request not found when trying to cancel %s",
-               requestToken.get());
+          LOGD(
+              "Content analysis had no callback to send warn final response "
+              "to for request %s",
+              requestToken.get());
         }
       }));
   return NS_OK;

@@ -27,6 +27,10 @@
 #include "SpecialSystemDirectory.h"  // For temp dir
 #include "WMFUtils.h"
 
+#ifdef MOZ_WMF_CDM_LPAC_SANDBOX
+#  include "sandboxBroker.h"
+#endif
+
 using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::MakeAndInitialize;
 
@@ -365,10 +369,10 @@ MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
       mKeyMessageEvents(aManagerThread),
       mKeyChangeEvents(aManagerThread),
       mExpirationEvents(aManagerThread) {
-  // TODO : add ClearKey CDM support
   MOZ_ASSERT(IsPlayReadyKeySystemAndSupported(aKeySystem) ||
              IsWidevineExperimentKeySystemAndSupported(aKeySystem) ||
-             IsWidevineKeySystem(mKeySystem));
+             IsWidevineKeySystem(mKeySystem) ||
+             IsWMFClearKeySystemAndSupported(aKeySystem));
   MOZ_ASSERT(aManager);
   MOZ_ASSERT(aManagerThread);
   MOZ_ASSERT(XRE_IsUtilityProcess());
@@ -430,15 +434,18 @@ MFCDMParent::~MFCDMParent() {
 
 /* static */
 LPCWSTR MFCDMParent::GetCDMLibraryName(const nsString& aKeySystem) {
+  if (IsWMFClearKeySystemAndSupported(aKeySystem) ||
+      StaticPrefs::media_eme_wmf_use_mock_cdm_for_external_cdms()) {
+    return L"wmfclearkey.dll";
+  }
   // PlayReady is a built-in CDM on Windows, no need to load external library.
   if (IsPlayReadyKeySystemAndSupported(aKeySystem)) {
     return L"";
   }
   if (IsWidevineExperimentKeySystemAndSupported(aKeySystem) ||
       IsWidevineKeySystem(aKeySystem)) {
-    return sWidevineL1Path;
+    return sWidevineL1Path ? sWidevineL1Path : L"L1-not-found";
   }
-  // TODO : support ClearKey
   return L"Unknown";
 }
 
@@ -487,15 +494,18 @@ HRESULT MFCDMParent::LoadFactory(
     MFCDM_RETURN_IF_FAILED(clsFactory->CreateContentDecryptionModuleFactory(
         MapKeySystem(aKeySystem).get(), IID_PPV_ARGS(&cdmFactory)));
     aFactoryOut.Swap(cdmFactory);
-    MFCDM_PARENT_SLOG("Loaded CDM from platform!");
+    MFCDM_PARENT_SLOG("Created factory for %s from platform!",
+                      NS_ConvertUTF16toUTF8(aKeySystem).get());
     return S_OK;
   }
 
   HMODULE handle = LoadLibraryW(libraryName);
   if (!handle) {
-    MFCDM_PARENT_SLOG("Failed to load library %ls!", libraryName);
+    MFCDM_PARENT_SLOG("Failed to load library %ls! (error=%lx)", libraryName,
+                      GetLastError());
     return E_FAIL;
   }
+  MFCDM_PARENT_SLOG("Loaded external library '%ls'", libraryName);
 
   using DllGetActivationFactoryFunc =
       HRESULT(WINAPI*)(_In_ HSTRING, _COM_Outptr_ IActivationFactory**);
@@ -511,11 +521,16 @@ HRESULT MFCDMParent::LoadFactory(
   // "<key_system>.ContentDecryptionModuleFactory". In addition, when querying
   // factory, need to use original Widevine key system name.
   nsString stringId;
-  if (IsWidevineExperimentKeySystemAndSupported(aKeySystem) ||
-      IsWidevineKeySystem(aKeySystem)) {
+  if (StaticPrefs::media_eme_wmf_use_mock_cdm_for_external_cdms() ||
+      IsWMFClearKeySystemAndSupported(aKeySystem)) {
+    stringId.AppendLiteral("org.w3.clearkey");
+  } else if (IsWidevineExperimentKeySystemAndSupported(aKeySystem) ||
+             IsWidevineKeySystem(aKeySystem)) {
+    // Widevine's DLL expects "<key_system>.ContentDecryptionModuleFactory" for
+    // the class Id.
     stringId.AppendLiteral("com.widevine.alpha.ContentDecryptionModuleFactory");
   }
-  MFCDM_PARENT_SLOG("Query factory by classId '%s",
+  MFCDM_PARENT_SLOG("Query factory by classId '%s'",
                     NS_ConvertUTF16toUTF8(stringId).get());
   ScopedHString classId(stringId);
   ComPtr<IActivationFactory> pFactory = NULL;
@@ -526,7 +541,8 @@ HRESULT MFCDMParent::LoadFactory(
   MFCDM_RETURN_IF_FAILED(pFactory->ActivateInstance(&pInspectable));
   MFCDM_RETURN_IF_FAILED(pInspectable.As(&cdmFactory));
   aFactoryOut.Swap(cdmFactory);
-  MFCDM_PARENT_SLOG("Loaded %ls CDM from external library!", libraryName);
+  MFCDM_PARENT_SLOG("Created factory for %s from external library!",
+                    NS_ConvertUTF16toUTF8(aKeySystem).get());
   return S_OK;
 }
 
@@ -1099,7 +1115,8 @@ already_AddRefed<MFCDMProxy> MFCDMParent::GetMFCDMProxy() {
 }
 
 /* static */
-void MFCDMCapabilities::GetAllKeySystemsCapabilities(dom::Promise* aPromise) {
+void MFCDMService::GetAllKeySystemsCapabilities(dom::Promise* aPromise) {
+  MOZ_ASSERT(XRE_IsParentProcess());
   const static auto kSandboxKind = ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM;
   LaunchMFCDMProcessIfNeeded(kSandboxKind)
       ->Then(
@@ -1119,8 +1136,9 @@ void MFCDMCapabilities::GetAllKeySystemsCapabilities(dom::Promise* aPromise) {
 }
 
 /* static */
-RefPtr<GenericNonExclusivePromise>
-MFCDMCapabilities::LaunchMFCDMProcessIfNeeded(ipc::SandboxingKind aSandbox) {
+RefPtr<GenericNonExclusivePromise> MFCDMService::LaunchMFCDMProcessIfNeeded(
+    ipc::SandboxingKind aSandbox) {
+  MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(aSandbox == ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM);
   RefPtr<ipc::UtilityProcessManager> utilityProc =
       ipc::UtilityProcessManager::GetSingleton();
@@ -1166,6 +1184,43 @@ MFCDMCapabilities::LaunchMFCDMProcessIfNeeded(ipc::SandboxingKind aSandbox) {
             return GenericNonExclusivePromise::CreateAndReject(NS_ERROR_FAILURE,
                                                                __func__);
           });
+}
+
+/* static */
+void MFCDMService::UpdateWidevineL1Path(nsIFile* aFile) {
+  RefPtr<ipc::UtilityProcessManager> utilityProc =
+      ipc::UtilityProcessManager::GetSingleton();
+  if (NS_WARN_IF(!utilityProc)) {
+    NS_WARNING("Failed to get UtilityProcessManager");
+    return;
+  }
+
+  // If the MFCDM process hasn't been created yet, then we will set the path
+  // when creating the process later.
+  const auto sandboxKind = ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM;
+  if (!utilityProc->Process(sandboxKind)) {
+    return;
+  }
+
+  // The MFCDM process has been started, we need to update its L1 path and set
+  // the permission for LPAC.
+  nsString widevineL1Path;
+  MOZ_ASSERT(aFile);
+  if (NS_WARN_IF(NS_FAILED(aFile->GetTarget(widevineL1Path)))) {
+    NS_WARNING("MFCDMService::UpdateWidevineL1Path, Failed to get L1 path!");
+    return;
+  }
+
+  RefPtr<ipc::UtilityAudioDecoderChild> uadc =
+      ipc::UtilityAudioDecoderChild::GetSingleton(sandboxKind);
+  if (NS_WARN_IF(!uadc)) {
+    NS_WARNING("Failed to get UtilityAudioDecoderChild");
+    return;
+  }
+  Unused << uadc->SendUpdateWidevineL1Path(widevineL1Path);
+#ifdef MOZ_WMF_CDM_LPAC_SANDBOX
+  SandboxBroker::EnsureLpacPermsissionsOnDir(widevineL1Path);
+#endif
 }
 
 #undef MFCDM_REJECT_IF_FAILED

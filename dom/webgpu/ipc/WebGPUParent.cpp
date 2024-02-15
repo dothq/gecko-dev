@@ -10,7 +10,6 @@
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/RemoteTextureMap.h"
-#include "mozilla/layers/TextureClientSharedSurface.h"
 #include "mozilla/layers/TextureHost.h"
 #include "mozilla/layers/WebRenderImageHost.h"
 #include "mozilla/layers/WebRenderTextureHost.h"
@@ -50,12 +49,24 @@ extern void* wgpu_server_get_external_texture_handle(void* aParam,
                                                      WGPUTextureId aId) {
   auto* parent = static_cast<WebGPUParent*>(aParam);
 
-  auto externalTexture = parent->GetExternalTexture(aId);
-  if (!externalTexture) {
+  auto texture = parent->GetExternalTexture(aId);
+  if (!texture) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
     return nullptr;
   }
-  return externalTexture->GetExternalTextureHandle();
+
+  void* sharedHandle = nullptr;
+#ifdef XP_WIN
+  sharedHandle = texture->GetExternalTextureHandle();
+  if (!sharedHandle) {
+    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+    gfxCriticalNoteOnce << "Failed to get shared handle";
+    return nullptr;
+  }
+#else
+  MOZ_ASSERT_UNREACHABLE("unexpected to be called");
+#endif
+  return sharedHandle;
 }
 
 }  // namespace ffi
@@ -890,8 +901,7 @@ ipc::IPCResult WebGPUParent::RecvDeviceCreateSwapChain(
     mRemoteTextureOwner =
         MakeRefPtr<layers::RemoteTextureOwnerClient>(OtherPid());
   }
-  // RemoteTextureMap::GetRemoteTextureForDisplayList() works synchronously.
-  mRemoteTextureOwner->RegisterTextureOwner(aOwnerId, /* aIsSyncMode */ true);
+  mRemoteTextureOwner->RegisterTextureOwner(aOwnerId);
 
   auto data =
       MakeRefPtr<PresentationData>(aUseExternalTextureInSwapChain, aDeviceId,
@@ -992,7 +1002,7 @@ static void ReadbackPresentCallback(ffi::WGPUBufferMapAsyncStatus status,
     MOZ_ASSERT(mapped.length >= bufferSize);
     auto textureData =
         req->mRemoteTextureOwner->CreateOrRecycleBufferTextureData(
-            req->mOwnerId, data->mDesc.size(), data->mDesc.format());
+            data->mDesc.size(), data->mDesc.format(), req->mOwnerId);
     if (!textureData) {
       gfxCriticalNoteOnce << "Failed to allocate BufferTextureData";
       return;
@@ -1069,16 +1079,13 @@ void WebGPUParent::PostExternalTexture(
     return;
   }
 
-  auto textureData =
-      MakeUnique<layers::SharedSurfaceTextureData>(*desc, surfaceFormat, size);
-
-  mRemoteTextureOwner->PushTexture(aRemoteTextureId, aOwnerId,
-                                   std::move(textureData), aExternalTexture);
+  mRemoteTextureOwner->PushTexture(aRemoteTextureId, aOwnerId, aExternalTexture,
+                                   size, surfaceFormat, *desc);
 
   RefPtr<PresentationData> data = lookup->second.get();
 
-  auto recycledTexture =
-      mRemoteTextureOwner->GetRecycledExternalTexture(aOwnerId);
+  auto recycledTexture = mRemoteTextureOwner->GetRecycledExternalTexture(
+      size, surfaceFormat, desc->type(), aOwnerId);
   if (recycledTexture) {
     data->mRecycledExternalTextures.push_back(recycledTexture);
   }
@@ -1459,13 +1466,6 @@ std::shared_ptr<ExternalTexture> WebGPUParent::CreateExternalTexture(
       ExternalTexture::Create(aWidth, aHeight, aFormat, aUsage);
   if (!texture) {
     MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-    return nullptr;
-  }
-
-  auto* sharedHandle = texture->GetExternalTextureHandle();
-  if (!sharedHandle) {
-    MOZ_ASSERT_UNREACHABLE("unexpected to be called");
-    gfxCriticalNoteOnce << "Failed to get shared handle";
     return nullptr;
   }
 

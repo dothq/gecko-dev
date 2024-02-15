@@ -109,13 +109,12 @@ browsertime-tp6:
                         - --extra-profiler-run
         run-on-projects:
             by-subtest:
-                netflix:  # Bug 1756212 - Disable temporarily due to perma on mac
+                netflix:
                     by-app:
                         firefox:
                             by-test-platform:
                                 windows.*-32.*: []
-                                (linux|windows10-64).*shippable-qr.*: [trunk, mozilla-beta, mozilla-release]
-                                macosx1015.*shippable-qr.*: []
+                                (macosx1015|linux|windows10-64).*shippable-qr.*: [trunk, mozilla-beta, mozilla-release]
                                 default: []
                         default: []
                 default:
@@ -347,14 +346,44 @@ browsertime-benchmark:
                             - [speedometer3, sp3]
                             - [motionmark-animometer-ramp, mm-ar]
                             - [motionmark-htmlsuite-ramp, mm-hr]
+                        chrome:
+                            by-test-platform:
+                                macosx1015.*shippable.*:
+                                    - ares6
+                                    - [assorted-dom, dom]
+                                    - [jetstream2, js2]
+                                    - [matrix-react-bench, mrb]
+                                    - [motionmark-animometer, mm-a]
+                                    - [motionmark-htmlsuite, mm-h]
+                                    - [speedometer, sp]
+                                    - [speedometer3, sp3]
+                                    - [stylebench, sb]
+                                    - [sunspider, ss]
+                                    - [unity-webgl, ugl]
+                                    - [webaudio, wa]
+                                default:
+                                    - ares6
+                                    - [assorted-dom, dom]
+                                    - [jetstream2, js2]
+                                    - [matrix-react-bench, mrb]
+                                    - [motionmark-animometer, mm-a]
+                                    - [motionmark-animometer-ramp, mm-ar]
+                                    - [motionmark-htmlsuite, mm-h]
+                                    - [motionmark-htmlsuite-ramp, mm-hr]
+                                    - [speedometer, sp]
+                                    - [speedometer3, sp3]
+                                    - [stylebench, sb]
+                                    - [sunspider, ss]
+                                    - [unity-webgl, ugl]
+                                    - [webaudio, wa]
                         default:
                             - ares6
                             - [assorted-dom, dom]
                             - [jetstream2, js2]
                             - [matrix-react-bench, mrb]
                             - [motionmark-animometer, mm-a]
-                            - [motionmark-htmlsuite, mm-h]
                             - [motionmark-animometer-ramp, mm-ar]
+                            - [motionmark-htmlsuite, mm-h]
                             - [motionmark-htmlsuite-ramp, mm-hr]
                             - [speedometer, sp]
                             - [speedometer3, sp3]
@@ -365,10 +394,6 @@ browsertime-benchmark:
     treeherder-symbol: Btime()
     tier:
         by-app:
-            custom-car:
-                by-test-platform:
-                    macosx1300.*shippable.*: 3
-                    default: 2
             firefox:
                 by-subtest:
                     motionmark-animometer:
@@ -394,14 +419,18 @@ browsertime-benchmark:
                             .*64.*shippable-qr/.*: [trunk, mozilla-release]
                             .*nightlyasrelease.*: [autoland]
                             default: []
-                    custom-car: [mozilla-central]
+                    custom-car:
+                        by-test-platform:
+                            (linux|windows10-64).*shippable-qr.*: [mozilla-central]
+                            default: []
                     default: []
             unity-webgl:
                 by-app:
                     firefox:
                         by-test-platform:
                             windows.*-32.*: []
-                            .*64.*shippable-qr/.*: [trunk, mozilla-release]
+                            # Disabled on autoland due to bug 1720063, and bug 1795826
+                            .*64.*shippable-qr/.*: [mozilla-central]
                             default: []
                     default: []
             speedometer:
@@ -412,7 +441,10 @@ browsertime-benchmark:
                             .*64.*shippable-qr/.*: [trunk, mozilla-beta, mozilla-release]
                             .*nightlyasrelease.*: [autoland]
                             default: []
-                    custom-car: [mozilla-central]
+                    custom-car:
+                        by-test-platform:
+                            (linux|windows10-64).*shippable-qr.*: [mozilla-central]
+                            default: []
                     default: []
             default:
                 by-app:
@@ -599,7 +631,7 @@ browsertime-tp6-live:
                     - [google-slides, gslides]
                     - imdb
                     # - imgur (see bugs 1825337 & 1817420)
-                    # - instagram (see bug 1736999)
+                    - instagram
                     - linkedin
                     - microsoft
                     - netflix
@@ -626,7 +658,7 @@ browsertime-tp6-live:
                     - [google-slides, gslides]
                     - imdb
                     - imgur
-                    # - instagram (see bug 1736999)
+                    - instagram
                     - linkedin
                     - microsoft
                     - netflix

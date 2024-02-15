@@ -641,12 +641,11 @@ void MacroAssembler::bumpPointerAllocate(Register result, Register temp,
     storePtr(ImmWord(headerWord),
              Address(result, -js::Nursery::nurseryCellHeaderSize()));
 
-    // Update the catch all allocation site for strings or if the profiler is
-    // enabled. This is used to calculate the nursery allocation count. The
-    // string data is used to determine whether to disable nursery string
-    // allocation.
-    if (traceKind == JS::TraceKind::String ||
+    if (traceKind != JS::TraceKind::Object ||
         runtime()->geckoProfiler().enabled()) {
+      // Update the catch all allocation site, which his is used to calculate
+      // nursery allocation counts so we can determine whether to disable
+      // nursery allocation of strings and bigints.
       uint32_t* countAddress = site->nurseryAllocCountAddress();
       CheckedInt<int32_t> counterOffset =
           (CheckedInt<uintptr_t>(uintptr_t(countAddress)) -
@@ -1492,7 +1491,9 @@ void MacroAssembler::loadStringChar(Register str, Register index,
   MOZ_ASSERT(output != scratch2);
 
   // Use scratch1 for the index (adjusted below).
-  move32(index, scratch1);
+  if (index != scratch1) {
+    move32(index, scratch1);
+  }
   movePtr(str, output);
 
   // This follows JSString::getChar.
@@ -1532,6 +1533,46 @@ void MacroAssembler::loadStringChar(Register str, Register index,
   loadChar(scratch2, scratch1, output, CharEncoding::Latin1);
 
   bind(&done);
+}
+
+void MacroAssembler::loadStringChar(Register str, int32_t index,
+                                    Register output, Register scratch1,
+                                    Register scratch2, Label* fail) {
+  MOZ_ASSERT(str != output);
+  MOZ_ASSERT(output != scratch1);
+  MOZ_ASSERT(output != scratch2);
+
+  if (index == 0) {
+    movePtr(str, scratch1);
+
+    // This follows JSString::getChar.
+    Label notRope;
+    branchIfNotRope(str, &notRope);
+
+    loadRopeLeftChild(str, scratch1);
+
+    // Rope children can't be empty, so the index can't be in the right side.
+
+    // If the left side is another rope, give up.
+    branchIfRope(scratch1, fail);
+
+    bind(&notRope);
+
+    Label isLatin1, done;
+    branchLatin1String(scratch1, &isLatin1);
+    loadStringChars(scratch1, scratch2, CharEncoding::TwoByte);
+    loadChar(Address(scratch2, 0), output, CharEncoding::TwoByte);
+    jump(&done);
+
+    bind(&isLatin1);
+    loadStringChars(scratch1, scratch2, CharEncoding::Latin1);
+    loadChar(Address(scratch2, 0), output, CharEncoding::Latin1);
+
+    bind(&done);
+  } else {
+    move32(Imm32(index), scratch1);
+    loadStringChar(str, scratch1, output, scratch1, scratch2, fail);
+  }
 }
 
 void MacroAssembler::loadStringIndexValue(Register str, Register dest,
@@ -1592,10 +1633,68 @@ void MacroAssembler::loadLengthTwoString(Register c1, Register c2,
   loadPtr(BaseIndex(dest, c1, ScalePointer), dest);
 }
 
+void MacroAssembler::lookupStaticString(Register ch, Register dest,
+                                        const StaticStrings& staticStrings) {
+  MOZ_ASSERT(ch != dest);
+
+  movePtr(ImmPtr(&staticStrings.unitStaticTable), dest);
+  loadPtr(BaseIndex(dest, ch, ScalePointer), dest);
+}
+
+void MacroAssembler::lookupStaticString(Register ch, Register dest,
+                                        const StaticStrings& staticStrings,
+                                        Label* fail) {
+  MOZ_ASSERT(ch != dest);
+
+  boundsCheck32PowerOfTwo(ch, StaticStrings::UNIT_STATIC_LIMIT, fail);
+  movePtr(ImmPtr(&staticStrings.unitStaticTable), dest);
+  loadPtr(BaseIndex(dest, ch, ScalePointer), dest);
+}
+
+void MacroAssembler::lookupStaticString(Register ch1, Register ch2,
+                                        Register dest,
+                                        const StaticStrings& staticStrings,
+                                        Label* fail) {
+  MOZ_ASSERT(ch1 != dest);
+  MOZ_ASSERT(ch2 != dest);
+
+  branch32(Assembler::AboveOrEqual, ch1,
+           Imm32(StaticStrings::SMALL_CHAR_TABLE_SIZE), fail);
+  branch32(Assembler::AboveOrEqual, ch2,
+           Imm32(StaticStrings::SMALL_CHAR_TABLE_SIZE), fail);
+
+  movePtr(ImmPtr(&StaticStrings::toSmallCharTable.storage), dest);
+  load8ZeroExtend(BaseIndex(dest, ch1, Scale::TimesOne), ch1);
+  load8ZeroExtend(BaseIndex(dest, ch2, Scale::TimesOne), ch2);
+
+  branch32(Assembler::Equal, ch1, Imm32(StaticStrings::INVALID_SMALL_CHAR),
+           fail);
+  branch32(Assembler::Equal, ch2, Imm32(StaticStrings::INVALID_SMALL_CHAR),
+           fail);
+
+  lshift32(Imm32(StaticStrings::SMALL_CHAR_BITS), ch1);
+  add32(ch2, ch1);
+
+  // Look up the string from the computed index.
+  movePtr(ImmPtr(&staticStrings.length2StaticTable), dest);
+  loadPtr(BaseIndex(dest, ch1, ScalePointer), dest);
+}
+
+void MacroAssembler::lookupStaticIntString(Register integer, Register dest,
+                                           Register scratch,
+                                           const StaticStrings& staticStrings,
+                                           Label* fail) {
+  MOZ_ASSERT(integer != scratch);
+
+  boundsCheck32PowerOfTwo(integer, StaticStrings::INT_STATIC_LIMIT, fail);
+  movePtr(ImmPtr(&staticStrings.intStaticTable), scratch);
+  loadPtr(BaseIndex(scratch, integer, ScalePointer), dest);
+}
+
 void MacroAssembler::loadInt32ToStringWithBase(
     Register input, Register base, Register dest, Register scratch1,
     Register scratch2, const StaticStrings& staticStrings,
-    const LiveRegisterSet& volatileRegs, Label* fail) {
+    const LiveRegisterSet& volatileRegs, bool lowerCase, Label* fail) {
 #ifdef DEBUG
   Label baseBad, baseOk;
   branch32(Assembler::LessThan, base, Imm32(2), &baseBad);
@@ -1606,7 +1705,7 @@ void MacroAssembler::loadInt32ToStringWithBase(
 #endif
 
   // Compute |"0123456789abcdefghijklmnopqrstuvwxyz"[r]|.
-  auto toChar = [this, base](Register r) {
+  auto toChar = [this, base, lowerCase](Register r) {
 #ifdef DEBUG
     Label ok;
     branch32(Assembler::Below, r, base, &ok);
@@ -1620,7 +1719,7 @@ void MacroAssembler::loadInt32ToStringWithBase(
     Label done;
     add32(Imm32('0'), r);
     branch32(Assembler::BelowOrEqual, r, Imm32('9'), &done);
-    add32(Imm32('a' - '0' - 10), r);
+    add32(Imm32((lowerCase ? 'a' : 'A') - '0' - 10), r);
     bind(&done);
   };
 
@@ -1660,11 +1759,12 @@ void MacroAssembler::loadInt32ToStringWithBase(
 
 void MacroAssembler::loadInt32ToStringWithBase(
     Register input, int32_t base, Register dest, Register scratch1,
-    Register scratch2, const StaticStrings& staticStrings, Label* fail) {
+    Register scratch2, const StaticStrings& staticStrings, bool lowerCase,
+    Label* fail) {
   MOZ_ASSERT(2 <= base && base <= 36, "base must be in range [2, 36]");
 
   // Compute |"0123456789abcdefghijklmnopqrstuvwxyz"[r]|.
-  auto toChar = [this, base](Register r) {
+  auto toChar = [this, base, lowerCase](Register r) {
 #ifdef DEBUG
     Label ok;
     branch32(Assembler::Below, r, Imm32(base), &ok);
@@ -1678,7 +1778,7 @@ void MacroAssembler::loadInt32ToStringWithBase(
       Label done;
       add32(Imm32('0'), r);
       branch32(Assembler::BelowOrEqual, r, Imm32('9'), &done);
-      add32(Imm32('a' - '0' - 10), r);
+      add32(Imm32((lowerCase ? 'a' : 'A') - '0' - 10), r);
       bind(&done);
     }
   };
@@ -2302,6 +2402,13 @@ void MacroAssembler::switchToRealm(Register realm) {
   storePtr(realm, AbsoluteAddress(ContextRealmPtr(runtime())));
 }
 
+void MacroAssembler::loadRealmFuse(RealmFuses::FuseIndex index, Register dest) {
+  // Load Realm pointer
+  loadPtr(AbsoluteAddress(ContextRealmPtr(runtime())), dest);
+  loadPtr(Address(dest, RealmFuses::offsetOfFuseWordRelativeToRealm(index)),
+          dest);
+}
+
 void MacroAssembler::switchToRealm(const void* realm, Register scratch) {
   MOZ_ASSERT(realm);
 
@@ -2905,11 +3012,11 @@ void MacroAssembler::emitMegamorphicCachedSetSlot(
   branchTest32(Assembler::Zero, scratch2, scratch2, &doAddDynamic);
 
   AllocatableRegisterSet regs(RegisterSet::Volatile());
-  LiveRegisterSet save(regs.asLiveSet());
+  regs.takeUnchecked(scratch2);
 
+  LiveRegisterSet save(regs.asLiveSet());
   PushRegsInMask(save);
 
-  regs.takeUnchecked(scratch2);
   Register tmp;
   if (regs.has(obj)) {
     regs.takeUnchecked(obj);
@@ -3224,7 +3331,7 @@ void MacroAssembler::generateBailoutTail(Register scratch,
     setupUnalignedABICall(temp);
     passABIArg(bailoutInfo);
     callWithABI<Fn, FinishBailoutToBaseline>(
-        MoveOp::GENERAL, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
+        ABIType::General, CheckUnsafeCallWithABI::DontCheckHasExitFrame);
     branchIfFalseBool(ReturnReg, exceptionLabel());
 
     // Restore values where they need to be and resume execution.
@@ -3322,7 +3429,7 @@ void MacroAssembler::assumeUnreachable(const char* output) {
     setupUnalignedABICall(temp);
     movePtr(ImmPtr(output), temp);
     passABIArg(temp);
-    callWithABI<Fn, AssumeUnreachable>(MoveOp::GENERAL,
+    callWithABI<Fn, AssumeUnreachable>(ABIType::General,
                                        CheckUnsafeCallWithABI::DontCheckOther);
 
     PopRegsInMask(save);
@@ -3469,14 +3576,14 @@ void MacroAssembler::outOfLineTruncateSlow(FloatRegister src, Register dest,
   if (compilingWasm) {
     int32_t instanceOffset = framePushed() - framePushedAfterInstance;
     setupWasmABICall();
-    passABIArg(src, MoveOp::DOUBLE);
+    passABIArg(src, ABIType::Float64);
     callWithABI(callOffset, wasm::SymbolicAddress::ToInt32,
                 mozilla::Some(instanceOffset));
   } else {
     using Fn = int32_t (*)(double);
     setupUnalignedABICall(dest);
-    passABIArg(src, MoveOp::DOUBLE);
-    callWithABI<Fn, JS::ToInt32>(MoveOp::GENERAL,
+    passABIArg(src, ABIType::Float64);
+    callWithABI<Fn, JS::ToInt32>(ABIType::General,
                                  CheckUnsafeCallWithABI::DontCheckOther);
   }
   storeCallInt32Result(dest);
@@ -4123,20 +4230,24 @@ void MacroAssembler::setupAlignedABICall() {
   dynamicAlignment_ = false;
 }
 
-void MacroAssembler::passABIArg(const MoveOperand& from, MoveOp::Type type) {
+void MacroAssembler::passABIArg(const MoveOperand& from, ABIType type) {
   MOZ_ASSERT(inCall_);
   appendSignatureType(type);
 
   ABIArg arg;
+  MoveOp::Type moveType;
   switch (type) {
-    case MoveOp::FLOAT32:
+    case ABIType::Float32:
       arg = abiArgs_.next(MIRType::Float32);
+      moveType = MoveOp::FLOAT32;
       break;
-    case MoveOp::DOUBLE:
+    case ABIType::Float64:
       arg = abiArgs_.next(MIRType::Double);
+      moveType = MoveOp::DOUBLE;
       break;
-    case MoveOp::GENERAL:
+    case ABIType::General:
       arg = abiArgs_.next(MIRType::Pointer);
+      moveType = MoveOp::GENERAL;
       break;
     default:
       MOZ_CRASH("Unexpected argument type");
@@ -4150,10 +4261,10 @@ void MacroAssembler::passABIArg(const MoveOperand& from, MoveOp::Type type) {
   if (oom()) {
     return;
   }
-  propagateOOM(moveResolver_.addMove(from, to, type));
+  propagateOOM(moveResolver_.addMove(from, to, moveType));
 }
 
-void MacroAssembler::callWithABINoProfiler(void* fun, MoveOp::Type result,
+void MacroAssembler::callWithABINoProfiler(void* fun, ABIType result,
                                            CheckUnsafeCallWithABI check) {
   appendSignatureType(result);
 #ifdef JS_SIMULATOR
@@ -4198,7 +4309,7 @@ void MacroAssembler::callWithABINoProfiler(void* fun, MoveOp::Type result,
 CodeOffset MacroAssembler::callWithABI(wasm::BytecodeOffset bytecode,
                                        wasm::SymbolicAddress imm,
                                        mozilla::Maybe<int32_t> instanceOffset,
-                                       MoveOp::Type result) {
+                                       ABIType result) {
   MOZ_ASSERT(wasm::NeedsBuiltinThunk(imm));
 
   uint32_t stackAdjust;
@@ -4220,7 +4331,7 @@ CodeOffset MacroAssembler::callWithABI(wasm::BytecodeOffset bytecode,
 }
 
 void MacroAssembler::callDebugWithABI(wasm::SymbolicAddress imm,
-                                      MoveOp::Type result) {
+                                      ABIType result) {
   MOZ_ASSERT(!wasm::NeedsBuiltinThunk(imm));
   uint32_t stackAdjust;
   callWithABIPre(&stackAdjust, /* callFromWasm = */ false);
@@ -4310,12 +4421,10 @@ void MacroAssembler::pow32(Register base, Register power, Register dest,
 void MacroAssembler::signInt32(Register input, Register output) {
   MOZ_ASSERT(input != output);
 
-  Label done;
   move32(input, output);
   rshift32Arithmetic(Imm32(31), output);
-  branch32(Assembler::LessThanOrEqual, input, Imm32(0), &done);
-  move32(Imm32(1), output);
-  bind(&done);
+  or32(Imm32(1), output);
+  cmp32Move32(Assembler::Equal, input, Imm32(0), input, output);
 }
 
 void MacroAssembler::signDouble(FloatRegister input, FloatRegister output) {
@@ -7633,18 +7742,7 @@ void MacroAssembler::prepareHashNonGCThing(ValueOperand value, Register result,
   move64(value.toRegister64(), r64);
   rshift64Arithmetic(Imm32(32), r64);
 #else
-  // TODO: This seems like a bug in mozilla::detail::AddUintptrToHash().
-  // The uint64_t input is first converted to uintptr_t and then back to
-  // uint64_t. But |uint64_t(uintptr_t(bits))| actually only clears the high
-  // bits, so this computation:
-  //
-  // aValue = uintptr_t(bits)
-  // v2 = static_cast<uint32_t>(static_cast<uint64_t>(aValue) >> 32)
-  //
-  // really just sets |v2 = 0|. And that means the xor-operation in AddU32ToHash
-  // can be optimized away, because |x ^ 0 = x|.
-  //
-  // Filed as bug 1718516.
+  move32(value.typeReg(), temp);
 #endif
 
   // mozilla::WrappingMultiply(kGoldenRatioU32, RotateLeft5(aHash) ^ aValue);
@@ -7654,9 +7752,7 @@ void MacroAssembler::prepareHashNonGCThing(ValueOperand value, Register result,
   // mozilla::WrappingMultiply(kGoldenRatioU32, RotateLeft5(aHash) ^ aValue);
   // with |aHash = <above hash>| and |aValue = v2|.
   rotateLeft(Imm32(5), result, result);
-#ifdef JS_PUNBOX64
   xor32(temp, result);
-#endif
 
   // Combine |mul32| and |scrambleHashCode| by directly multiplying with
   // |kGoldenRatioU32 * kGoldenRatioU32|.
@@ -7680,6 +7776,10 @@ void MacroAssembler::prepareHashString(Register str, Register result,
   bind(&ok);
 #endif
 
+#ifdef JS_64BIT
+  static_assert(FatInlineAtom::offsetOfHash() == NormalAtom::offsetOfHash());
+  load32(Address(str, NormalAtom::offsetOfHash()), result);
+#else
   move32(Imm32(JSString::FAT_INLINE_MASK), temp);
   and32(Address(str, JSString::offsetOfFlags()), temp);
 
@@ -7705,6 +7805,7 @@ void MacroAssembler::prepareHashString(Register str, Register result,
     load32(BaseIndex(str, result, TimesOne, NormalAtom::offsetOfHash()),
            result);
   }
+#endif
 
   scrambleHashCode(result);
 }

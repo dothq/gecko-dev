@@ -5,7 +5,6 @@ skip-if = ["toolkit == 'android'"] # bug 1730213
 prefs = [
   "browser.startup.homepage.abouthome_cache.enabled=true",
  "browser.startup.homepage.abouthome_cache.testing=true",
- "browser.attribution.macos.enabled=true",
 ]
 
 ["test_ASRouterTargeting_attribution.js"]
@@ -38,6 +37,8 @@ skip-if = ["socketprocess_networking"] # Bug 1759035
 ["test_OnboardingMessageProvider.js"]
 
 ["test_PanelTestProvider.js"]
+
+["test_TopSitesFeed_glean.js"]
 
 ["test_reach_experiments.js"]
 

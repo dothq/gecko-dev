@@ -24,6 +24,7 @@
 #include "mozilla/dom/HTMLCanvasElement.h"
 #include "mozilla/dom/GeneratePlaceholderCanvasData.h"
 #include "mozilla/dom/VideoFrame.h"
+#include "mozilla/gfx/CanvasManagerChild.h"
 #include "nsPresContext.h"
 
 #include "nsIInterfaceRequestorUtils.h"
@@ -64,7 +65,6 @@
 #include "nsIMemoryReporter.h"
 #include "nsStyleUtil.h"
 #include "CanvasImageCache.h"
-#include "DrawTargetWebgl.h"
 
 #include <algorithm>
 
@@ -97,6 +97,7 @@
 #include "mozilla/gfx/DataSurfaceHelpers.h"
 #include "mozilla/gfx/PatternHelpers.h"
 #include "mozilla/gfx/Swizzle.h"
+#include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layers/PersistentBufferProvider.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Preferences.h"
@@ -1131,7 +1132,13 @@ CanvasRenderingContext2D::~CanvasRenderingContext2D() {
   }
 }
 
-void CanvasRenderingContext2D::Initialize() { AddShutdownObserver(); }
+nsresult CanvasRenderingContext2D::Initialize() {
+  if (NS_WARN_IF(!AddShutdownObserver())) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return NS_OK;
+}
 
 JSObject* CanvasRenderingContext2D::WrapObject(
     JSContext* aCx, JS::Handle<JSObject*> aGivenProto) {
@@ -1219,8 +1226,6 @@ void CanvasRenderingContext2D::ResetBitmap(bool aFreeBuffer) {
 }
 
 void CanvasRenderingContext2D::OnShutdown() {
-  mShutdownObserver = nullptr;
-
   RefPtr<PersistentBufferProvider> provider = mBufferProvider;
 
   ResetBitmap();
@@ -1228,21 +1233,44 @@ void CanvasRenderingContext2D::OnShutdown() {
   if (provider) {
     provider->OnShutdown();
   }
+
+  if (mOffscreenCanvas) {
+    mOffscreenCanvas->Destroy();
+  }
+
+  mHasShutdown = true;
 }
 
-void CanvasRenderingContext2D::AddShutdownObserver() {
-  MOZ_ASSERT(!mShutdownObserver);
-  MOZ_ASSERT(NS_IsMainThread());
+bool CanvasRenderingContext2D::AddShutdownObserver() {
+  auto* const canvasManager = CanvasManagerChild::Get();
+  if (NS_WARN_IF(!canvasManager)) {
+    if (NS_IsMainThread()) {
+      mShutdownObserver = new CanvasShutdownObserver(this);
+      nsContentUtils::RegisterShutdownObserver(mShutdownObserver);
+      return true;
+    }
 
-  mShutdownObserver = new CanvasShutdownObserver(this);
-  nsContentUtils::RegisterShutdownObserver(mShutdownObserver);
+    mHasShutdown = true;
+    return false;
+  }
+
+  canvasManager->AddShutdownObserver(this);
+  return true;
 }
 
 void CanvasRenderingContext2D::RemoveShutdownObserver() {
   if (mShutdownObserver) {
     mShutdownObserver->OnShutdown();
     mShutdownObserver = nullptr;
+    return;
   }
+
+  auto* const canvasManager = CanvasManagerChild::MaybeGet();
+  if (!canvasManager) {
+    return;
+  }
+
+  canvasManager->RemoveShutdownObserver(this);
 }
 
 void CanvasRenderingContext2D::SetStyleFromString(const nsACString& aStr,
@@ -1357,6 +1385,7 @@ bool CanvasRenderingContext2D::CopyBufferProvider(
   }
 
   aTarget.CopySurface(snapshot, aCopyRect, IntPoint());
+
   aOld.ReturnSnapshot(snapshot.forget());
   return true;
 }
@@ -1463,7 +1492,8 @@ bool CanvasRenderingContext2D::BorrowTarget(const IntRect& aPersistedRect,
 bool CanvasRenderingContext2D::EnsureTarget(const gfx::Rect* aCoveredRect,
                                             bool aWillClear) {
   if (AlreadyShutDown()) {
-    gfxCriticalError() << "Attempt to render into a Canvas2d after shutdown.";
+    gfxCriticalErrorOnce()
+        << "Attempt to render into a Canvas2d after shutdown.";
     SetErrorState();
     return false;
   }
@@ -1579,6 +1609,9 @@ void CanvasRenderingContext2D::SetInitialState() {
   // Set up the initial canvas defaults
   mPathBuilder = nullptr;
   mPath = nullptr;
+  mPathPruned = false;
+  mPathTransform = Matrix();
+  mPathTransformDirty = false;
 
   mStyleStack.Clear();
   ContextState* state = mStyleStack.AppendElement();
@@ -1651,13 +1684,22 @@ bool CanvasRenderingContext2D::TryAcceleratedTarget(
   if (!mAllowAcceleration || GetEffectiveWillReadFrequently()) {
     return false;
   }
-  aOutDT = DrawTargetWebgl::Create(GetSize(), GetSurfaceFormat());
-  if (!aOutDT) {
+
+  if (!mCanvasElement) {
     return false;
   }
-
-  aOutProvider = new PersistentBufferProviderAccelerated(aOutDT);
-  return true;
+  WindowRenderer* renderer = WindowRendererFromCanvasElement(mCanvasElement);
+  if (!renderer) {
+    return false;
+  }
+  aOutProvider = PersistentBufferProviderAccelerated::Create(
+      GetSize(), GetSurfaceFormat(), renderer->AsKnowsCompositor());
+  if (!aOutProvider) {
+    return false;
+  }
+  aOutDT = aOutProvider->BorrowDrawTarget(IntRect());
+  MOZ_ASSERT(aOutDT);
+  return !!aOutDT;
 }
 
 bool CanvasRenderingContext2D::TrySharedTarget(
@@ -1665,10 +1707,6 @@ bool CanvasRenderingContext2D::TrySharedTarget(
     RefPtr<layers::PersistentBufferProvider>& aOutProvider) {
   aOutDT = nullptr;
   aOutProvider = nullptr;
-
-  if (!mCanvasElement) {
-    return false;
-  }
 
   if (mBufferProvider && mBufferProvider->IsShared()) {
     // we are already using a shared buffer provider, we are allocating a new
@@ -1678,15 +1716,26 @@ bool CanvasRenderingContext2D::TrySharedTarget(
     return false;
   }
 
-  WindowRenderer* renderer = WindowRendererFromCanvasElement(mCanvasElement);
+  if (mCanvasElement) {
+    WindowRenderer* renderer = WindowRendererFromCanvasElement(mCanvasElement);
+    if (!renderer) {
+      return false;
+    }
 
-  if (!renderer) {
-    return false;
+    aOutProvider = renderer->CreatePersistentBufferProvider(
+        GetSize(), GetSurfaceFormat(),
+        !mAllowAcceleration || GetEffectiveWillReadFrequently());
+  } else if (mOffscreenCanvas) {
+    RefPtr<layers::ImageBridgeChild> imageBridge =
+        layers::ImageBridgeChild::GetSingleton();
+    if (NS_WARN_IF(!imageBridge)) {
+      return false;
+    }
+
+    aOutProvider = layers::PersistentBufferProviderShared::Create(
+        GetSize(), GetSurfaceFormat(), imageBridge,
+        !mAllowAcceleration || GetEffectiveWillReadFrequently());
   }
-
-  aOutProvider = renderer->CreatePersistentBufferProvider(
-      GetSize(), GetSurfaceFormat(),
-      !mAllowAcceleration || GetEffectiveWillReadFrequently());
 
   if (!aOutProvider) {
     return false;
@@ -1855,6 +1904,10 @@ void CanvasRenderingContext2D::ReturnTarget(bool aForceReset) {
 NS_IMETHODIMP
 CanvasRenderingContext2D::InitializeWithDrawTarget(
     nsIDocShell* aShell, NotNull<gfx::DrawTarget*> aTarget) {
+  if (NS_WARN_IF(!AddShutdownObserver())) {
+    return NS_ERROR_FAILURE;
+  }
+
   RemovePostRefreshObserver();
   mDocShell = aShell;
   AddPostRefreshObserverIfNecessary();
@@ -2034,16 +2087,8 @@ void CanvasRenderingContext2D::Restore() {
 
   mStyleStack.RemoveLastElement();
 
-  Matrix newMatrix = CurrentState().transform;
-  Matrix adjustMatrix = mTarget->GetTransform();
-
-  Matrix inverse = newMatrix;
-  if (inverse.Invert()) {
-    adjustMatrix = adjustMatrix * inverse;
-  }
-  TransformCurrentPath(adjustMatrix);
-
-  mTarget->SetTransform(newMatrix);
+  mTarget->SetTransform(CurrentState().transform);
+  mPathTransformDirty = true;
 }
 
 //
@@ -2058,10 +2103,8 @@ void CanvasRenderingContext2D::Scale(double aX, double aY,
     return;
   }
 
-  TransformCurrentPath(Matrix::Scaling(1 / aX, 1 / aY));
   Matrix newMatrix = mTarget->GetTransform();
   newMatrix.PreScale(aX, aY);
-
   SetTransformInternal(newMatrix);
 }
 
@@ -2072,9 +2115,7 @@ void CanvasRenderingContext2D::Rotate(double aAngle, ErrorResult& aError) {
     return;
   }
 
-  TransformCurrentPath(Matrix::Rotation(-aAngle));
   Matrix newMatrix = Matrix::Rotation(aAngle) * mTarget->GetTransform();
-
   SetTransformInternal(newMatrix);
 }
 
@@ -2086,10 +2127,8 @@ void CanvasRenderingContext2D::Translate(double aX, double aY,
     return;
   }
 
-  TransformCurrentPath(Matrix::Translation(-aX, -aY));
   Matrix newMatrix = mTarget->GetTransform();
   newMatrix.PreTranslate(aX, aY);
-
   SetTransformInternal(newMatrix);
 }
 
@@ -2103,12 +2142,6 @@ void CanvasRenderingContext2D::Transform(double aM11, double aM12, double aM21,
   }
 
   Matrix newMatrix(aM11, aM12, aM21, aM22, aDx, aDy);
-
-  Matrix inverse = newMatrix;
-  if (inverse.Invert()) {
-    TransformCurrentPath(inverse);
-  }
-
   newMatrix *= mTarget->GetTransform();
   SetTransformInternal(newMatrix);
 }
@@ -2136,16 +2169,6 @@ void CanvasRenderingContext2D::SetTransform(double aM11, double aM12,
   }
 
   Matrix newMatrix(aM11, aM12, aM21, aM22, aDx, aDy);
-
-  Matrix adjustMatrix = mTarget->GetTransform();
-  Matrix inverse = newMatrix;
-  // Uses the inverted transform to undo the actual transform that
-  // will be stored on the DrawTarget
-  if (inverse.Invert()) {
-    adjustMatrix = adjustMatrix * inverse;
-  }
-  TransformCurrentPath(adjustMatrix);
-
   SetTransformInternal(newMatrix);
 }
 
@@ -2161,16 +2184,6 @@ void CanvasRenderingContext2D::SetTransform(const DOMMatrix2DInit& aInit,
       DOMMatrixReadOnly::FromMatrix(GetParentObject(), aInit, aError);
   if (!aError.Failed()) {
     Matrix newMatrix = Matrix(*(matrix->GetInternal2D()));
-
-    Matrix adjustMatrix = mTarget->GetTransform();
-    Matrix inverse = newMatrix;
-    // Uses the inverted transform to undo the actual transform that
-    // will be stored on the DrawTarget
-    if (inverse.Invert()) {
-      adjustMatrix = adjustMatrix * inverse;
-    }
-    TransformCurrentPath(adjustMatrix);
-
     SetTransformInternal(newMatrix);
   }
 }
@@ -2190,7 +2203,9 @@ void CanvasRenderingContext2D::SetTransformInternal(const Matrix& aTransform) {
     // a new item.
     clipsAndTransforms.LastElement().transform = aTransform;
   }
+
   mTarget->SetTransform(aTransform);
+  mPathTransformDirty = true;
 }
 
 void CanvasRenderingContext2D::ResetTransform(ErrorResult& aError) {
@@ -3683,12 +3698,30 @@ void CanvasRenderingContext2D::Ellipse(double aX, double aY, double aRadiusX,
   mPathPruned = false;
 }
 
+void CanvasRenderingContext2D::FlushPathTransform() {
+  if (!mPathTransformDirty) {
+    return;
+  }
+  if (mPath || mPathBuilder) {
+    Matrix inverse = mTarget->GetTransform();
+    if (!inverse.ExactlyEquals(mPathTransform) && inverse.Invert()) {
+      TransformCurrentPath(mPathTransform * inverse);
+    }
+  }
+  mPathTransform = mTarget->GetTransform();
+  mPathTransformDirty = false;
+}
+
 void CanvasRenderingContext2D::EnsureWritablePath() {
   EnsureTarget();
   // NOTE: IsTargetValid() may be false here (mTarget == sErrorTarget) but we
   // go ahead and create a path anyway since callers depend on that.
 
   FillRule fillRule = CurrentState().fillRule;
+
+  if (mPathTransformDirty) {
+    FlushPathTransform();
+  }
 
   if (mPathBuilder) {
     return;
@@ -3711,6 +3744,10 @@ void CanvasRenderingContext2D::EnsureUserSpacePath(
   EnsureTarget();
   if (!IsTargetValid()) {
     return;
+  }
+
+  if (mPathTransformDirty) {
+    FlushPathTransform();
   }
 
   if (!mPath && !mPathBuilder) {
@@ -4209,7 +4246,8 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
     : public nsBidiPresUtils::BidiProcessor {
   using Style = CanvasRenderingContext2D::Style;
 
-  CanvasBidiProcessor() : nsBidiPresUtils::BidiProcessor() {
+  explicit CanvasBidiProcessor(mozilla::gfx::PaletteCache& aPaletteCache)
+      : mPaletteCache(aPaletteCache) {
     if (StaticPrefs::gfx_missing_fonts_notify()) {
       mMissingFonts = MakeUnique<gfxMissingFontRecorder>();
     }
@@ -4454,7 +4492,7 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
     }
 
     gfxContext thebes(target, /* aPreserveTransform */ true);
-    gfxTextRun::DrawParams params(&thebes);
+    gfxTextRun::DrawParams params(&thebes, mPaletteCache);
 
     params.allowGDI = false;
 
@@ -4523,6 +4561,9 @@ struct MOZ_STACK_CLASS CanvasBidiProcessor final
 
   // current font
   gfxFontGroup* mFontgrp = nullptr;
+
+  // palette cache for COLR font rendering
+  mozilla::gfx::PaletteCache& mPaletteCache;
 
   // spacing adjustments to be applied
   gfx::Float mLetterSpacing = 0.0f;
@@ -4645,7 +4686,7 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
     return nullptr;
   }
 
-  CanvasBidiProcessor processor;
+  CanvasBidiProcessor processor(mPaletteCache);
 
   // If we don't have a ComputedStyle, we can't set up vertical-text flags
   // (for now, at least; perhaps we need new Canvas API to control this).
@@ -4836,6 +4877,7 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
   }
 
   Matrix oldTransform = mTarget->GetTransform();
+  bool restoreTransform = false;
   // if text is over aMaxWidth, then scale the text horizontally such that its
   // width is precisely aMaxWidth
   if (aMaxWidth.WasPassed() && aMaxWidth.Value() > 0 &&
@@ -4850,6 +4892,7 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
     /* we do this to avoid an ICE in the android compiler */
     Matrix androidCompilerBug = newTransform;
     mTarget->SetTransform(androidCompilerBug);
+    restoreTransform = true;
   }
 
   // save the previous bounding box
@@ -4868,7 +4911,9 @@ UniquePtr<TextMetrics> CanvasRenderingContext2D::DrawOrMeasureText(
     return nullptr;
   }
 
-  mTarget->SetTransform(oldTransform);
+  if (restoreTransform) {
+    mTarget->SetTransform(oldTransform);
+  }
 
   if (aOp == CanvasRenderingContext2D::TextDrawOperation::FILL &&
       !doCalculateBounds) {
@@ -5219,21 +5264,16 @@ static void SwapScaleWidthHeightForRotation(gfx::Rect& aRect,
 static Matrix ComputeRotationMatrix(gfxFloat aRotatedWidth,
                                     gfxFloat aRotatedHeight,
                                     VideoRotation aDegrees) {
-  Matrix shiftVideoCenterToOrigin;
+  Point shiftVideoCenterToOrigin(-aRotatedWidth / 2.0, -aRotatedHeight / 2.0);
   if (aDegrees == VideoRotation::kDegree_90 ||
       aDegrees == VideoRotation::kDegree_270) {
-    shiftVideoCenterToOrigin =
-        Matrix::Translation(-aRotatedHeight / 2.0, -aRotatedWidth / 2.0);
-  } else {
-    shiftVideoCenterToOrigin =
-        Matrix::Translation(-aRotatedWidth / 2.0, -aRotatedHeight / 2.0);
+    std::swap(shiftVideoCenterToOrigin.x, shiftVideoCenterToOrigin.y);
   }
-
   auto angle = static_cast<double>(aDegrees) / 180.0 * M_PI;
   Matrix rotation = Matrix::Rotation(static_cast<gfx::Float>(angle));
-  Matrix shiftLeftTopToOrigin =
-      Matrix::Translation(aRotatedWidth / 2.0, aRotatedHeight / 2.0);
-  return shiftVideoCenterToOrigin * rotation * shiftLeftTopToOrigin;
+  Point shiftLeftTopToOrigin(aRotatedWidth / 2.0, aRotatedHeight / 2.0);
+  return rotation.PreTranslate(shiftVideoCenterToOrigin)
+      .PostTranslate(shiftLeftTopToOrigin);
 }
 
 // drawImage(in HTMLImageElement image, in float dx, in float dy);
@@ -5520,10 +5560,10 @@ void CanvasRenderingContext2D::DrawImage(const CanvasImageSource& aImage,
 
     gfx::Rect destRect(aDx, aDy, aDw, aDh);
 
-    Matrix transform;
+    Matrix currentTransform = tempTarget->GetTransform();
     if (rotationDeg != VideoRotation::kDegree_0) {
-      Matrix preTransform = ComputeRotationMatrix(aDw, aDh, rotationDeg);
-      transform = preTransform * Matrix::Translation(aDx, aDy);
+      tempTarget->ConcatTransform(
+          ComputeRotationMatrix(aDw, aDh, rotationDeg).PostTranslate(aDx, aDy));
 
       SwapScaleWidthHeightForRotation(destRect, rotationDeg);
       // When rotation exists, aDx, aDy is handled by transform, Since aDest.x
@@ -5531,17 +5571,15 @@ void CanvasRenderingContext2D::DrawImage(const CanvasImageSource& aImage,
       destRect.x = 0;
       destRect.y = 0;
     }
-    Matrix currentTransform = tempTarget->GetTransform();
-    transform *= currentTransform;
-
-    tempTarget->SetTransform(transform);
 
     tempTarget.DrawSurface(
         srcSurf, destRect, sourceRect,
         DrawSurfaceOptions(samplingFilter, SamplingBounds::UNBOUNDED),
         DrawOptions(CurrentState().globalAlpha, op, antialiasMode));
 
-    tempTarget->SetTransform(currentTransform);
+    if (rotationDeg != VideoRotation::kDegree_0) {
+      tempTarget->SetTransform(currentTransform);
+    }
 
   } else {
     DrawDirectlyToCanvas(drawInfo, &bounds, gfx::Rect(aDx, aDy, aDw, aDh),

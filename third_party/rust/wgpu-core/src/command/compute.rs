@@ -1,4 +1,6 @@
+use crate::device::DeviceError;
 use crate::resource::Resource;
+use crate::snatch::SnatchGuard;
 use crate::{
     binding_model::{
         BindError, BindGroup, LateMinBufferBindingSizeMismatch, PushConstantUploadError,
@@ -172,12 +174,8 @@ pub struct ComputePassDescriptor<'a> {
 pub enum DispatchError {
     #[error("Compute pipeline must be set")]
     MissingPipeline,
-    #[error("The pipeline layout, associated with the current compute pipeline, contains a bind group layout at index {index} which is incompatible with the bind group layout associated with the bind group at {index}")]
-    IncompatibleBindGroup {
-        index: u32,
-        //expected: BindGroupLayoutId,
-        //provided: Option<(BindGroupLayoutId, BindGroupId)>,
-    },
+    #[error("Incompatible bind group at index {index} in the current compute pipeline")]
+    IncompatibleBindGroup { index: u32, diff: Vec<String> },
     #[error(
         "Each current dispatch group size dimension ({current:?}) must be less or equal to {limit}"
     )]
@@ -190,9 +188,11 @@ pub enum DispatchError {
 #[derive(Clone, Debug, Error)]
 pub enum ComputePassErrorInner {
     #[error(transparent)]
+    Device(#[from] DeviceError),
+    #[error(transparent)]
     Encoder(#[from] CommandEncoderError),
-    #[error("Bind group {0:?} is invalid")]
-    InvalidBindGroup(id::BindGroupId),
+    #[error("Bind group at index {0:?} is invalid")]
+    InvalidBindGroup(usize),
     #[error("Device {0:?} is invalid")]
     InvalidDevice(DeviceId),
     #[error("Bind group index {index} is greater than the device's requested `max_bind_group` limit {max}")]
@@ -235,14 +235,16 @@ impl PrettyError for ComputePassErrorInner {
     fn fmt_pretty(&self, fmt: &mut ErrorFormatter) {
         fmt.error(self);
         match *self {
-            Self::InvalidBindGroup(id) => {
-                fmt.bind_group_label(&id);
-            }
             Self::InvalidPipeline(id) => {
                 fmt.compute_pipeline_label(&id);
             }
             Self::InvalidIndirectBuffer(id) => {
                 fmt.buffer_label(&id);
+            }
+            Self::Dispatch(DispatchError::IncompatibleBindGroup { ref diff, .. }) => {
+                for d in diff {
+                    fmt.note(&d);
+                }
             }
             _ => {}
         };
@@ -290,8 +292,11 @@ impl<A: HalApi> State<A> {
         let bind_mask = self.binder.invalid_mask();
         if bind_mask != 0 {
             //let (expected, provided) = self.binder.entries[index as usize].info();
+            let index = bind_mask.trailing_zeros();
+
             return Err(DispatchError::IncompatibleBindGroup {
-                index: bind_mask.trailing_zeros(),
+                index,
+                diff: self.binder.bgl_diff(),
             });
         }
         if self.pipeline.is_none() {
@@ -310,6 +315,7 @@ impl<A: HalApi> State<A> {
         base_trackers: &mut Tracker<A>,
         bind_group_guard: &Storage<BindGroup<A>, id::BindGroupId>,
         indirect_buffer: Option<id::BufferId>,
+        snatch_guard: &SnatchGuard,
     ) -> Result<(), UsageConflict> {
         for id in self.binder.list_active() {
             unsafe { self.scope.merge_bind_group(&bind_group_guard[id].used)? };
@@ -335,7 +341,7 @@ impl<A: HalApi> State<A> {
 
         log::trace!("Encoding dispatch barriers");
 
-        CommandBuffer::drain_barriers(raw_encoder, base_trackers);
+        CommandBuffer::drain_barriers(raw_encoder, base_trackers, snatch_guard);
         Ok(())
     }
 }
@@ -363,17 +369,17 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         timestamp_writes: Option<&ComputePassTimestampWrites>,
     ) -> Result<(), ComputePassError> {
         profiling::scope!("CommandEncoder::run_compute_pass");
-        let init_scope = PassErrorScope::Pass(encoder_id);
+        let pass_scope = PassErrorScope::Pass(encoder_id);
 
         let hub = A::hub(self);
 
-        let cmd_buf = CommandBuffer::get_encoder(hub, encoder_id).map_pass_err(init_scope)?;
+        let cmd_buf = CommandBuffer::get_encoder(hub, encoder_id).map_pass_err(pass_scope)?;
         let device = &cmd_buf.device;
         if !device.is_valid() {
             return Err(ComputePassErrorInner::InvalidDevice(
                 cmd_buf.device.as_info().id(),
             ))
-            .map_pass_err(init_scope);
+            .map_pass_err(pass_scope);
         }
 
         let mut cmd_buf_data = cmd_buf.data.lock();
@@ -396,10 +402,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         // We automatically keep extending command buffers over time, and because
         // we want to insert a command buffer _before_ what we're about to record,
         // we need to make sure to close the previous one.
-        encoder.close();
+        encoder.close().map_pass_err(pass_scope)?;
         // will be reset to true if recording is done without errors
         *status = CommandEncoderStatus::Error;
-        let raw = encoder.open();
+        let raw = encoder.open().map_pass_err(pass_scope)?;
 
         let bind_group_guard = hub.bind_groups.read();
         let pipeline_guard = hub.compute_pipelines.read();
@@ -423,7 +429,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 .query_sets
                 .add_single(&*query_set_guard, tw.query_set)
                 .ok_or(ComputePassErrorInner::InvalidQuerySet(tw.query_set))
-                .map_pass_err(init_scope)?;
+                .map_pass_err(pass_scope)?;
 
             // Unlike in render passes we can't delay resetting the query sets since
             // there is no auxillary pass.
@@ -452,6 +458,8 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         } else {
             None
         };
+
+        let snatch_guard = device.snatchable_lock.read();
 
         tracker.set_size(
             Some(&*buffer_guard),
@@ -512,27 +520,23 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                     let bind_group = tracker
                         .bind_groups
                         .add_single(&*bind_group_guard, bind_group_id)
-                        .ok_or(ComputePassErrorInner::InvalidBindGroup(bind_group_id))
+                        .ok_or(ComputePassErrorInner::InvalidBindGroup(index as usize))
                         .map_pass_err(scope)?;
                     bind_group
                         .validate_dynamic_bindings(index, &temp_offsets, &cmd_buf.limits)
                         .map_pass_err(scope)?;
 
                     buffer_memory_init_actions.extend(
-                        bind_group
-                            .used_buffer_ranges
-                            .read()
-                            .iter()
-                            .filter_map(|action| {
-                                action
-                                    .buffer
-                                    .initialization_status
-                                    .read()
-                                    .check_action(action)
-                            }),
+                        bind_group.used_buffer_ranges.iter().filter_map(|action| {
+                            action
+                                .buffer
+                                .initialization_status
+                                .read()
+                                .check_action(action)
+                        }),
                     );
 
-                    for action in bind_group.used_texture_ranges.read().iter() {
+                    for action in bind_group.used_texture_ranges.iter() {
                         pending_discard_init_fixups
                             .extend(texture_memory_actions.register_init_action(action));
                     }
@@ -546,7 +550,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         let pipeline_layout = pipeline_layout.as_ref().unwrap().raw();
                         for (i, e) in entries.iter().enumerate() {
                             if let Some(group) = e.group.as_ref() {
-                                let raw_bg = group.raw();
+                                let raw_bg = group
+                                    .raw(&snatch_guard)
+                                    .ok_or(ComputePassErrorInner::InvalidBindGroup(i))
+                                    .map_pass_err(scope)?;
                                 unsafe {
                                     raw.set_bind_group(
                                         pipeline_layout,
@@ -590,7 +597,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         if !entries.is_empty() {
                             for (i, e) in entries.iter().enumerate() {
                                 if let Some(group) = e.group.as_ref() {
-                                    let raw_bg = group.raw();
+                                    let raw_bg = group
+                                        .raw(&snatch_guard)
+                                        .ok_or(ComputePassErrorInner::InvalidBindGroup(i))
+                                        .map_pass_err(scope)?;
                                     unsafe {
                                         raw.set_bind_group(
                                             pipeline.layout.raw(),
@@ -673,7 +683,13 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                     state.is_ready().map_pass_err(scope)?;
 
                     state
-                        .flush_states(raw, &mut intermediate_trackers, &*bind_group_guard, None)
+                        .flush_states(
+                            raw,
+                            &mut intermediate_trackers,
+                            &*bind_group_guard,
+                            None,
+                            &snatch_guard,
+                        )
                         .map_pass_err(scope)?;
 
                     let groups_size_limit = cmd_buf.limits.max_compute_workgroups_per_dimension;
@@ -727,7 +743,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
 
                     let buf_raw = indirect_buffer
                         .raw
-                        .as_ref()
+                        .get(&snatch_guard)
                         .ok_or(ComputePassErrorInner::InvalidIndirectBuffer(buffer_id))
                         .map_pass_err(scope)?;
 
@@ -747,6 +763,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             &mut intermediate_trackers,
                             &*bind_group_guard,
                             Some(buffer_id),
+                            &snatch_guard,
                         )
                         .map_pass_err(scope)?;
                     unsafe {
@@ -848,21 +865,26 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
         *status = CommandEncoderStatus::Recording;
 
         // Stop the current command buffer.
-        encoder.close();
+        encoder.close().map_pass_err(pass_scope)?;
 
         // Create a new command buffer, which we will insert _before_ the body of the compute pass.
         //
         // Use that buffer to insert barriers and clear discarded images.
-        let transit = encoder.open();
+        let transit = encoder.open().map_pass_err(pass_scope)?;
         fixup_discarded_surfaces(
             pending_discard_init_fixups.into_iter(),
             transit,
             &mut tracker.textures,
             device,
         );
-        CommandBuffer::insert_barriers_from_tracker(transit, tracker, &intermediate_trackers);
+        CommandBuffer::insert_barriers_from_tracker(
+            transit,
+            tracker,
+            &intermediate_trackers,
+            &snatch_guard,
+        );
         // Close the command buffer, and swap it with the previous.
-        encoder.close_and_swap();
+        encoder.close_and_swap().map_pass_err(pass_scope)?;
 
         Ok(())
     }

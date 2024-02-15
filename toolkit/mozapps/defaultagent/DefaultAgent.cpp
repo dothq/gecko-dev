@@ -355,7 +355,70 @@ DefaultAgent::DoTask(const nsAString& aUniqueToken, const bool aForce) {
   activitiesPerformed = MaybeShowNotification(
       browserInfo, PromiseFlatString(aUniqueToken).get(), aForce);
 
-  HRESULT hr = SendDefaultAgentPing(browserInfo, pdfInfo, activitiesPerformed);
+  HRESULT hr =
+      SendDefaultAgentPing(browserInfo, pdfInfo, activitiesPerformed, "C++"_ns);
+  return SUCCEEDED(hr) ? NS_OK : NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP
+DefaultAgent::AppRanRecently(bool* aRanRecently) {
+  bool ranRecently = false;
+  *aRanRecently = CheckIfAppRanRecently(&ranRecently) && ranRecently;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+DefaultAgent::GetDefaultBrowser(nsAString& aDefaultBrowser) {
+  Browser browser = default_agent::GetDefaultBrowser();
+  aDefaultBrowser = NS_ConvertUTF8toUTF16(GetStringForBrowser(browser));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+DefaultAgent::GetReplacePreviousDefaultBrowser(
+    const nsAString& aDefaultBrowser, nsAString& aPreviousDefaultBrowser) {
+  Browser browser =
+      GetBrowserFromString(std::string(NS_ConvertUTF16toUTF8(aDefaultBrowser)));
+  Browser previousBrowser =
+      default_agent::GetReplacePreviousDefaultBrowser(browser);
+  aPreviousDefaultBrowser =
+      NS_ConvertUTF8toUTF16(GetStringForBrowser(previousBrowser));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+DefaultAgent::GetDefaultPdfHandler(nsAString& aDefaultPdfHandler) {
+  PDFHandler pdf = default_agent::GetDefaultPdfInfo()
+                       .unwrapOr({PDFHandler::Error})
+                       .currentDefaultPdf;
+  aDefaultPdfHandler = NS_ConvertUTF8toUTF16(GetStringForPDFHandler(pdf));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+DefaultAgent::SendPing(const nsAString& aDefaultBrowser,
+                       const nsAString& aPreviousDefaultBrowser,
+                       const nsAString& aDefaultPdfHandler,
+                       const nsAString& aNotificationShown,
+                       const nsAString& aNotificationAction) {
+  DefaultBrowserInfo browserInfo = {
+      GetBrowserFromString(std::string(NS_ConvertUTF16toUTF8(aDefaultBrowser))),
+      GetBrowserFromString(
+          std::string(NS_ConvertUTF16toUTF8(aPreviousDefaultBrowser)))};
+
+  DefaultPdfInfo pdfInfo = {GetPDFHandlerFromString(
+      std::string(NS_ConvertUTF16toUTF8(aDefaultPdfHandler)))};
+
+  // The JS implementation has never supported the "two notification flow",
+  // i.e., displaying a followup notification.
+  NotificationShown shown = GetNotificationShownFromString(aNotificationShown);
+  NotificationAction action =
+      GetNotificationActionFromString(aNotificationAction);
+  NotificationActivities activitiesPerformed = {NotificationType::Initial,
+                                                shown, action};
+
+  HRESULT hr = SendDefaultAgentPing(browserInfo, pdfInfo, activitiesPerformed,
+                                    "JavaScript"_ns);
   return SUCCEEDED(hr) ? NS_OK : NS_ERROR_FAILURE;
 }
 

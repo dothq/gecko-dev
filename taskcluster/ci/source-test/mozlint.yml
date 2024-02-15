@@ -201,7 +201,6 @@ license:
             - '**/*.webidl'
             - '**/*.xhtml'
             - '**/*.xml'
-            - '**/*.xul'
             - 'tools/lint/license.yml'
 
 lintpref:
@@ -475,7 +474,9 @@ file-whitespace:
             - '**/*.ftl'
             - '**/*.h'
             - '**/*.html'
+            - '**/*.json'
             - '**/*.md'
+            - '**/*.mn'
             - '**/*.properties'
             - '**/*.py'
             - '**/*.rs'
@@ -509,12 +510,14 @@ file-perm:
             - '**/*.idl'
             - '**/*.js'
             - '**/*.jsm'
+            - '**/*.json'
             - '**/*.jsx'
             - '**/*.m'
             - '**/*.m4s'
             - '**/*.md'
             - '**/*.mjs'
             - '**/*.mm'
+            - '**/*.mn'
             - '**/*.mozbuild'
             - '**/*.mp4'
             - '**/*.png'
@@ -527,7 +530,6 @@ file-perm:
             - '**/*.webidl'
             - '**/*.xhtml'
             - '**/*.xml'
-            - '**/*.xul'
             - '**/*.yaml'
             - '**/*.yml'
 
@@ -559,6 +561,22 @@ perfdocs-verify:
             - 'testing/perfdocs/**'
             - 'tools/lint/perfdocs.yml'
 
+condprof-addons-verify:
+    description: |
+      Verifies all xpi files needed by condprof customization sideloading addons are
+      included in the firefox-addons fetch task.
+    treeherder:
+        symbol: misc(condprof-addons)
+    run:
+        mach: |
+            lint -v -l condprof-addons -f treeherder -f json:/builds/worker/mozlint.json .
+    fetches:
+        fetch:
+            - firefox-addons
+    when:
+        files-changed:
+            - 'testing/condprofile/condprof/customization/*.json'
+            - 'taskcluster/ci/fetch/browsertime.yml'
 
 fluent-lint:
     description: Check for problems with Fluent files.

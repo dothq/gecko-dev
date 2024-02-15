@@ -826,8 +826,11 @@ void xpc::SetPrefableCompileOptions(JS::PrefableCompileOptions& options) {
   options
       .setSourcePragmas(StaticPrefs::javascript_options_source_pragmas())
 #ifdef NIGHTLY_BUILD
-      .setImportAssertions(
-          StaticPrefs::javascript_options_experimental_import_assertions())
+      .setImportAttributes(
+          StaticPrefs::javascript_options_experimental_import_attributes())
+      .setImportAttributesAssertSyntax(
+          StaticPrefs::
+              javascript_options_experimental_import_attributes_assert_syntax())
 #endif
       .setAsmJS(StaticPrefs::javascript_options_asmjs())
       .setThrowOnAsmJSValidationFailure(
@@ -853,7 +856,9 @@ void xpc::SetPrefableContextOptions(JS::ContextOptions& options) {
       .setWasmVerbose(Preferences::GetBool(JS_OPTIONS_DOT_STR "wasm_verbose"))
       .setAsyncStack(Preferences::GetBool(JS_OPTIONS_DOT_STR "asyncstack"))
       .setAsyncStackCaptureDebuggeeOnly(Preferences::GetBool(
-          JS_OPTIONS_DOT_STR "asyncstack_capture_debuggee_only"));
+          JS_OPTIONS_DOT_STR "asyncstack_capture_debuggee_only"))
+      .setEnableDestructuringFuse(
+          StaticPrefs::javascript_options_destructuring_fuse());
 
   SetPrefableCompileOptions(options.compileOptions());
 }
@@ -980,11 +985,6 @@ static void LoadStartupJSPrefs(XPCJSContext* xpccx) {
   }
   JS_SetGlobalJitCompilerOption(cx, JSJITCOMPILER_WRITE_PROTECT_CODE,
                                 writeProtectCode);
-
-  JS_SetGlobalJitCompilerOption(
-      cx, JSJITCOMPILER_WATCHTOWER_MEGAMORPHIC,
-      StaticPrefs::
-          javascript_options_watchtower_megamorphic_DoNotUseDirectly());
 
   if (disableWasmHugeMemory) {
     bool disabledHugeMemory = JS::DisableWasmHugeMemory();

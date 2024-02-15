@@ -64,6 +64,8 @@ bool IsWidevineKeySystem(const nsAString& aKeySystem);
 bool IsPlayReadyKeySystemAndSupported(const nsAString& aKeySystem);
 
 bool IsWidevineExperimentKeySystemAndSupported(const nsAString& aKeySystem);
+
+bool IsWMFClearKeySystemAndSupported(const nsAString& aKeySystem);
 #endif
 
 // Note: Primetime is now unsupported, but we leave it in the enum so
@@ -92,6 +94,11 @@ void MFCDMCapabilitiesIPDLToKeySystemConfig(
 #endif
 
 bool DoesKeySystemSupportClearLead(const nsAString& aKeySystem);
+
+// Return true if there is any config in the given configs has hardware DRM
+// associated robustness.
+bool CheckIfHarewareDRMConfigExists(
+    const nsTArray<dom::MediaKeySystemConfiguration>& aConfigs);
 
 }  // namespace mozilla
 

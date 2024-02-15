@@ -8,7 +8,7 @@ toolkit.jar:
    content/global/aboutLogging.js
    content/global/aboutLogging.html
    content/global/aboutNetError.mjs
-   content/global/aboutNetError.xhtml
+   content/global/aboutNetError.html
    content/global/aboutNetworking.js
    content/global/aboutNetworking.html
 #ifndef ANDROID
@@ -106,6 +106,7 @@ toolkit.jar:
    content/global/elements/moz-toggle.css      (widgets/moz-toggle/moz-toggle.css)
    content/global/elements/moz-toggle.mjs      (widgets/moz-toggle/moz-toggle.mjs)
    content/global/elements/named-deck.js       (widgets/named-deck.js)
+   content/global/elements/infobar.css         (widgets/infobar.css)
    content/global/elements/notificationbox.js  (widgets/notificationbox.js)
    content/global/elements/panel.js            (widgets/panel.js)
    content/global/elements/panel-item.css      (widgets/panel-list/panel-item.css)

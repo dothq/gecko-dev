@@ -212,7 +212,8 @@ static gboolean key_release_event_cb(GtkWidget* widget, GdkEventKey* event);
 static gboolean property_notify_event_cb(GtkWidget* widget,
                                          GdkEventProperty* event);
 static gboolean scroll_event_cb(GtkWidget* widget, GdkEventScroll* event);
-
+static gboolean visibility_notify_event_cb(GtkWidget* widget,
+                                           GdkEventVisibility* event);
 static void hierarchy_changed_cb(GtkWidget* widget,
                                  GtkWidget* previous_toplevel);
 static gboolean window_state_event_cb(GtkWidget* widget,
@@ -406,7 +407,6 @@ nsWindow::nsWindow()
       mRetryPointerGrab(false),
       mPanInProgress(false),
       mTitlebarBackdropState(false),
-      mIsWaylandPanelWindow(false),
       mIsChildWindow(false),
       mAlwaysOnTop(false),
       mNoAutoHide(false),
@@ -805,11 +805,7 @@ void nsWindow::SetModal(bool aModal) {
 // nsIWidget method, which means IsShown.
 bool nsWindow::IsVisible() const { return mIsShown; }
 
-bool nsWindow::IsMapped() const {
-  // TODO: Enable for X11 when Mozilla testsuite is moved to new
-  // testing environment from Ubuntu 18.04 which is broken.
-  return GdkIsWaylandDisplay() ? mIsMapped : true;
-}
+bool nsWindow::IsMapped() const { return mIsMapped; }
 
 void nsWindow::RegisterTouchWindow() {
   mHandleTouchEvent = true;
@@ -1713,7 +1709,7 @@ bool nsWindow::WaylandPopupConfigure() {
   }
 
   LOG("nsWindow::WaylandPopupConfigure tracked %d anchored %d hint %d\n",
-      mPopupTrackInHierarchy, mPopupAnchored, int(mPopupHint));
+      mPopupTrackInHierarchy, mPopupAnchored, int(mPopupType));
 
   // Permanent state changed and popup is mapped.
   // We need to switch popup type but that's done when popup is mapped
@@ -1731,7 +1727,7 @@ bool nsWindow::WaylandPopupConfigure() {
   // See gdkwindow-wayland.c and
   // should_map_as_popup()/should_map_as_subsurface()
   GdkWindowTypeHint gtkTypeHint;
-  switch (mPopupHint) {
+  switch (mPopupType) {
     case PopupType::Menu:
       // GDK_WINDOW_TYPE_HINT_POPUP_MENU is mapped as xdg_popup by default.
       // We use this type for all menu popups.
@@ -1886,7 +1882,7 @@ void nsWindow::UpdateWaylandPopupHierarchy() {
         // popups are adjacent.
         return false;
       }
-      if (popup->mPopupHint == PopupType::Panel &&
+      if (popup->mPopupType == PopupType::Panel &&
           popup->WaylandPopupIsFirst() &&
           popup->WaylandPopupFitsToplevelWindow(/* aMove */ true)) {
         // Workaround for https://gitlab.gnome.org/GNOME/gtk/-/issues/1986
@@ -2602,7 +2598,7 @@ bool nsWindow::WaylandPopupCheckAndGetAnchor(GdkRectangle* aPopupAnchor,
 void nsWindow::WaylandPopupPrepareForMove() {
   LOG("nsWindow::WaylandPopupPrepareForMove()");
 
-  if (mPopupHint == PopupType::Tooltip) {
+  if (mPopupType == PopupType::Tooltip) {
     // Don't fiddle with tooltips type, just hide it before move-to-rect
     if (mPopupUseMoveToRect && gtk_widget_is_visible(mShell)) {
       HideWaylandPopupWindow(/* aTemporaryHide */ true,
@@ -3332,7 +3328,10 @@ void nsWindow::SetCursor(const Cursor& aCursor) {
   mCursor = aCursor;
 
   // Try to set the cursor image first, and fall back to the numeric cursor.
-  GdkCursor* imageCursor = GetCursorForImage(aCursor, GdkCeiledScaleFactor());
+  GdkCursor* imageCursor = nullptr;
+  if (mCustomCursorAllowed) {
+    imageCursor = GetCursorForImage(aCursor, GdkCeiledScaleFactor());
+  }
 
   // When using a custom cursor, clear the cursor first using eCursor_none, in
   // order to work around https://gitlab.gnome.org/GNOME/gtk/-/issues/6242
@@ -4766,7 +4765,7 @@ void nsWindow::OnButtonPressEvent(GdkEventButton* aEvent) {
 
   nsIWidget::ContentAndAPZEventStatus eventStatus = DispatchInputEvent(&event);
 
-  if ((mIsWaylandPanelWindow || mDraggableRegion.Contains(refPoint)) &&
+  if (mDraggableRegion.Contains(refPoint) &&
       domButton == MouseButton::ePrimary &&
       eventStatus.mContentStatus != nsEventStatus_eConsumeNoDefault) {
     mWindowShouldStartDragging = true;
@@ -5202,6 +5201,14 @@ void nsWindow::DispatchPanGesture(PanGestureInput& aPanInput) {
   }
 
   ProcessUntransformedAPZEvent(&event, result);
+}
+
+void nsWindow::OnVisibilityNotifyEvent(GdkVisibilityState aState) {
+  LOG("nsWindow::OnVisibilityNotifyEvent [%p] state 0x%x\n", this, aState);
+  auto state = aState == GDK_VISIBILITY_FULLY_OBSCURED
+                   ? OcclusionState::OCCLUDED
+                   : OcclusionState::UNKNOWN;
+  NotifyOcclusionState(state);
 }
 
 void nsWindow::OnWindowStateEvent(GtkWidget* aWidget,
@@ -5723,7 +5730,7 @@ nsAutoCString nsWindow::GetFrameTag() const {
 }
 
 nsCString nsWindow::GetPopupTypeName() {
-  switch (mPopupHint) {
+  switch (mPopupType) {
     case PopupType::Menu:
       return nsCString("Menu");
     case PopupType::Tooltip:
@@ -5965,16 +5972,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
     LOG("  child widget, switch to popup. parent nsWindow %p", parentnsWindow);
   }
 
-  if (mWindowType == WindowType::Popup && !parentnsWindow) {
-    LOG("  popup window without parent!");
-    if (GdkIsWaylandDisplay()) {
-      LOG("  switch to toplevel on Wayland.");
-      // Wayland does not allow to create popup without parent so switch to
-      // toplevel and mark as wayland panel.
-      mIsWaylandPanelWindow = true;
-      mWindowType = WindowType::TopLevel;
-    }
-  }
+  MOZ_ASSERT_IF(mWindowType == WindowType::Popup, parentnsWindow);
 
   if (mWindowType != WindowType::Dialog && mWindowType != WindowType::Popup &&
       mWindowType != WindowType::TopLevel &&
@@ -6076,8 +6074,12 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
     gtk_window_resize(GTK_WINDOW(mShell), size.width, size.height);
   }
   if (mIsPIPWindow) {
-    LOG("    Is PIP Window\n");
+    LOG("    Is PIP window\n");
     gtk_window_set_type_hint(GTK_WINDOW(mShell), GDK_WINDOW_TYPE_HINT_UTILITY);
+  } else if (aInitData && aInitData->mIsAlert) {
+    LOG("    Is alert window\n");
+    gtk_window_set_type_hint(GTK_WINDOW(mShell),
+                             GDK_WINDOW_TYPE_HINT_NOTIFICATION);
   } else if (mWindowType == WindowType::Dialog) {
     mGtkWindowRoleName = "Dialog";
 
@@ -6092,7 +6094,6 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   } else if (mWindowType == WindowType::Popup) {
     MOZ_ASSERT(aInitData);
     mGtkWindowRoleName = "Popup";
-    mPopupHint = aInitData->mPopupHint;
 
     LOG("nsWindow::Create() Popup");
 
@@ -6133,7 +6134,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
       // Set the window hints on X11 only. Wayland popups are configured
       // at WaylandPopupConfigure().
       GdkWindowTypeHint gtkTypeHint;
-      switch (mPopupHint) {
+      switch (mPopupType) {
         case PopupType::Menu:
           gtkTypeHint = GDK_WINDOW_TYPE_HINT_POPUP_MENU;
           break;
@@ -6154,7 +6155,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
       GtkWindowSetTransientFor(GTK_WINDOW(mShell), parentWidget);
 
       // If popup parent is modal, we need to make popup modal too.
-      if (mPopupHint != PopupType::Tooltip &&
+      if (mPopupType != PopupType::Tooltip &&
           gtk_window_get_modal(parentWidget)) {
         gtk_window_set_modal(GTK_WINDOW(mShell), true);
       }
@@ -6286,6 +6287,8 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
                    nullptr);
   g_signal_connect(mShell, "window_state_event",
                    G_CALLBACK(window_state_event_cb), nullptr);
+  g_signal_connect(mShell, "visibility-notify-event",
+                   G_CALLBACK(visibility_notify_event_cb), nullptr);
   g_signal_connect(mShell, "check-resize", G_CALLBACK(check_resize_cb),
                    nullptr);
   g_signal_connect(mShell, "composited-changed",
@@ -7550,13 +7553,9 @@ nsresult nsWindow::MakeFullScreen(bool aFullScreen) {
 
     gtk_window_unfullscreen(GTK_WINDOW(mShell));
 
-    if (mIsPIPWindow) {
-      gtk_window_set_type_hint(GTK_WINDOW(mShell),
-                               GDK_WINDOW_TYPE_HINT_UTILITY);
-      if (gUseAspectRatio) {
-        mAspectRatio = mAspectRatioSaved;
-        // ApplySizeConstraints();
-      }
+    if (mIsPIPWindow && gUseAspectRatio) {
+      mAspectRatio = mAspectRatioSaved;
+      // ApplySizeConstraints();
     }
   }
 
@@ -7798,61 +7797,53 @@ static GdkCursor* get_gtk_cursor(nsCursor aCursor) {
 
   GdkDisplay* defaultDisplay = gdk_display_get_default();
 
-  // The strategy here is to use standard GDK cursors, and, if not available,
-  // load by standard name with gdk_cursor_new_from_name.
-  // Spec is here: http://www.freedesktop.org/wiki/Specifications/cursor-spec/
   switch (aCursor) {
     case eCursor_standard:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_LEFT_PTR);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "default");
       break;
     case eCursor_wait:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_WATCH);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "wait");
       break;
     case eCursor_select:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_XTERM);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "text");
       break;
     case eCursor_hyperlink:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_HAND2);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "pointer");
       break;
     case eCursor_n_resize:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_TOP_SIDE);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "n-resize");
       break;
     case eCursor_s_resize:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_BOTTOM_SIDE);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "s-resize");
       break;
     case eCursor_w_resize:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_LEFT_SIDE);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "w-resize");
       break;
     case eCursor_e_resize:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_RIGHT_SIDE);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "e-resize");
       break;
     case eCursor_nw_resize:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_TOP_LEFT_CORNER);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "nw-resize");
       break;
     case eCursor_se_resize:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_BOTTOM_RIGHT_CORNER);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "se-resize");
       break;
     case eCursor_ne_resize:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_TOP_RIGHT_CORNER);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "ne-resize");
       break;
     case eCursor_sw_resize:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_BOTTOM_LEFT_CORNER);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "sw-resize");
       break;
     case eCursor_crosshair:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_CROSSHAIR);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "crosshair");
       break;
     case eCursor_move:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_FLEUR);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "move");
       break;
     case eCursor_help:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_QUESTION_ARROW);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "help");
       break;
-    case eCursor_copy:  // CSS3
+    case eCursor_copy:
       gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "copy");
       if (!gdkcursor) newType = MOZ_CURSOR_COPY;
       break;
@@ -7865,18 +7856,14 @@ static GdkCursor* get_gtk_cursor(nsCursor aCursor) {
       if (!gdkcursor) newType = MOZ_CURSOR_CONTEXT_MENU;
       break;
     case eCursor_cell:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_PLUS);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "cell");
       break;
-    // Those two aren’t standardized. Trying both KDE’s and GNOME’s names
     case eCursor_grab:
-      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "openhand");
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "grab");
       if (!gdkcursor) newType = MOZ_CURSOR_HAND_GRAB;
       break;
     case eCursor_grabbing:
-      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "closedhand");
-      if (!gdkcursor) {
-        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "grabbing");
-      }
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "grabbing");
       if (!gdkcursor) newType = MOZ_CURSOR_HAND_GRABBING;
       break;
     case eCursor_spinning:
@@ -7893,9 +7880,6 @@ static GdkCursor* get_gtk_cursor(nsCursor aCursor) {
       break;
     case eCursor_not_allowed:
       gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "not-allowed");
-      if (!gdkcursor) {  // nonstandard, yet common
-        gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "crossed_circle");
-      }
       if (!gdkcursor) newType = MOZ_CURSOR_NOT_ALLOWED;
       break;
     case eCursor_no_drop:
@@ -7916,46 +7900,35 @@ static GdkCursor* get_gtk_cursor(nsCursor aCursor) {
       }
       break;
     case eCursor_all_scroll:
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_FLEUR);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "move");
       break;
     case eCursor_nesw_resize:
-      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "size_bdiag");
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "nesw-resize");
       if (!gdkcursor) newType = MOZ_CURSOR_NESW_RESIZE;
       break;
     case eCursor_nwse_resize:
-      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "size_fdiag");
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "nwse-resize");
       if (!gdkcursor) newType = MOZ_CURSOR_NWSE_RESIZE;
       break;
     case eCursor_ns_resize:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_SB_V_DOUBLE_ARROW);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "ns-resize");
       break;
     case eCursor_ew_resize:
-      gdkcursor =
-          gdk_cursor_new_for_display(defaultDisplay, GDK_SB_H_DOUBLE_ARROW);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "ew-resize");
       break;
-    // Here, two better fitting cursors exist in some cursor themes. Try those
-    // first
     case eCursor_row_resize:
-      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "split_v");
-      if (!gdkcursor) {
-        gdkcursor =
-            gdk_cursor_new_for_display(defaultDisplay, GDK_SB_V_DOUBLE_ARROW);
-      }
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "row-resize");
       break;
     case eCursor_col_resize:
-      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "split_h");
-      if (!gdkcursor) {
-        gdkcursor =
-            gdk_cursor_new_for_display(defaultDisplay, GDK_SB_H_DOUBLE_ARROW);
-      }
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "col-resize");
       break;
     case eCursor_none:
-      newType = MOZ_CURSOR_NONE;
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "none");
+      if (!gdkcursor) newType = MOZ_CURSOR_NONE;
       break;
     default:
       NS_ASSERTION(aCursor, "Invalid cursor type");
-      gdkcursor = gdk_cursor_new_for_display(defaultDisplay, GDK_LEFT_PTR);
+      gdkcursor = gdk_cursor_new_from_name(defaultDisplay, "default");
       break;
   }
 
@@ -8284,7 +8257,7 @@ static GdkFilterReturn popup_take_focus_filter(GdkXEvent* gdk_xevent,
   GdkWindow* parent_window = gtk_widget_get_window(GTK_WIDGET(parent));
   if (!parent_window) return GDK_FILTER_CONTINUE;
 
-  // In case the parent has not been deconified.
+  // In case the parent has not been deiconified.
   gdk_window_show_unraised(parent_window);
 
   // Request focus on the parent window.
@@ -8367,6 +8340,16 @@ static gboolean scroll_event_cb(GtkWidget* widget, GdkEventScroll* event) {
 
   window->OnScrollEvent(event);
 
+  return TRUE;
+}
+
+static gboolean visibility_notify_event_cb(GtkWidget* widget,
+                                           GdkEventVisibility* event) {
+  RefPtr<nsWindow> window = get_window_for_gdk_window(event->window);
+  if (!window) {
+    return FALSE;
+  }
+  window->OnVisibilityNotifyEvent(event->state);
   return TRUE;
 }
 
@@ -8896,7 +8879,7 @@ nsresult nsWindow::SetNonClientMargins(const LayoutDeviceIntMargin& aMargins) {
 }
 
 bool nsWindow::IsAlwaysUndecoratedWindow() const {
-  if (mIsPIPWindow || mIsWaylandPanelWindow || gKioskMode) {
+  if (mIsPIPWindow || gKioskMode) {
     return true;
   }
   if (mWindowType == WindowType::Dialog &&
@@ -9822,10 +9805,23 @@ bool nsWindow::SetEGLNativeWindowSize(
   if (mDestroyMutex.TryLock()) {
     if (!mIsDestroyed) {
       gint scale = GdkCeiledScaleFactor();
-      LOG("nsWindow::SetEGLNativeWindowSize() %d x %d scale %d (unscaled %d x "
-          "%d)",
-          aEGLWindowSize.width, aEGLWindowSize.height, scale,
-          aEGLWindowSize.width / scale, aEGLWindowSize.height / scale);
+#  ifdef MOZ_LOGGING
+      if (LOG_ENABLED()) {
+        static uintptr_t lastSizeLog = 0;
+        uintptr_t sizeLog = uintptr_t(this) + aEGLWindowSize.width +
+                            aEGLWindowSize.height + scale +
+                            aEGLWindowSize.width / scale +
+                            aEGLWindowSize.height / scale;
+        if (lastSizeLog != sizeLog) {
+          lastSizeLog = sizeLog;
+          LOG("nsWindow::SetEGLNativeWindowSize() %d x %d scale %d (unscaled "
+              "%d x "
+              "%d)",
+              aEGLWindowSize.width, aEGLWindowSize.height, scale,
+              aEGLWindowSize.width / scale, aEGLWindowSize.height / scale);
+        }
+      }
+#  endif
       paint = moz_container_wayland_egl_window_set_size(
           mContainer, aEGLWindowSize.ToUnknownSize(), scale);
     }
@@ -9887,12 +9883,12 @@ bool nsWindow::ApplyEnterLeaveMutterWorkaround() {
   return false;
 }
 
-void nsWindow::NotifyOcclusionState(mozilla::widget::OcclusionState aState) {
+void nsWindow::NotifyOcclusionState(OcclusionState aState) {
   if (!IsTopLevelWindowType()) {
     return;
   }
 
-  bool isFullyOccluded = aState == mozilla::widget::OcclusionState::OCCLUDED;
+  bool isFullyOccluded = aState == OcclusionState::OCCLUDED;
   if (mIsFullyOccluded == isFullyOccluded) {
     return;
   }

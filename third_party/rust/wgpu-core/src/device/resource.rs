@@ -6,7 +6,7 @@ use crate::{
     device::life::{LifetimeTracker, WaitIdleError},
     device::queue::PendingWrites,
     device::{
-        AttachmentData, CommandAllocator, DeviceLostInvocation, MissingDownlevelFlags,
+        bgl, AttachmentData, CommandAllocator, DeviceLostInvocation, MissingDownlevelFlags,
         MissingFeatures, RenderPassContext, CLEANUP_WAIT_MS,
     },
     hal_api::HalApi,
@@ -19,6 +19,7 @@ use crate::{
     },
     instance::Adapter,
     pipeline,
+    pool::ResourcePool,
     registry::Registry,
     resource::ResourceInfo,
     resource::{
@@ -26,6 +27,7 @@ use crate::{
         TextureViewNotRenderableReason,
     },
     resource_log,
+    snatch::{SnatchGuard, SnatchLock, Snatchable},
     storage::Storage,
     track::{BindGroupStates, TextureSelector, Tracker},
     validation::{self, check_buffer_usage, check_texture_usage},
@@ -94,6 +96,7 @@ pub struct Device<A: HalApi> {
     //Note: The submission index here corresponds to the last submission that is done.
     pub(crate) active_submission_index: AtomicU64, //SubmissionIndex,
     pub(crate) fence: RwLock<Option<A::Fence>>,
+    pub(crate) snatchable_lock: SnatchLock,
 
     /// Is this device valid? Valid is closely associated with "lose the device",
     /// which can be triggered by various methods, including at the end of device
@@ -117,7 +120,9 @@ pub struct Device<A: HalApi> {
     life_tracker: Mutex<LifetimeTracker<A>>,
     /// Temporary storage for resource management functions. Cleared at the end
     /// of every call (unless an error occurs).
-    pub(crate) temp_suspected: Mutex<Option<ResourceMaps>>,
+    pub(crate) temp_suspected: Mutex<Option<ResourceMaps<A>>>,
+    /// Pool of bind group layouts, allowing deduplication.
+    pub(crate) bgl_pool: ResourcePool<bgl::EntryMap, BindGroupLayout<A>>,
     pub(crate) alignments: hal::Alignments,
     pub(crate) limits: wgt::Limits,
     pub(crate) features: wgt::Features,
@@ -141,7 +146,7 @@ impl<A: HalApi> std::fmt::Debug for Device<A> {
 
 impl<A: HalApi> Drop for Device<A> {
     fn drop(&mut self) {
-        resource_log!("Destroy raw Device {}", self.info.label());
+        resource_log!("Destroy raw Device {:?}", self.info.label());
         let raw = self.raw.take().unwrap();
         let pending_writes = self.pending_writes.lock().take().unwrap();
         pending_writes.dispose(&raw);
@@ -254,10 +259,12 @@ impl<A: HalApi> Device<A> {
             command_allocator: Mutex::new(Some(com_alloc)),
             active_submission_index: AtomicU64::new(0),
             fence: RwLock::new(Some(fence)),
+            snatchable_lock: unsafe { SnatchLock::new() },
             valid: AtomicBool::new(true),
             trackers: Mutex::new(Tracker::new()),
             life_tracker: Mutex::new(life::LifetimeTracker::new()),
-            temp_suspected: Mutex::new(Some(life::ResourceMaps::new::<A>())),
+            temp_suspected: Mutex::new(Some(life::ResourceMaps::new())),
+            bgl_pool: ResourcePool::new(),
             #[cfg(feature = "trace")]
             trace: Mutex::new(trace_path.and_then(|path| match trace::Trace::new(path) {
                 Ok(mut trace) => {
@@ -321,7 +328,7 @@ impl<A: HalApi> Device<A> {
             let temp_suspected = self
                 .temp_suspected
                 .lock()
-                .replace(ResourceMaps::new::<A>())
+                .replace(ResourceMaps::new())
                 .unwrap();
 
             let mut life_tracker = self.lock_life();
@@ -378,15 +385,19 @@ impl<A: HalApi> Device<A> {
         // our caller. This will complete the steps for both destroy and for
         // "lose the device".
         let mut device_lost_invocations = SmallVec::new();
-        if !self.is_valid()
-            && life_tracker.queue_empty()
-            && life_tracker.device_lost_closure.is_some()
-        {
-            device_lost_invocations.push(DeviceLostInvocation {
-                closure: life_tracker.device_lost_closure.take().unwrap(),
-                reason: DeviceLostReason::Destroyed,
-                message: String::new(),
-            });
+        if !self.is_valid() && life_tracker.queue_empty() {
+            // We can release gpu resources associated with this device.
+            life_tracker.release_gpu_resources();
+
+            // If we have a DeviceLostClosure, build an invocation with the
+            // reason DeviceLostReason::Destroyed and no message.
+            if life_tracker.device_lost_closure.is_some() {
+                device_lost_invocations.push(DeviceLostInvocation {
+                    closure: life_tracker.device_lost_closure.take().unwrap(),
+                    reason: DeviceLostReason::Destroyed,
+                    message: String::new(),
+                });
+            }
         }
 
         let closures = UserClosures {
@@ -401,7 +412,7 @@ impl<A: HalApi> Device<A> {
         let mut temp_suspected = self
             .temp_suspected
             .lock()
-            .replace(ResourceMaps::new::<A>())
+            .replace(ResourceMaps::new())
             .unwrap();
         temp_suspected.clear();
         // As the tracker is cleared/dropped, we need to consider all the resources
@@ -409,42 +420,58 @@ impl<A: HalApi> Device<A> {
         {
             for resource in trackers.buffers.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .buffers
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.textures.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .textures
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.views.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .texture_views
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.bind_groups.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .bind_groups
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.samplers.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .samplers
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.compute_pipelines.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .compute_pipelines
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.render_pipelines.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .render_pipelines
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
             for resource in trackers.query_sets.used_resources() {
                 if resource.is_unique() {
-                    temp_suspected.insert(resource.as_info().id(), resource.clone());
+                    temp_suspected
+                        .query_sets
+                        .insert(resource.as_info().id(), resource.clone());
                 }
             }
         }
@@ -538,11 +565,11 @@ impl<A: HalApi> Device<A> {
         let buffer = unsafe { self.raw().create_buffer(&hal_desc) }.map_err(DeviceError::from)?;
 
         Ok(Buffer {
-            raw: Some(buffer),
+            raw: Snatchable::new(buffer),
             device: self.clone(),
             usage: desc.usage,
             size: desc.size,
-            initialization_status: RwLock::new(BufferInitTracker::new(desc.size)),
+            initialization_status: RwLock::new(BufferInitTracker::new(aligned_size)),
             sync_mapped_writes: Mutex::new(None),
             map_state: Mutex::new(resource::BufferMapState::Idle),
             info: ResourceInfo::new(desc.label.borrow_or_default()),
@@ -560,9 +587,7 @@ impl<A: HalApi> Device<A> {
         debug_assert_eq!(self.as_info().id().backend(), A::VARIANT);
 
         Texture {
-            inner: RwLock::new(Some(resource::TextureInner::Native {
-                raw: Some(hal_texture),
-            })),
+            inner: Snatchable::new(resource::TextureInner::Native { raw: hal_texture }),
             device: self.clone(),
             desc: desc.map_label(|_| ()),
             hal_usage,
@@ -588,7 +613,7 @@ impl<A: HalApi> Device<A> {
         debug_assert_eq!(self.as_info().id().backend(), A::VARIANT);
 
         Buffer {
-            raw: Some(hal_buffer),
+            raw: Snatchable::new(hal_buffer),
             device: self.clone(),
             usage: desc.usage,
             size: desc.size,
@@ -880,15 +905,14 @@ impl<A: HalApi> Device<A> {
         texture: &Arc<Texture<A>>,
         desc: &resource::TextureViewDescriptor,
     ) -> Result<TextureView<A>, resource::CreateTextureViewError> {
-        let inner = texture.inner();
-        let texture_raw = inner
-            .as_ref()
-            .unwrap()
-            .as_raw()
+        let snatch_guard = texture.device.snatchable_lock.read();
+
+        let texture_raw = texture
+            .raw(&snatch_guard)
             .ok_or(resource::CreateTextureViewError::InvalidTexture)?;
+
         // resolve TextureViewDescriptor defaults
         // https://gpuweb.github.io/gpuweb/#abstract-opdef-resolving-gputextureviewdescriptor-defaults
-
         let resolved_format = desc.format.unwrap_or_else(|| {
             texture
                 .desc
@@ -1490,29 +1514,6 @@ impl<A: HalApi> Device<A> {
         })
     }
 
-    pub(crate) fn deduplicate_bind_group_layout<'a>(
-        self: &Arc<Self>,
-        entry_map: &'a binding_model::BindEntryMap,
-        guard: &'a Storage<BindGroupLayout<A>, id::BindGroupLayoutId>,
-    ) -> Option<(id::BindGroupLayoutId, Arc<BindGroupLayout<A>>)> {
-        guard
-            .iter(self.as_info().id().backend())
-            .find(|&(_, bgl)| {
-                bgl.device.info.id() == self.as_info().id() && bgl.entries == *entry_map
-            })
-            .map(|(id, resource)| (id, resource.clone()))
-    }
-
-    pub(crate) fn get_introspection_bind_group_layouts<'a>(
-        pipeline_layout: &'a binding_model::PipelineLayout<A>,
-    ) -> ArrayVec<&'a binding_model::BindEntryMap, { hal::MAX_BIND_GROUPS }> {
-        pipeline_layout
-            .bind_group_layouts
-            .iter()
-            .map(|layout| &layout.entries)
-            .collect()
-    }
-
     /// Generate information about late-validated buffer bindings for pipelines.
     //TODO: should this be combined with `get_introspection_bind_group_layouts` in some way?
     pub(crate) fn make_late_sized_buffer_groups(
@@ -1553,7 +1554,8 @@ impl<A: HalApi> Device<A> {
     pub(crate) fn create_bind_group_layout(
         self: &Arc<Self>,
         label: &crate::Label,
-        entry_map: binding_model::BindEntryMap,
+        entry_map: bgl::EntryMap,
+        origin: bgl::Origin,
     ) -> Result<BindGroupLayout<A>, binding_model::CreateBindGroupLayoutError> {
         #[derive(PartialEq)]
         enum WritableStorage {
@@ -1716,9 +1718,8 @@ impl<A: HalApi> Device<A> {
 
         let bgl_flags = conv::bind_group_layout_flags(self.features);
 
-        let mut hal_bindings = entry_map.values().cloned().collect::<Vec<_>>();
+        let hal_bindings = entry_map.values().copied().collect::<Vec<_>>();
         let label = label.to_hal(self.instance_flags);
-        hal_bindings.sort_by_key(|b| b.binding);
         let hal_desc = hal::BindGroupLayoutDescriptor {
             label,
             flags: bgl_flags,
@@ -1745,13 +1746,10 @@ impl<A: HalApi> Device<A> {
         Ok(BindGroupLayout {
             raw: Some(raw),
             device: self.clone(),
-            info: ResourceInfo::new(label.unwrap_or("<BindGroupLayout>")),
-            dynamic_count: entry_map
-                .values()
-                .filter(|b| b.ty.has_dynamic_offset())
-                .count(),
-            count_validator,
             entries: entry_map,
+            origin,
+            binding_count_validator: count_validator,
+            info: ResourceInfo::new(label.unwrap_or("<BindGroupLayout>")),
             label: label.unwrap_or_default().to_string(),
         })
     }
@@ -1766,6 +1764,7 @@ impl<A: HalApi> Device<A> {
         used: &mut BindGroupStates<A>,
         storage: &'a Storage<Buffer<A>, id::BufferId>,
         limits: &wgt::Limits,
+        snatch_guard: &'a SnatchGuard<'a>,
     ) -> Result<hal::BufferBinding<'a, A>, binding_model::CreateBindGroupError> {
         use crate::binding_model::CreateBindGroupError as Error;
 
@@ -1818,7 +1817,7 @@ impl<A: HalApi> Device<A> {
         check_buffer_usage(buffer.usage, pub_usage)?;
         let raw_buffer = buffer
             .raw
-            .as_ref()
+            .get(snatch_guard)
             .ok_or(Error::InvalidBuffer(bb.buffer_id))?;
 
         let (bind_size, bind_end) = match bb.size {
@@ -1966,12 +1965,13 @@ impl<A: HalApi> Device<A> {
         let mut hal_buffers = Vec::new();
         let mut hal_samplers = Vec::new();
         let mut hal_textures = Vec::new();
+        let snatch_guard = self.snatchable_lock.read();
         for entry in desc.entries.iter() {
             let binding = entry.binding;
             // Find the corresponding declaration in the layout
             let decl = layout
                 .entries
-                .get(&binding)
+                .get(binding)
                 .ok_or(Error::MissingBindingDeclaration(binding))?;
             let (res_index, count) = match entry.resource {
                 Br::Buffer(ref bb) => {
@@ -1985,6 +1985,7 @@ impl<A: HalApi> Device<A> {
                         &mut used,
                         &*buffer_guard,
                         &self.limits,
+                        &snatch_guard,
                     )?;
 
                     let res_index = hal_buffers.len();
@@ -2007,6 +2008,7 @@ impl<A: HalApi> Device<A> {
                             &mut used,
                             &*buffer_guard,
                             &self.limits,
+                            &snatch_guard,
                         )?;
                         hal_buffers.push(bb);
                     }
@@ -2173,14 +2175,14 @@ impl<A: HalApi> Device<A> {
             layout: layout.clone(),
             info: ResourceInfo::new(desc.label.borrow_or_default()),
             used,
-            used_buffer_ranges: RwLock::new(used_buffer_ranges),
-            used_texture_ranges: RwLock::new(used_texture_ranges),
-            dynamic_binding_info: RwLock::new(dynamic_binding_info),
+            used_buffer_ranges,
+            used_texture_ranges,
+            dynamic_binding_info,
             // collect in the order of BGL iteration
             late_buffer_binding_sizes: layout
                 .entries
-                .keys()
-                .flat_map(|binding| late_buffer_binding_sizes.get(binding).cloned())
+                .indices()
+                .flat_map(|binding| late_buffer_binding_sizes.get(&binding).cloned())
                 .collect(),
         })
     }
@@ -2352,7 +2354,7 @@ impl<A: HalApi> Device<A> {
     pub(crate) fn create_pipeline_layout(
         self: &Arc<Self>,
         desc: &binding_model::PipelineLayoutDescriptor,
-        bgl_guard: &Storage<BindGroupLayout<A>, id::BindGroupLayoutId>,
+        bgl_registry: &Registry<id::BindGroupLayoutId, BindGroupLayout<A>>,
     ) -> Result<binding_model::PipelineLayout<A>, binding_model::CreatePipelineLayoutError> {
         use crate::binding_model::CreatePipelineLayoutError as Error;
 
@@ -2405,31 +2407,38 @@ impl<A: HalApi> Device<A> {
 
         let mut count_validator = binding_model::BindingTypeMaxCountValidator::default();
 
-        // validate total resource counts
+        // Collect references to the BGLs
+        let mut bind_group_layouts = ArrayVec::new();
         for &id in desc.bind_group_layouts.iter() {
-            let Ok(bind_group_layout) = bgl_guard.get(id) else {
+            let Ok(bgl) = bgl_registry.get(id) else {
                 return Err(Error::InvalidBindGroupLayout(id));
             };
 
-            if bind_group_layout.device.as_info().id() != self.as_info().id() {
+            bind_group_layouts.push(bgl);
+        }
+
+        // Validate total resource counts and check for a matching device
+        for bgl in &bind_group_layouts {
+            if bgl.device.as_info().id() != self.as_info().id() {
                 return Err(DeviceError::WrongDevice.into());
             }
 
-            count_validator.merge(&bind_group_layout.count_validator);
+            count_validator.merge(&bgl.binding_count_validator);
         }
+
         count_validator
             .validate(&self.limits)
             .map_err(Error::TooManyBindings)?;
 
-        let bgl_vec = desc
-            .bind_group_layouts
+        let raw_bind_group_layouts = bind_group_layouts
             .iter()
-            .map(|&id| bgl_guard.get(id).unwrap().raw())
-            .collect::<Vec<_>>();
+            .map(|bgl| bgl.raw())
+            .collect::<ArrayVec<_, { hal::MAX_BIND_GROUPS }>>();
+
         let hal_desc = hal::PipelineLayoutDescriptor {
             label: desc.label.to_hal(self.instance_flags),
             flags: hal::PipelineLayoutFlags::FIRST_VERTEX_INSTANCE,
-            bind_group_layouts: &bgl_vec,
+            bind_group_layouts: &raw_bind_group_layouts,
             push_constant_ranges: desc.push_constant_ranges.as_ref(),
         };
 
@@ -2441,15 +2450,13 @@ impl<A: HalApi> Device<A> {
                 .map_err(DeviceError::from)?
         };
 
+        drop(raw_bind_group_layouts);
+
         Ok(binding_model::PipelineLayout {
             raw: Some(raw),
             device: self.clone(),
             info: ResourceInfo::new(desc.label.borrow_or_default()),
-            bind_group_layouts: desc
-                .bind_group_layouts
-                .iter()
-                .map(|&id| bgl_guard.get(id).unwrap().clone())
-                .collect(),
+            bind_group_layouts,
             push_constant_ranges: desc.push_constant_ranges.iter().cloned().collect(),
         })
     }
@@ -2459,10 +2466,10 @@ impl<A: HalApi> Device<A> {
     pub(crate) fn derive_pipeline_layout(
         self: &Arc<Self>,
         implicit_context: Option<ImplicitPipelineContext>,
-        mut derived_group_layouts: ArrayVec<binding_model::BindEntryMap, { hal::MAX_BIND_GROUPS }>,
+        mut derived_group_layouts: ArrayVec<bgl::EntryMap, { hal::MAX_BIND_GROUPS }>,
         bgl_registry: &Registry<id::BindGroupLayoutId, BindGroupLayout<A>>,
         pipeline_layout_registry: &Registry<id::PipelineLayoutId, binding_model::PipelineLayout<A>>,
-    ) -> Result<id::PipelineLayoutId, pipeline::ImplicitLayoutError> {
+    ) -> Result<Arc<binding_model::PipelineLayout<A>>, pipeline::ImplicitLayoutError> {
         while derived_group_layouts
             .last()
             .map_or(false, |map| map.is_empty())
@@ -2481,16 +2488,8 @@ impl<A: HalApi> Device<A> {
         }
 
         for (bgl_id, map) in ids.group_ids.iter_mut().zip(derived_group_layouts) {
-            let bgl = match self.deduplicate_bind_group_layout(&map, &bgl_registry.read()) {
-                Some((dedup_id, _)) => {
-                    *bgl_id = dedup_id;
-                    None
-                }
-                None => Some(self.create_bind_group_layout(&None, map)?),
-            };
-            if let Some(bgl) = bgl {
-                bgl_registry.force_replace(*bgl_id, bgl);
-            }
+            let bgl = self.create_bind_group_layout(&None, map, bgl::Origin::Derived)?;
+            bgl_registry.force_replace(*bgl_id, bgl);
         }
 
         let layout_desc = binding_model::PipelineLayoutDescriptor {
@@ -2498,9 +2497,9 @@ impl<A: HalApi> Device<A> {
             bind_group_layouts: Cow::Borrowed(&ids.group_ids[..group_count]),
             push_constant_ranges: Cow::Borrowed(&[]), //TODO?
         };
-        let layout = self.create_pipeline_layout(&layout_desc, &bgl_registry.read())?;
+        let layout = self.create_pipeline_layout(&layout_desc, bgl_registry)?;
         pipeline_layout_registry.force_replace(ids.root_id, layout);
-        Ok(ids.root_id)
+        Ok(pipeline_layout_registry.get(ids.root_id).unwrap())
     }
 
     pub(crate) fn create_compute_pipeline(
@@ -2522,12 +2521,6 @@ impl<A: HalApi> Device<A> {
 
         self.require_downlevel_flags(wgt::DownlevelFlags::COMPUTE_SHADERS)?;
 
-        let mut derived_group_layouts =
-            ArrayVec::<binding_model::BindEntryMap, { hal::MAX_BIND_GROUPS }>::new();
-        let mut shader_binding_sizes = FastHashMap::default();
-
-        let io = validation::StageIo::default();
-
         let shader_module = hub
             .shader_modules
             .get(desc.stage.module)
@@ -2537,59 +2530,66 @@ impl<A: HalApi> Device<A> {
             return Err(DeviceError::WrongDevice.into());
         }
 
-        {
-            let flag = wgt::ShaderStages::COMPUTE;
-            let pipeline_layout_guard = hub.pipeline_layouts.read();
-            let provided_layouts = match desc.layout {
-                Some(pipeline_layout_id) => Some(Device::get_introspection_bind_group_layouts(
-                    pipeline_layout_guard
-                        .get(pipeline_layout_id)
-                        .map_err(|_| pipeline::CreateComputePipelineError::InvalidLayout)?,
-                )),
-                None => {
-                    for _ in 0..self.limits.max_bind_groups {
-                        derived_group_layouts.push(binding_model::BindEntryMap::default());
-                    }
-                    None
+        // Get the pipeline layout from the desc if it is provided.
+        let pipeline_layout = match desc.layout {
+            Some(pipeline_layout_id) => {
+                let pipeline_layout = hub
+                    .pipeline_layouts
+                    .get(pipeline_layout_id)
+                    .map_err(|_| pipeline::CreateComputePipelineError::InvalidLayout)?;
+
+                if pipeline_layout.device.as_info().id() != self.as_info().id() {
+                    return Err(DeviceError::WrongDevice.into());
                 }
-            };
+
+                Some(pipeline_layout)
+            }
+            None => None,
+        };
+
+        let mut binding_layout_source = match pipeline_layout {
+            Some(ref pipeline_layout) => {
+                validation::BindingLayoutSource::Provided(pipeline_layout.get_binding_maps())
+            }
+            None => validation::BindingLayoutSource::new_derived(&self.limits),
+        };
+        let mut shader_binding_sizes = FastHashMap::default();
+        let io = validation::StageIo::default();
+
+        {
+            let stage = wgt::ShaderStages::COMPUTE;
+
             if let Some(ref interface) = shader_module.interface {
                 let _ = interface.check_stage(
-                    provided_layouts.as_ref().map(|p| p.as_slice()),
-                    &mut derived_group_layouts,
+                    &mut binding_layout_source,
                     &mut shader_binding_sizes,
                     &desc.stage.entry_point,
-                    flag,
+                    stage,
                     io,
                     None,
                 )?;
             }
         }
 
-        let pipeline_layout_id = match desc.layout {
-            Some(id) => id,
-            None => self.derive_pipeline_layout(
+        let pipeline_layout = match binding_layout_source {
+            validation::BindingLayoutSource::Provided(_) => {
+                drop(binding_layout_source);
+                pipeline_layout.unwrap()
+            }
+            validation::BindingLayoutSource::Derived(entries) => self.derive_pipeline_layout(
                 implicit_context,
-                derived_group_layouts,
+                entries,
                 &hub.bind_group_layouts,
                 &hub.pipeline_layouts,
             )?,
         };
-        let pipeline_layout_guard = hub.pipeline_layouts.read();
-        let layout = pipeline_layout_guard
-            .get(pipeline_layout_id)
-            .map_err(|_| pipeline::CreateComputePipelineError::InvalidLayout)?;
-
-        if layout.device.as_info().id() != self.as_info().id() {
-            return Err(DeviceError::WrongDevice.into());
-        }
 
         let late_sized_buffer_groups =
-            Device::make_late_sized_buffer_groups(&shader_binding_sizes, layout);
+            Device::make_late_sized_buffer_groups(&shader_binding_sizes, &pipeline_layout);
 
         let pipeline_desc = hal::ComputePipelineDescriptor {
             label: desc.label.to_hal(self.instance_flags),
-            layout: layout.raw(),
+            layout: pipeline_layout.raw(),
             stage: hal::ProgrammableStage {
                 entry_point: desc.stage.entry_point.as_ref(),
                 module: shader_module.raw(),
@@ -2616,7 +2616,7 @@ impl<A: HalApi> Device<A> {
 
         let pipeline = pipeline::ComputePipeline {
             raw: Some(raw),
-            layout: layout.clone(),
+            layout: pipeline_layout,
             device: self.clone(),
             _shader_module: shader_module,
             late_sized_buffer_groups,
@@ -2634,8 +2634,6 @@ impl<A: HalApi> Device<A> {
     ) -> Result<pipeline::RenderPipeline<A>, pipeline::CreateRenderPipelineError> {
         use wgt::TextureFormatFeatureFlags as Tfff;
 
-        let mut shader_modules = Vec::new();
-
         // This has to be done first, or otherwise the IDs may be pointing to entries
         // that are not even in the storage.
         if let Some(ref ids) = implicit_context {
@@ -2648,8 +2646,6 @@ impl<A: HalApi> Device<A> {
             }
         }
 
-        let mut derived_group_layouts =
-            ArrayVec::<binding_model::BindEntryMap, { hal::MAX_BIND_GROUPS }>::new();
         let mut shader_binding_sizes = FastHashMap::default();
 
         let num_attachments = desc.fragment.as_ref().map(|f| f.targets.len()).unwrap_or(0);
@@ -2917,11 +2913,29 @@ impl<A: HalApi> Device<A> {
             }
         }
 
-        if desc.layout.is_none() {
-            for _ in 0..self.limits.max_bind_groups {
-                derived_group_layouts.push(binding_model::BindEntryMap::default());
+        // Get the pipeline layout from the desc if it is provided.
+        let pipeline_layout = match desc.layout {
+            Some(pipeline_layout_id) => {
+                let pipeline_layout = hub
+                    .pipeline_layouts
+                    .get(pipeline_layout_id)
+                    .map_err(|_| pipeline::CreateRenderPipelineError::InvalidLayout)?;
+
+                if pipeline_layout.device.as_info().id() != self.as_info().id() {
+                    return Err(DeviceError::WrongDevice.into());
+                }
+
+                Some(pipeline_layout)
             }
-        }
+            None => None,
+        };
+
+        let mut binding_layout_source = match pipeline_layout {
+            Some(ref pipeline_layout) => {
+                validation::BindingLayoutSource::Provided(pipeline_layout.get_binding_maps())
+            }
+            None => validation::BindingLayoutSource::new_derived(&self.limits),
+        };
 
         let samples = {
             let sc = desc.multisample.count;
@@ -2931,122 +2945,86 @@ impl<A: HalApi> Device<A> {
             sc
         };
 
-        let shader_module_guard = hub.shader_modules.read();
-
+        let vertex_shader_module;
         let vertex_stage = {
-            let stage = &desc.vertex.stage;
-            let flag = wgt::ShaderStages::VERTEX;
+            let stage_desc = &desc.vertex.stage;
+            let stage = wgt::ShaderStages::VERTEX;
 
-            let shader_module = shader_module_guard.get(stage.module).map_err(|_| {
+            vertex_shader_module = hub.shader_modules.get(stage_desc.module).map_err(|_| {
                 pipeline::CreateRenderPipelineError::Stage {
-                    stage: flag,
+                    stage,
                     error: validation::StageError::InvalidModule,
                 }
             })?;
-            if shader_module.device.as_info().id() != self.as_info().id() {
+            if vertex_shader_module.device.as_info().id() != self.as_info().id() {
                 return Err(DeviceError::WrongDevice.into());
             }
-            shader_modules.push(shader_module.clone());
 
-            let pipeline_layout_guard = hub.pipeline_layouts.read();
-
-            let provided_layouts = match desc.layout {
-                Some(pipeline_layout_id) => {
-                    let pipeline_layout = pipeline_layout_guard
-                        .get(pipeline_layout_id)
-                        .map_err(|_| pipeline::CreateRenderPipelineError::InvalidLayout)?;
-
-                    if pipeline_layout.device.as_info().id() != self.as_info().id() {
-                        return Err(DeviceError::WrongDevice.into());
-                    }
-
-                    Some(Device::get_introspection_bind_group_layouts(
-                        pipeline_layout,
-                    ))
-                }
-                None => None,
-            };
-
-            if let Some(ref interface) = shader_module.interface {
+            if let Some(ref interface) = vertex_shader_module.interface {
                 io = interface
                     .check_stage(
-                        provided_layouts.as_ref().map(|p| p.as_slice()),
-                        &mut derived_group_layouts,
+                        &mut binding_layout_source,
                         &mut shader_binding_sizes,
-                        &stage.entry_point,
-                        flag,
+                        &stage_desc.entry_point,
+                        stage,
                         io,
                         desc.depth_stencil.as_ref().map(|d| d.depth_compare),
                     )
-                    .map_err(|error| pipeline::CreateRenderPipelineError::Stage {
-                        stage: flag,
-                        error,
-                    })?;
-                validated_stages |= flag;
+                    .map_err(|error| pipeline::CreateRenderPipelineError::Stage { stage, error })?;
+                validated_stages |= stage;
             }
 
             hal::ProgrammableStage {
-                module: shader_module.raw(),
-                entry_point: stage.entry_point.as_ref(),
+                module: vertex_shader_module.raw(),
+                entry_point: stage_desc.entry_point.as_ref(),
             }
         };
 
+        let mut fragment_shader_module = None;
         let fragment_stage = match desc.fragment {
-            Some(ref fragment) => {
-                let flag = wgt::ShaderStages::FRAGMENT;
+            Some(ref fragment_state) => {
+                let stage = wgt::ShaderStages::FRAGMENT;
 
-                let shader_module =
-                    shader_module_guard
-                        .get(fragment.stage.module)
+                let shader_module = fragment_shader_module.insert(
+                    hub.shader_modules
+                        .get(fragment_state.stage.module)
                         .map_err(|_| pipeline::CreateRenderPipelineError::Stage {
-                            stage: flag,
+                            stage,
                             error: validation::StageError::InvalidModule,
-                        })?;
-                shader_modules.push(shader_module.clone());
-
-                let pipeline_layout_guard = hub.pipeline_layouts.read();
-                let provided_layouts = match desc.layout {
-                    Some(pipeline_layout_id) => Some(Device::get_introspection_bind_group_layouts(
-                        pipeline_layout_guard
-                            .get(pipeline_layout_id)
-                            .as_ref()
-                            .map_err(|_| pipeline::CreateRenderPipelineError::InvalidLayout)?,
-                    )),
-                    None => None,
-                };
+                        })?,
+                );
 
                 if validated_stages == wgt::ShaderStages::VERTEX {
                     if let Some(ref interface) = shader_module.interface {
                         io = interface
                             .check_stage(
-                                provided_layouts.as_ref().map(|p| p.as_slice()),
-                                &mut derived_group_layouts,
+                                &mut binding_layout_source,
                                 &mut shader_binding_sizes,
-                                &fragment.stage.entry_point,
-                                flag,
+                                &fragment_state.stage.entry_point,
+                                stage,
                                 io,
                                 desc.depth_stencil.as_ref().map(|d| d.depth_compare),
                             )
                             .map_err(|error| pipeline::CreateRenderPipelineError::Stage {
-                                stage: flag,
+                                stage,
                                 error,
                             })?;
-                        validated_stages |= flag;
+                        validated_stages |= stage;
                     }
                 }
 
                 if let Some(ref interface) = shader_module.interface {
                     shader_expects_dual_source_blending = interface
-                        .fragment_uses_dual_source_blending(&fragment.stage.entry_point)
+                        .fragment_uses_dual_source_blending(&fragment_state.stage.entry_point)
                         .map_err(|error| pipeline::CreateRenderPipelineError::Stage {
-                            stage: flag,
+                            stage,
                             error,
                         })?;
                 }
 
                 Some(hal::ProgrammableStage {
                     module: shader_module.raw(),
-                    entry_point: fragment.stage.entry_point.as_ref(),
+                    entry_point: fragment_state.stage.entry_point.as_ref(),
                 })
             }
             None => None,
@@ -3066,7 +3044,7 @@ impl<A: HalApi> Device<A> {
         if validated_stages.contains(wgt::ShaderStages::FRAGMENT) {
             for (i, output) in io.iter() {
                 match color_targets.get(*i as usize) {
-                    Some(&Some(ref state)) => {
+                    Some(Some(state)) => {
                         validation::check_texture_format(state.format, &output.ty).map_err(
                             |pipeline| {
                                 pipeline::CreateRenderPipelineError::ColorState(
@@ -3099,21 +3077,17 @@ impl<A: HalApi> Device<A> {
             return Err(pipeline::ImplicitLayoutError::ReflectionError(last_stage).into());
         }
 
-        let pipeline_layout_id = match desc.layout {
-            Some(id) => id,
-            None => self.derive_pipeline_layout(
+        let pipeline_layout = match binding_layout_source {
+            validation::BindingLayoutSource::Provided(_) => {
+                drop(binding_layout_source);
+                pipeline_layout.unwrap()
+            }
+            validation::BindingLayoutSource::Derived(entries) => self.derive_pipeline_layout(
                 implicit_context,
-                derived_group_layouts,
+                entries,
                 &hub.bind_group_layouts,
                 &hub.pipeline_layouts,
             )?,
-        };
-        let layout = {
-            let pipeline_layout_guard = hub.pipeline_layouts.read();
-            pipeline_layout_guard
-                .get(pipeline_layout_id)
-                .map_err(|_| pipeline::CreateRenderPipelineError::InvalidLayout)?
-                .clone()
         };
 
         // Multiview is only supported if the feature is enabled
@@ -3138,11 +3112,11 @@ impl<A: HalApi> Device<A> {
         }
 
         let late_sized_buffer_groups =
-            Device::make_late_sized_buffer_groups(&shader_binding_sizes, &layout);
+            Device::make_late_sized_buffer_groups(&shader_binding_sizes, &pipeline_layout);
 
         let pipeline_desc = hal::RenderPipelineDescriptor {
             label: desc.label.to_hal(self.instance_flags),
-            layout: layout.raw(),
+            layout: pipeline_layout.raw(),
             vertex_buffers: &vertex_buffers,
             vertex_stage,
             primitive: desc.primitive,
@@ -3206,9 +3180,16 @@ impl<A: HalApi> Device<A> {
             }
         }
 
+        let shader_modules = {
+            let mut shader_modules = ArrayVec::new();
+            shader_modules.push(vertex_shader_module);
+            shader_modules.extend(fragment_shader_module);
+            shader_modules
+        };
+
         let pipeline = pipeline::RenderPipeline {
             raw: Some(raw),
-            layout: layout.clone(),
+            layout: pipeline_layout,
             device: self.clone(),
             pass_context,
             _shader_modules: shader_modules,
@@ -3251,7 +3232,10 @@ impl<A: HalApi> Device<A> {
             .contains(wgt::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
         // If we're running downlevel, we need to manually ask the backend what
         // we can use as we can't trust WebGPU.
-        let downlevel = !self.downlevel.is_webgpu_compliant();
+        let downlevel = !self
+            .downlevel
+            .flags
+            .contains(wgt::DownlevelFlags::WEBGPU_TEXTURE_FORMAT_SUPPORT);
 
         if using_device_features || downlevel {
             Ok(self.get_texture_format_features(adapter, format))
@@ -3339,9 +3323,13 @@ impl<A: HalApi> Device<A> {
         self.valid.store(false, Ordering::Release);
 
         // 1) Resolve the GPUDevice device.lost promise.
-        let closure = self.lock_life().device_lost_closure.take();
+        let mut life_lock = self.lock_life();
+        let closure = life_lock.device_lost_closure.take();
         if let Some(device_lost_closure) = closure {
+            // It's important to not hold the lock while calling the closure.
+            drop(life_lock);
             device_lost_closure.call(DeviceLostReason::Unknown, message.to_string());
+            life_lock = self.lock_life();
         }
 
         // 2) Complete any outstanding mapAsync() steps.
@@ -3351,6 +3339,9 @@ impl<A: HalApi> Device<A> {
         // since that will prevent any new work from being added to the queues.
         // Future calls to poll_devices will continue to check the work queues
         // until they are cleared, and then drop the device.
+
+        // Eagerly release GPU resources.
+        life_lock.release_gpu_resources();
     }
 }
 

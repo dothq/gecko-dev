@@ -196,11 +196,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
                   ? GetColorFromNSColor(NSColor.controlTextColor)
                   : NS_RGB(0xFF, 0xFF, 0xFF);
       break;
-    case ColorID::Menutext:
-    case ColorID::Infotext:
-    case ColorID::MozSidebartext:
-      color = GetColorFromNSColor(NSColor.textColor);
-      break;
     case ColorID::Windowtext:
       color = GetColorFromNSColor(NSColor.windowFrameTextColor);
       break;
@@ -251,7 +246,10 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
                                            : NS_RGB(0xDA, 0xDA, 0xDA);
       break;
     case ColorID::Menu:
-      color = GetColorFromNSColor(NSColor.textBackgroundColor);
+      // Hand-picked from Sonoma because there doesn't seem to be any
+      // appropriate menu system color.
+      color = aScheme == ColorScheme::Dark ? NS_RGB(0x36, 0x36, 0x39)
+                                           : NS_RGB(0xeb, 0xeb, 0xeb);
       break;
     case ColorID::Windowframe:
       color = GetColorFromNSColor(NSColor.windowFrameColor);
@@ -269,11 +267,14 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
     case ColorID::MozComboboxtext:
     case ColorID::Buttontext:
     case ColorID::MozButtonhovertext:
+    case ColorID::Menutext:
+    case ColorID::Infotext:
     case ColorID::MozDialogtext:
     case ColorID::MozCellhighlighttext:
     case ColorID::MozColheadertext:
     case ColorID::MozColheaderhovertext:
     case ColorID::MozColheaderactivetext:
+    case ColorID::MozSidebartext:
       color = GetColorFromNSColor(NSColor.controlTextColor);
       break;
     case ColorID::MozMacFocusring:

@@ -3762,6 +3762,18 @@ nsresult nsHttpChannel::OpenCacheEntryInternal(bool isHttps) {
   if (mRequestHead.IsHead()) {
     mCacheIdExtension.Append("HEAD");
   }
+  bool isThirdParty = false;
+  if (StaticPrefs::network_fetch_cache_partition_cross_origin() &&
+      (NS_FAILED(mLoadInfo->TriggeringPrincipal()->IsThirdPartyChannel(
+           this, &isThirdParty)) ||
+       isThirdParty) &&
+      (mLoadInfo->InternalContentPolicyType() == nsIContentPolicy::TYPE_FETCH ||
+       mLoadInfo->InternalContentPolicyType() ==
+           nsIContentPolicy::TYPE_XMLHTTPREQUEST ||
+       mLoadInfo->InternalContentPolicyType() ==
+           nsIContentPolicy::TYPE_INTERNAL_XMLHTTPREQUEST)) {
+    mCacheIdExtension.Append("FETCH");
+  }
 
   mCacheOpenWithPriority = cacheEntryOpenFlags & nsICacheStorage::OPEN_PRIORITY;
   mCacheQueueSizeWhenOpen =
@@ -6120,6 +6132,21 @@ nsHttpChannel::AsyncOpen(nsIStreamListener* aListener) {
   UpdatePrivateBrowsing();
 
   AntiTrackingUtils::UpdateAntiTrackingInfoForChannel(this);
+
+  // Recalculate the default userAgent header after the AntiTrackingInfo gets
+  // updated because we can only know whether the site is exempted from
+  // fingerprinting protection after we have the AntiTracking Info.
+  //
+  // Note that we don't recalculate the header if it has been modified since the
+  // channel was created because we want to preserve the modified header.
+  if (!LoadIsUserAgentHeaderModified()) {
+    rv = mRequestHead.SetHeader(
+        nsHttp::User_Agent,
+        gHttpHandler->UserAgent(nsContentUtils::ShouldResistFingerprinting(
+            this, RFPTarget::HttpUserAgent)),
+        false, nsHttpHeaderArray::eVarietyRequestEnforceDefault);
+    MOZ_ASSERT(NS_SUCCEEDED(rv));
+  }
 
   if (WaitingForTailUnblock()) {
     // This channel is marked as Tail and is part of a request context

@@ -16,6 +16,7 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/CaretAssociationHint.h"
 #include "mozilla/ContentIterator.h"
 #include "mozilla/DisplayPortUtils.h"
 #include "mozilla/EventDispatcher.h"
@@ -2191,8 +2192,6 @@ void PresShell::NotifyDestroyingFrame(nsIFrame* aFrame) {
       mPendingScrollAnchorAdjustment.Remove(scrollableFrame);
       mPendingScrollResnap.Remove(scrollableFrame);
     }
-
-    mContentVisibilityAutoFrames.Remove(aFrame);
   }
 }
 
@@ -2407,7 +2406,7 @@ PresShell::CompleteMove(bool aForward, bool aExtend) {
   frameSelection->HandleClick(
       MOZ_KnownLive(pos.mResultContent) /* bug 1636889 */, pos.mContentOffset,
       pos.mContentOffset, focusMode,
-      aForward ? CARET_ASSOCIATE_AFTER : CARET_ASSOCIATE_BEFORE);
+      aForward ? CaretAssociationHint::After : CaretAssociationHint::Before);
   if (limiter) {
     // HandleClick resets ancestorLimiter, so set it again.
     frameSelection->SetAncestorLimiter(limiter);
@@ -3325,6 +3324,13 @@ static bool ComputeNeedToScroll(WhenToScroll aWhenToScroll, nscoord aLineSize,
       // The caller wants the frame as visible as possible
       return true;
     case WhenToScroll::IfNotVisible:
+      if (aLineSize > (aRectMax - aRectMin)) {
+        // If the line size is greater than the size of the rect
+        // to scroll into view, do not use the line size to determine
+        // if we need to scroll.
+        aLineSize = 0;
+      }
+
       // Scroll only if no part of the frame is visible in this view.
       return aRectMax - aLineSize <= aViewMin ||
              aRectMin + aLineSize >= aViewMax;
@@ -9510,18 +9516,44 @@ void PresShell::DidDoReflow(bool aInterruptible) {
     return;
   }
 
-  nsAutoScriptBlocker scriptBlocker;
-  AutoAssertNoFlush noReentrantFlush(*this);
-  if (nsCOMPtr<nsIDocShell> docShell = mPresContext->GetDocShell()) {
-    DOMHighResTimeStamp now = GetPerformanceNowUnclamped();
-    docShell->NotifyReflowObservers(aInterruptible, mLastReflowStart, now);
+  {
+    nsAutoScriptBlocker scriptBlocker;
+    AutoAssertNoFlush noReentrantFlush(*this);
+    if (nsCOMPtr<nsIDocShell> docShell = mPresContext->GetDocShell()) {
+      DOMHighResTimeStamp now = GetPerformanceNowUnclamped();
+      docShell->NotifyReflowObservers(aInterruptible, mLastReflowStart, now);
+    }
+
+    if (StaticPrefs::layout_reflow_synthMouseMove()) {
+      SynthesizeMouseMove(false);
+    }
+
+    mPresContext->NotifyMissingFonts();
   }
 
-  if (StaticPrefs::layout_reflow_synthMouseMove()) {
-    SynthesizeMouseMove(false);
+  if (mIsDestroying) {
+    return;
   }
 
-  mPresContext->NotifyMissingFonts();
+  if (mDirtyRoots.IsEmpty()) {
+    // We only unsuppress painting if we're out of reflows.  It's pointless to
+    // do so if reflows are still pending, since reflows are just going to
+    // thrash the frames around some more.  By waiting we avoid an overeager
+    // "jitter" effect.
+    if (mShouldUnsuppressPainting) {
+      mShouldUnsuppressPainting = false;
+      UnsuppressAndInvalidate();
+    }
+  } else {
+    // If any new reflow commands were enqueued during the reflow, schedule
+    // another reflow event to process them.  Note that we want to do this
+    // after DidDoReflow(), since that method can change whether there are
+    // dirty roots around by flushing, and there's no point in posting a
+    // reflow event just to have the flush revoke it.
+    MaybeScheduleReflow();
+    // And record that we might need flushing
+    SetNeedLayoutFlush();
+  }
 }
 
 DOMHighResTimeStamp PresShell::GetPerformanceNowUnclamped() {
@@ -9884,41 +9916,17 @@ bool PresShell::ProcessReflowCommands(bool aInterruptible) {
     DidDoReflow(aInterruptible);
   }
 
-  // DidDoReflow might have killed us
-  if (!mIsDestroying) {
 #ifdef DEBUG
-    if (VerifyReflowFlags::DumpCommands & gVerifyReflowFlags) {
-      printf("\nPresShell::ProcessReflowCommands() finished: this=%p\n",
-             (void*)this);
-    }
-    DoVerifyReflow();
+  if (VerifyReflowFlags::DumpCommands & gVerifyReflowFlags) {
+    printf("\nPresShell::ProcessReflowCommands() finished: this=%p\n",
+           (void*)this);
+  }
+  DoVerifyReflow();
 #endif
 
-    // If any new reflow commands were enqueued during the reflow, schedule
-    // another reflow event to process them.  Note that we want to do this
-    // after DidDoReflow(), since that method can change whether there are
-    // dirty roots around by flushing, and there's no point in posting a
-    // reflow event just to have the flush revoke it.
-    if (!mDirtyRoots.IsEmpty()) {
-      MaybeScheduleReflow();
-      // And record that we might need flushing
-      SetNeedLayoutFlush();
-    }
-  }
-
-  if (!mIsDestroying && mShouldUnsuppressPainting && mDirtyRoots.IsEmpty()) {
-    // We only unlock if we're out of reflows.  It's pointless
-    // to unlock if reflows are still pending, since reflows
-    // are just going to thrash the frames around some more.  By
-    // waiting we avoid an overeager "jitter" effect.
-    mShouldUnsuppressPainting = false;
-    UnsuppressAndInvalidate();
-  }
-
-  if (mDocument->GetRootElement()) {
+  {
     TimeDuration elapsed = TimeStamp::Now() - timerStart;
     int32_t intElapsed = int32_t(elapsed.ToMilliseconds());
-
     if (intElapsed > NS_LONG_REFLOW_TIME_MS) {
       Telemetry::Accumulate(Telemetry::LONG_REFLOW_INTERRUPTIBLE,
                             aInterruptible ? 1 : 0);
@@ -11603,17 +11611,7 @@ void PresShell::SyncWindowProperties(bool aSync) {
     auto* canvas = GetCanvasFrame();
     widget::TransparencyMode mode = nsLayoutUtils::GetFrameTransparency(
         canvas ? canvas : rootFrame, rootFrame);
-    StyleWindowShadow shadow = rootFrame->StyleUIReset()->mWindowShadow;
     windowWidget->SetTransparencyMode(mode);
-    windowWidget->SetWindowShadowStyle(shadow);
-
-    nsCOMPtr<nsIWidget> viewWidget = view->GetWidget();
-    if (viewWidget != windowWidget) {
-      // Happens on macOS (where we have an nsChildView as a child of an
-      // nsCocoaWindow), and in popup=yes windows in other platforms, in
-      // practice.
-      viewWidget->SetTransparencyMode(mode);
-    }
 
     // For macOS, apply color scheme overrides to the top level window widget.
     if (auto scheme = pc->GetOverriddenOrEmbedderColorScheme()) {
@@ -11996,15 +11994,12 @@ void PresShell::UpdateRelevancyOfContentVisibilityAutoFrames() {
     return;
   }
 
-  bool isRelevantContentChanged = false;
   for (nsIFrame* frame : mContentVisibilityAutoFrames) {
-    isRelevantContentChanged |=
-        frame->UpdateIsRelevantContent(mContentVisibilityRelevancyToUpdate);
+    frame->UpdateIsRelevantContent(mContentVisibilityRelevancyToUpdate);
   }
-  if (isRelevantContentChanged) {
-    if (nsPresContext* presContext = GetPresContext()) {
-      presContext->UpdateHiddenByContentVisibilityForAnimations();
-    }
+
+  if (nsPresContext* presContext = GetPresContext()) {
+    presContext->UpdateHiddenByContentVisibilityForAnimationsIfNeeded();
   }
 
   mContentVisibilityRelevancyToUpdate.clear();
@@ -12038,7 +12033,6 @@ PresShell::ProximityToViewportResult PresShell::DetermineProximityToViewport() {
   auto input = DOMIntersectionObserver::ComputeInput(
       *mDocument, /* aRoot = */ nullptr, &rootMargin);
 
-  bool isRelevantContentChanged = false;
   for (nsIFrame* frame : mContentVisibilityAutoFrames) {
     auto* element = frame->GetContent()->AsElement();
     result.mAnyScrollIntoViewFlag |=
@@ -12059,8 +12053,7 @@ PresShell::ProximityToViewportResult PresShell::DetermineProximityToViewport() {
             .Intersects();
     element->SetVisibleForContentVisibility(intersects);
     if (oldVisibility.isNothing() || *oldVisibility != intersects) {
-      isRelevantContentChanged |=
-          frame->UpdateIsRelevantContent(ContentRelevancyReason::Visible);
+      frame->UpdateIsRelevantContent(ContentRelevancyReason::Visible);
     }
 
     // 14.2.3.3
@@ -12068,10 +12061,8 @@ PresShell::ProximityToViewportResult PresShell::DetermineProximityToViewport() {
       result.mHadInitialDetermination = true;
     }
   }
-  if (isRelevantContentChanged) {
-    if (nsPresContext* presContext = GetPresContext()) {
-      presContext->UpdateHiddenByContentVisibilityForAnimations();
-    }
+  if (nsPresContext* presContext = GetPresContext()) {
+    presContext->UpdateHiddenByContentVisibilityForAnimationsIfNeeded();
   }
 
   return result;

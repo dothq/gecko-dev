@@ -70,6 +70,8 @@ support-files = [
 
 ["test_ComponentEnvironment.js"]
 
+["test_Cu_reportError_column.js"]
+
 ["test_FrameScriptEnvironment.js"]
 
 ["test_ReadableStream_from.js"]
@@ -200,6 +202,8 @@ support-files = [
 
 ["test_envChain_subscript_in_JSM.js"]
 
+["test_error_to_exception.js"]
+
 ["test_eventSource.js"]
 
 ["test_exportFunction.js"]
@@ -251,6 +255,8 @@ skip-if = [
 ["test_loadedESModules.js"]
 
 ["test_localeCompare.js"]
+
+["test_malformed_utf8.js"]
 
 ["test_messageChannel.js"]
 

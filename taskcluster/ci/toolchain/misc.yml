@@ -230,7 +230,7 @@ macosx64-custom-car:
         toolchain-artifact: public/build/car_macosx.tar.zst
     fetches:
         toolchain:
-            - macosx64-sdk-14.0
+            - macosx64-sdk-14.2
             - macosx64-python-3.8
 
 macosx-arm64-custom-car:
@@ -240,7 +240,7 @@ macosx-arm64-custom-car:
         cached_task: false
     treeherder:
         symbol: TM(custom-car-arm)
-        tier: 3
+        tier: 2
     worker:
         max-run-time: 50000
     run-on-projects: []
@@ -266,7 +266,7 @@ macosx-arm64-custom-car:
         toolchain-artifact: public/build/car_macosx_arm.tar.zst
     fetches:
         toolchain:
-            - macosx64-sdk-14.0
+            - macosx64-sdk-14.2
             - macosx64-python-3.8
 
 android-custom-car:
@@ -401,8 +401,6 @@ wrench-deps:
             - 'gfx/wr/ci-scripts/install-meson.sh'
         toolchain-artifact: public/build/wrench-deps.tar.zst
     fetches:
-        fetch:
-            - android-ndk-rs
         toolchain:
             - linux64-rust  # whatever m-c is built with
 
@@ -562,3 +560,24 @@ linux64-afl-instrumentation-4.0:
         toolchain:
             - linux64-clang
             - linux64-toolchain-sysroot
+
+linux64-cargo-apk:
+    description: "cargo-apk toolchain build"
+    treeherder:
+        symbol: TL(cargo-apk)
+    worker:
+        env:
+            FETCH: android-ndk-rs/cargo-apk
+    run:
+        script: build-rust-based-toolchain.sh
+        arguments: ['x86_64-unknown-linux-gnu']
+        resources:
+            - taskcluster/scripts/misc/cargo-apk-Cargo.lock
+        toolchain-artifact: public/build/cargo-apk.tar.zst
+    fetches:
+        fetch:
+            - android-ndk-rs
+        toolchain:
+            - linux64-clang-toolchain
+            - linux64-rust-toolchain
+            - sysroot-x86_64-linux-gnu

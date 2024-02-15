@@ -12,6 +12,7 @@
 #include "CompositableHost.h"
 #include "gfxEnv.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/layers/AsyncImagePipelineOp.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/RemoteTextureHostWrapper.h"
 #include "mozilla/layers/SharedSurfacesParent.h"
@@ -223,6 +224,13 @@ Maybe<TextureHost::ResourceUpdateOp> AsyncImagePipelineManager::UpdateImageKeys(
     // The texture has not changed, just reuse previous ImageKeys.
     aKeys = aPipeline->mKeys.Clone();
     return Nothing();
+  }
+
+  auto* wrapper = aTexture ? aTexture->AsRemoteTextureHostWrapper() : nullptr;
+  if (wrapper && !aPipeline->mImageHost->GetAsyncRef()) {
+    std::function<void(const RemoteTextureInfo&)> function;
+    RemoteTextureMap::Get()->GetRemoteTexture(
+        wrapper, std::move(function), /* aWaitForRemoteTextureOwner */ false);
   }
 
   if (!aTexture || aTexture->NumSubTextures() == 0) {
@@ -476,7 +484,9 @@ void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
 
 void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
     const wr::PipelineId& aPipelineId, wr::TransactionBuilder& aTxn,
-    wr::TransactionBuilder& aTxnForImageBridge, RemoteTextureInfoList* aList) {
+    wr::TransactionBuilder& aTxnForImageBridge,
+    AsyncImagePipelineOps* aPendingOps,
+    RemoteTextureInfoList* aPendingRemoteTextures) {
   AsyncImagePipeline* pipeline =
       mAsyncImagePipelines.Get(wr::AsUint64(aPipelineId));
   if (!pipeline) {
@@ -486,7 +496,7 @@ void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
   // ready event of RemoteTexture that uses ImageBridge do not need to be
   // checked here.
   if (pipeline->mImageHost->GetAsyncRef()) {
-    aList = nullptr;
+    aPendingRemoteTextures = nullptr;
   }
 
   wr::TransactionBuilder fastTxn(mApi, /* aUseSceneBuilderThread */ false);
@@ -512,14 +522,35 @@ void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
   auto* wrapper = texture ? texture->AsRemoteTextureHostWrapper() : nullptr;
 
   // Store pending remote texture that is used for waiting at WebRenderAPI.
-  if (aList && texture && wrapper && texture != pipeline->mCurrentTexture &&
-      texture->NumSubTextures() != 0 && wrapper->IsReadyForRendering()) {
-    aList->mList.emplace(wrapper->mTextureId, wrapper->mOwnerId,
-                         wrapper->mForPid);
+  if (aPendingRemoteTextures && texture &&
+      texture != pipeline->mCurrentTexture && wrapper) {
+    aPendingRemoteTextures->mList.emplace(wrapper->mTextureId,
+                                          wrapper->mOwnerId, wrapper->mForPid);
+  }
+
+  if (aPendingOps && !pipeline->mImageHost->GetAsyncRef()) {
+    aPendingOps->mList.emplace(AsyncImagePipelineOp::ApplyAsyncImageForPipeline(
+        this, aPipelineId, texture));
+    return;
   }
 
   ApplyAsyncImageForPipeline(epoch, aPipelineId, pipeline, texture,
                              sceneBuilderTxn, maybeFastTxn);
+}
+
+void AsyncImagePipelineManager::ApplyAsyncImageForPipeline(
+    const wr::PipelineId& aPipelineId, TextureHost* aTexture,
+    wr::TransactionBuilder& aTxn) {
+  AsyncImagePipeline* pipeline =
+      mAsyncImagePipelines.Get(wr::AsUint64(aPipelineId));
+  if (!pipeline) {
+    return;
+  }
+  MOZ_ASSERT(!pipeline->mImageHost->GetAsyncRef());
+
+  wr::Epoch epoch = GetNextImageEpoch();
+  ApplyAsyncImageForPipeline(epoch, aPipelineId, pipeline, aTexture, aTxn,
+                             aTxn);
 }
 
 void AsyncImagePipelineManager::SetEmptyDisplayList(

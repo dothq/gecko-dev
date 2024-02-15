@@ -1,6 +1,7 @@
 use std::{
     ffi::{c_void, CStr, CString},
     slice,
+    str::FromStr,
     sync::Arc,
     thread,
 };
@@ -507,7 +508,7 @@ impl super::Instance {
         Ok(self.create_surface_from_vk_surface_khr(surface))
     }
 
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "metal"))]
     fn create_surface_from_view(
         &self,
         view: *mut c_void,
@@ -805,13 +806,13 @@ impl crate::Instance<super::Api> for super::Instance {
                 let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
                 self.create_surface_from_hwnd(hinstance as *mut _, handle.hwnd.get() as *mut _)
             }
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "metal"))]
             (Rwh::AppKit(handle), _)
                 if self.shared.extensions.contains(&ext::MetalSurface::name()) =>
             {
                 self.create_surface_from_view(handle.ns_view.as_ptr())
             }
-            #[cfg(target_os = "ios")]
+            #[cfg(all(target_os = "ios", feature = "metal"))]
             (Rwh::UiKit(handle), _)
                 if self.shared.extensions.contains(&ext::MetalSurface::name()) =>
             {
@@ -855,11 +856,16 @@ impl crate::Instance<super::Api> for super::Instance {
                 {
                     // Check if mesa driver and version less than 21.2
                     if let Some(version) = exposed.info.driver_info.split_once("Mesa ").map(|s| {
-                        s.1.rsplit_once('.')
-                            .map(|v| v.0.parse::<f32>().unwrap_or_default())
-                            .unwrap_or_default()
+                        let mut components = s.1.split('.');
+                        let major = components.next().and_then(|s| u8::from_str(s).ok());
+                        let minor = components.next().and_then(|s| u8::from_str(s).ok());
+                        if let (Some(major), Some(minor)) = (major, minor) {
+                            (major, minor)
+                        } else {
+                            (0, 0)
+                        }
                     }) {
-                        if version < 21.2 {
+                        if version < (21, 2) {
                             // See https://gitlab.freedesktop.org/mesa/mesa/-/issues/4688
                             log::warn!(
                                 "Disabling presentation on '{}' (id {:?}) due to NV Optimus and Intel Mesa < v21.2",

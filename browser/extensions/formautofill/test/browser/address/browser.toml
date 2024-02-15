@@ -1,20 +1,30 @@
 [DEFAULT]
 prefs = [
   "extensions.formautofill.addresses.enabled=true",
+  "extensions.formautofill.addresses.capture.requiredFields=''",
   "toolkit.telemetry.ipcBatchTimeout=0", # lower the interval for event telemetry in the content process to update the parent process
 ]
 support-files = [
   "../head.js",
   "../../fixtures/autocomplete_address_basic.html",
+  "../../fixtures/capture_address_on_page_navigation.html",
   "../../fixtures/without_autocomplete_address_basic.html",
   "head_address.js",
 ]
 
 ["browser_address_capture_form_removal.js"]
 
+["browser_address_capture_page_navigation.js"]
+
+["browser_address_doorhanger_confirmation_popup.js"]
+
 ["browser_address_doorhanger_display.js"]
 
 ["browser_address_doorhanger_invalid_fields.js"]
+
+["browser_address_doorhanger_multiple_tabs.js"]
+
+["browser_address_doorhanger_non_mergeable_fields.js"]
 
 ["browser_address_doorhanger_not_shown.js"]
 

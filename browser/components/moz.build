@@ -61,6 +61,7 @@ DIRS += [
     "shell",
     "shopping",
     "syncedtabs",
+    "tabpreview",
     "tabunloader",
     "textrecognition",
     "translations",
@@ -110,5 +111,7 @@ if CONFIG["MOZ_UPDATER"]:
     BROWSER_CHROME_MANIFESTS += [
         "tests/browser/whats_new_page/browser.toml",
     ]
+
+MARIONETTE_MANIFESTS += ["tests/marionette/manifest.toml"]
 
 XPCSHELL_TESTS_MANIFESTS += ["tests/unit/xpcshell.toml"]

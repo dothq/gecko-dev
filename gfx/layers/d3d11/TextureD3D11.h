@@ -8,7 +8,7 @@
 #define MOZILLA_GFX_TEXTURED3D11_H
 
 #include <d3d11.h>
-
+#include <d3d11_1.h>
 #include <vector>
 
 #include "d3d9.h"
@@ -25,8 +25,9 @@
 namespace mozilla {
 
 namespace gfx {
+class FileHandleWrapper;
 struct FenceInfo;
-}
+}  // namespace gfx
 
 namespace gl {
 class GLBlitHelper;
@@ -95,6 +96,8 @@ class D3D11TextureData final : public TextureData {
     return mAllocationFlags;
   }
 
+  TextureType GetTextureType() const override { return TextureType::D3D11; }
+
   void FillInfo(TextureData::Info& aInfo) const override;
 
   bool Serialize(SurfaceDescriptor& aOutDescrptor) override;
@@ -116,12 +119,13 @@ class D3D11TextureData final : public TextureData {
     return mGpuProcessTextureId;
   }
 
+  void RegisterQuery(RefPtr<ID3D11Query> aQuery);
+
  private:
   D3D11TextureData(ID3D11Texture2D* aTexture, uint32_t aArrayIndex,
+                   RefPtr<gfx::FileHandleWrapper> aSharedHandle,
                    gfx::IntSize aSize, gfx::SurfaceFormat aFormat,
                    TextureAllocationFlags aFlags);
-
-  void GetDXGIResource(IDXGIResource** aOutResource);
 
   bool PrepareDrawTargetInLock(OpenMode aMode);
 
@@ -149,9 +153,11 @@ class D3D11TextureData final : public TextureData {
   const bool mHasKeyedMutex;
 
   RefPtr<ID3D11Texture2D> mTexture;
+  const RefPtr<gfx::FileHandleWrapper> mSharedHandle;
   Maybe<GpuProcessTextureId> mGpuProcessTextureId;
   uint32_t mArrayIndex = 0;
   const TextureAllocationFlags mAllocationFlags;
+  Maybe<GpuProcessQueryId> mGpuProcessQueryId;
 };
 
 class DXGIYCbCrTextureData : public TextureData {
@@ -201,7 +207,7 @@ class DXGIYCbCrTextureData : public TextureData {
 
  protected:
   RefPtr<ID3D11Texture2D> mD3D11Textures[3];
-  HANDLE mHandles[3];
+  RefPtr<gfx::FileHandleWrapper> mHandles[3];
   gfx::IntSize mSize;
   gfx::IntSize mSizeY;
   gfx::IntSize mSizeCbCr;
@@ -383,10 +389,11 @@ class DXGITextureHostD3D11 : public TextureHost {
   RefPtr<ID3D11Device> mDevice;
   RefPtr<ID3D11Texture2D> mTexture;
   Maybe<GpuProcessTextureId> mGpuProcessTextureId;
+  Maybe<GpuProcessQueryId> mGpuProcessQueryId;
   uint32_t mArrayIndex = 0;
   RefPtr<DataTextureSourceD3D11> mTextureSource;
   gfx::IntSize mSize;
-  HANDLE mHandle;
+  const RefPtr<gfx::FileHandleWrapper> mHandle;
   gfx::SurfaceFormat mFormat;
   bool mHasKeyedMutex;
   gfx::FenceInfo mAcquireFenceInfo;
@@ -446,7 +453,9 @@ class DXGIYCbCrTextureHostD3D11 : public TextureHost {
   gfx::IntSize mSize;
   gfx::IntSize mSizeY;
   gfx::IntSize mSizeCbCr;
-  HANDLE mHandles[3];
+  // Handles will be closed automatically when `UniqueFileHandle` gets
+  // destroyed.
+  RefPtr<gfx::FileHandleWrapper> mHandles[3];
   bool mIsLocked;
   gfx::ColorDepth mColorDepth;
   gfx::YUVColorSpace mYUVColorSpace;
@@ -492,7 +501,7 @@ class SyncObjectD3D11Host : public SyncObjectHost {
 
   SyncHandle mSyncHandle;
   RefPtr<ID3D11Device> mDevice;
-  RefPtr<IDXGIResource> mSyncTexture;
+  RefPtr<IDXGIResource1> mSyncTexture;
   RefPtr<IDXGIKeyedMutex> mKeyedMutex;
 };
 
@@ -519,7 +528,7 @@ class SyncObjectD3D11Client : public SyncObjectClient {
   std::vector<ID3D11Texture2D*> mSyncedTextures;
 
  private:
-  const SyncHandle mSyncHandle;
+  SyncHandle mSyncHandle;
   RefPtr<IDXGIKeyedMutex> mKeyedMutex;
   const RefPtr<ID3D11Device> mDevice;
 };

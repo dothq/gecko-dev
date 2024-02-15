@@ -8,6 +8,7 @@
 #define js_Printer_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/glue/Debug.h"
 #include "mozilla/Range.h"
 
 #include <stdarg.h>
@@ -79,6 +80,10 @@
 //    in a LifoAlloc buffer, no-reallocation occur but one should use
 //    `exportInto` to serialize its content to a Sprinter or a Fprinter. This is
 //    useful to avoid reallocation copies, while using an existing LifoAlloc.
+//
+//  - SEPrinter: Roughly the same as Fprinter for stderr, except it goes through
+//    printf_stderr, which makes sure the output goes to a useful place: the
+//    Android log or the Windows debug output.
 //
 //  - EscapePrinter: Wrapper around other printers, to escape characters when
 //    necessary.
@@ -272,10 +277,11 @@ class JS_PUBLIC_API StringPrinter : public GenericPrinter {
   // success.
   char* reserve(size_t len);
 
-  // Puts |len| characters from |s| at the current position and
-  // return true on success, false on failure.
+  // Puts |len| characters from |s| at the current position. May OOM, which must
+  // be checked by testing the return value of releaseJS() at the end of
+  // printing.
   virtual void put(const char* s, size_t len) final;
-  using GenericPrinter::put;  // pick up |inline bool put(const char* s);|
+  using GenericPrinter::put;  // pick up |put(const char* s);|
 
   virtual bool canPutFromIndex() const final { return true; }
   virtual void putFromIndex(size_t index, size_t length) final {
@@ -337,10 +343,24 @@ class JS_PUBLIC_API Fprinter final : public GenericPrinter {
   void flush() override;
   void finish();
 
-  // Puts |len| characters from |s| at the current position and
-  // return true on success, false on failure.
-  virtual void put(const char* s, size_t len) override;
-  using GenericPrinter::put;  // pick up |inline bool put(const char* s);|
+  // Puts |len| characters from |s| at the current position. Errors may be
+  // detected with hadOutOfMemory() (which will be set for any fwrite() error,
+  // not just OOM.)
+  void put(const char* s, size_t len) override;
+  using GenericPrinter::put;  // pick up |put(const char* s);|
+};
+
+// SEprinter, print using printf_stderr (goes to Android log, Windows debug,
+// else just stderr).
+class SEprinter final : public GenericPrinter {
+ public:
+  constexpr SEprinter() {}
+
+  // Puts |len| characters from |s| at the current position. Ignores errors.
+  virtual void put(const char* s, size_t len) override {
+    printf_stderr("%.*s", int(len), s);
+  }
+  using GenericPrinter::put;  // pick up |put(const char* s);|
 };
 
 // LSprinter, is similar to Sprinter except that instead of using an
@@ -373,10 +393,9 @@ class JS_PUBLIC_API LSprinter final : public GenericPrinter {
   // Drop the current string, and let them be free with the LifoAlloc.
   void clear();
 
-  // Puts |len| characters from |s| at the current position and
-  // return true on success, false on failure.
+  // Puts |len| characters from |s| at the current position.
   virtual void put(const char* s, size_t len) override;
-  using GenericPrinter::put;  // pick up |inline bool put(const char* s);|
+  using GenericPrinter::put;  // pick up |put(const char* s);|
 };
 
 // Escaping printers work like any other printer except that any added character
@@ -538,7 +557,7 @@ enum class QuoteTarget { String, JSON };
 
 template <QuoteTarget target, typename CharT>
 void JS_PUBLIC_API QuoteString(Sprinter* sp,
-                               const mozilla::Range<const CharT> chars,
+                               const mozilla::Range<const CharT>& chars,
                                char quote = '\0');
 
 }  // namespace js

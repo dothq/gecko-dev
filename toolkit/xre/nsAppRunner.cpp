@@ -344,12 +344,23 @@ nsString gProcessStartupShortcut;
 #  ifdef MOZ_WAYLAND
 #    include <gdk/gdkwayland.h>
 #    include "mozilla/widget/nsWaylandDisplay.h"
+#    include "wayland-proxy.h"
 #  endif
 #  ifdef MOZ_X11
 #    include <gdk/gdkx.h>
 #  endif /* MOZ_X11 */
 #endif
+
+#if defined(MOZ_WAYLAND)
+std::unique_ptr<WaylandProxy> gWaylandProxy;
+#endif
+
 #include "BinaryPath.h"
+
+#ifdef MOZ_LOGGING
+#  include "mozilla/Logging.h"
+extern mozilla::LazyLogModule gWidgetWaylandLog;
+#endif /* MOZ_LOGGING */
 
 #ifdef FUZZING
 #  include "FuzzerRunner.h"
@@ -1826,15 +1837,15 @@ nsXULAppInfo::RemoveCrashReportAnnotation(const nsACString& key) {
 }
 
 NS_IMETHODIMP
-nsXULAppInfo::IsAnnotationAllowlistedForPing(const nsACString& aValue,
-                                             bool* aIsAllowlisted) {
+nsXULAppInfo::IsAnnotationAllowedForPing(const nsACString& aValue,
+                                         bool* aIsAllowed) {
   CrashReporter::Annotation annotation;
 
   if (!AnnotationFromString(annotation, PromiseFlatCString(aValue).get())) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  *aIsAllowlisted = CrashReporter::IsAnnotationAllowlistedForPing(annotation);
+  *aIsAllowed = CrashReporter::IsAnnotationAllowedForPing(annotation);
 
   return NS_OK;
 }
@@ -2539,6 +2550,7 @@ nsresult LaunchChild(bool aBlankCommandLine, bool aTryExec) {
 
 #if !defined(MOZ_WIDGET_ANDROID)  // Android has separate restart code.
 #  if defined(XP_MACOSX)
+  InitializeMacApp();
   CommandLineServiceMac::SetupMacCommandLine(gRestartArgc, gRestartArgv, true);
   LaunchChildMac(gRestartArgc, gRestartArgv);
 #  else
@@ -2823,6 +2835,7 @@ static ReturnAbortOnError ShowProfileManager(
     NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
 
 #ifdef XP_MACOSX
+    InitializeMacApp();
     CommandLineServiceMac::SetupMacCommandLine(gRestartArgc, gRestartArgv,
                                                true);
 #endif
@@ -4713,6 +4726,25 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 
     // display_name is owned by gdk.
     display_name = gdk_get_display_arg_name();
+    bool waylandEnabled = IsWaylandEnabled();
+#  ifdef MOZ_WAYLAND
+    if (!display_name) {
+      auto* proxyEnv = getenv("MOZ_DISABLE_WAYLAND_PROXY");
+      bool disableWaylandProxy = proxyEnv && *proxyEnv;
+      if (!disableWaylandProxy && XRE_IsParentProcess() && waylandEnabled) {
+#    ifdef MOZ_LOGGING
+        if (MOZ_LOG_TEST(gWidgetWaylandLog, mozilla::LogLevel::Debug)) {
+          WaylandProxy::SetVerbose(true);
+        }
+#    endif
+        gWaylandProxy = WaylandProxy::Create();
+        if (gWaylandProxy) {
+          gWaylandProxy->RunThread();
+        }
+      }
+    }
+#  endif
+
     // if --display argument is given make sure it's
     // also passed to ContentChild::Init() by MOZ_GDK_DISPLAY.
     if (display_name) {
@@ -4720,7 +4752,6 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
       saveDisplayArg = true;
     }
 
-    bool waylandEnabled = IsWaylandEnabled();
     // On Wayland disabled builds read X11 DISPLAY env exclusively
     // and don't care about different displays.
     if (!waylandEnabled && !display_name) {
@@ -4764,6 +4795,14 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 #  if !defined(MOZ_WAYLAND) && defined(MOZ_X11)
     if (!GdkIsX11Display()) {
       Output(true, "X11 only build is missig X11 display!\n");
+    }
+#  endif
+#  if defined(MOZ_WAYLAND)
+    // We want to use proxy for main connection only so
+    // restore original Wayland display for next potential Wayland connections
+    // from gfx probe code and so on.
+    if (gWaylandProxy) {
+      gWaylandProxy->RestoreWaylandDisplay();
     }
 #  endif
   }
@@ -5362,6 +5401,10 @@ nsresult XREMain::XRE_mainRun() {
       }
     }
 
+#ifdef XP_MACOSX
+    InitializeMacApp();
+#endif
+
     // We'd like to initialize the JSContext *after* reading the user prefs.
     // Unfortunately that's not possible if we have to do profile migration
     // because that requires us to execute JS before reading user prefs.
@@ -5506,11 +5549,12 @@ nsresult XREMain::XRE_mainRun() {
     SaveToEnv("XRE_RESTARTED_BY_PROFILE_MANAGER=");
 
     if (!AppShutdown::IsInOrBeyond(ShutdownPhase::AppShutdownConfirmed)) {
+      // Don't create the hidden window during startup on
+      // platforms that don't always need it.
 #ifdef XP_MACOSX
       bool lazyHiddenWindow = false;
 #else
-      bool lazyHiddenWindow =
-          Preferences::GetBool("toolkit.lazyHiddenWindow", false);
+      bool lazyHiddenWindow = true;
 #endif
 
 #ifdef MOZ_BACKGROUNDTASKS
@@ -5946,17 +5990,18 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
   gLastAppVersion.Truncate();
   gLastAppBuildID.Truncate();
 
-  mozilla::AppShutdown::MaybeDoRestart();
-
 #ifdef MOZ_WIDGET_GTK
   // gdk_display_close also calls gdk_display_manager_set_default_display
   // appropriately when necessary.
   if (!gfxPlatform::IsHeadless()) {
 #  ifdef MOZ_WAYLAND
     WaylandDisplayRelease();
+    gWaylandProxy = nullptr;
 #  endif
   }
 #endif
+
+  mozilla::AppShutdown::MaybeDoRestart();
 
   XRE_DeinitCommandLine();
 

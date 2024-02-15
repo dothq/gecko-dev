@@ -161,7 +161,6 @@
 #include "js/Stack.h"
 #include "js/StreamConsumer.h"
 #include "js/StructuredClone.h"
-#include "js/SweepingAPI.h"
 #include "js/Transcoding.h"  // JS::TranscodeBuffer, JS::TranscodeRange, JS::IsTranscodeFailureResult
 #include "js/Warnings.h"    // JS::SetWarningReporter
 #include "js/WasmModule.h"  // JS::WasmModule
@@ -749,9 +748,10 @@ bool shell::enableNewSetMethods = false;
 // Pref for ArrayBuffer.prototype.transfer{,ToFixedLength}() methods.
 bool shell::enableSymbolsAsWeakMapKeys = false;
 #endif
-
 bool shell::enableArrayBufferTransfer = true;
-bool shell::enableImportAssertions = false;
+bool shell::enableImportAttributes = false;
+bool shell::enableImportAttributesAssertSyntax = false;
+bool shell::enableDestructuringFuse = true;
 #ifdef JS_GC_ZEAL
 uint32_t shell::gZealBits = 0;
 uint32_t shell::gZealFrequency = 0;
@@ -2405,7 +2405,7 @@ static bool CacheEntry_setBytecode(JSContext* cx, HandleObject cache,
 
   using BufferContents = ArrayBufferObject::BufferContents;
 
-  BufferContents contents = BufferContents::createMalloced(buffer);
+  BufferContents contents = BufferContents::createMallocedUnknownArena(buffer);
   Rooted<ArrayBufferObject*> arrayBuffer(
       cx, ArrayBufferObject::createForContents(cx, length, contents));
   if (!arrayBuffer) {
@@ -2702,6 +2702,10 @@ static bool Evaluate(JSContext* cx, unsigned argc, Value* vp) {
       if (!stencil) {
         return false;
       }
+    }
+
+    if (!js::ValidateLazinessOfStencilAndGlobal(cx, *stencil)) {
+      return false;
     }
 
     JS::InstantiateOptions instantiateOptions(options);
@@ -5249,13 +5253,17 @@ static bool InstantiateModuleStencil(JSContext* cx, uint32_t argc, Value* vp) {
   }
 
   /* Prepare the input byte array. */
-  if (!args[0].isObject() || !args[0].toObject().is<js::StencilObject>()) {
+  if (!args[0].isObject()) {
+    JS_ReportErrorASCII(cx,
+                        "instantiateModuleStencil: Stencil object expected");
+  }
+  Rooted<js::StencilObject*> stencilObj(
+      cx, args[0].toObject().maybeUnwrapIf<js::StencilObject>());
+  if (!stencilObj) {
     JS_ReportErrorASCII(cx,
                         "instantiateModuleStencil: Stencil object expected");
     return false;
   }
-  Rooted<js::StencilObject*> stencilObj(
-      cx, &args[0].toObject().as<js::StencilObject>());
 
   if (!stencilObj->stencil()->isModule()) {
     JS_ReportErrorASCII(cx,
@@ -5286,6 +5294,10 @@ static bool InstantiateModuleStencil(JSContext* cx, uint32_t argc, Value* vp) {
     return false;
   }
 
+  if (!js::ValidateLazinessOfStencilAndGlobal(cx, *stencilObj->stencil())) {
+    return false;
+  }
+
   /* Instantiate the stencil. */
   Rooted<frontend::CompilationGCOutput> output(cx);
   if (!frontend::CompilationStencil::instantiateStencils(
@@ -5312,13 +5324,18 @@ static bool InstantiateModuleStencilXDR(JSContext* cx, uint32_t argc,
   }
 
   /* Prepare the input byte array. */
-  if (!args[0].isObject() || !args[0].toObject().is<StencilXDRBufferObject>()) {
+  if (!args[0].isObject()) {
     JS_ReportErrorASCII(
         cx, "instantiateModuleStencilXDR: stencil XDR object expected");
     return false;
   }
   Rooted<StencilXDRBufferObject*> xdrObj(
-      cx, &args[0].toObject().as<StencilXDRBufferObject>());
+      cx, args[0].toObject().maybeUnwrapIf<StencilXDRBufferObject>());
+  if (!xdrObj) {
+    JS_ReportErrorASCII(
+        cx, "instantiateModuleStencilXDR: stencil XDR object expected");
+    return false;
+  }
   MOZ_ASSERT(xdrObj->hasBuffer());
 
   CompileOptions options(cx);
@@ -5362,6 +5379,10 @@ static bool InstantiateModuleStencilXDR(JSContext* cx, uint32_t argc,
     fc.clearAutoReport();
     JS_ReportErrorASCII(cx,
                         "instantiateModuleStencilXDR: Module stencil expected");
+    return false;
+  }
+
+  if (!js::ValidateLazinessOfStencilAndGlobal(cx, stencil)) {
     return false;
   }
 
@@ -11690,7 +11711,11 @@ bool InitOptionParser(OptionParser& op) {
       !op.addBoolOption('\0', "enable-class-static-blocks",
                         "(no-op) Enable class static blocks") ||
       !op.addBoolOption('\0', "enable-import-assertions",
-                        "Enable import assertions") ||
+                        "Enable import attributes with old assert syntax") ||
+      !op.addBoolOption('\0', "enable-import-attributes",
+                        "Enable import attributes") ||
+      !op.addBoolOption('\0', "disable-destructuring-fuse",
+                        "Disable Destructuring Fuse") ||
       !op.addStringOption('\0', "shared-memory", "on/off",
                           "SharedArrayBuffer and Atomics "
 #if SHARED_MEMORY_DEFAULT
@@ -11746,6 +11771,9 @@ bool InitOptionParser(OptionParser& op) {
       !op.addStringOption('\0', "ion-iterator-indices", "on/off",
                           "Optimize property access in for-in loops "
                           "(default: on, off to disable)") ||
+      !op.addStringOption('\0', "ion-load-keys", "on/off",
+                          "Atomize property loads used as keys "
+                          "(default: on, off to disable)") ||
       !op.addBoolOption('\0', "ion-check-range-analysis",
                         "Range analysis checking") ||
       !op.addBoolOption('\0', "ion-extra-checks",
@@ -11758,10 +11786,6 @@ bool InitOptionParser(OptionParser& op) {
           "On-Stack Replacement (default: on, off to disable)") ||
       !op.addBoolOption('\0', "disable-bailout-loop-check",
                         "Turn off bailout loop check") ||
-      !op.addBoolOption('\0', "enable-watchtower",
-                        "Enable Watchtower optimizations") ||
-      !op.addBoolOption('\0', "disable-watchtower",
-                        "Disable Watchtower optimizations") ||
       !op.addBoolOption('\0', "enable-ic-frame-pointers",
                         "Use frame pointers in all IC stubs") ||
       !op.addBoolOption('\0', "scalar-replace-arguments",
@@ -11833,6 +11857,10 @@ bool InitOptionParser(OptionParser& op) {
           "Wait for COUNT calls or iterations before trial-inlining "
           "(default: 500)",
           -1) ||
+      !op.addStringOption(
+          '\0', "monomorphic-inlining", "default/always/never",
+          "Whether monomorphic inlining is used instead of trial inlining "
+          "always, never, or based on heuristics (default)") ||
       !op.addBoolOption(
           '\0', "non-writable-jitcode",
           "(NOP for fuzzers) Allocate JIT code as non-writable memory.") ||
@@ -12207,14 +12235,20 @@ bool SetContextOptions(JSContext* cx, const OptionParser& op) {
       op.getBoolOption("enable-symbols-as-weakmap-keys");
 #endif
   enableArrayBufferTransfer = !op.getBoolOption("disable-arraybuffer-transfer");
-  enableImportAssertions = op.getBoolOption("enable-import-assertions");
+  enableImportAttributesAssertSyntax =
+      op.getBoolOption("enable-import-assertions");
+  enableImportAttributes = op.getBoolOption("enable-import-attributes") ||
+                           enableImportAttributesAssertSyntax;
+  enableDestructuringFuse = !op.getBoolOption("disable-destructuring-fuse");
   useFdlibmForSinCosTan = op.getBoolOption("use-fdlibm-for-sin-cos-tan");
 
   JS::ContextOptionsRef(cx)
       .setSourcePragmas(enableSourcePragmas)
       .setAsyncStack(enableAsyncStacks)
       .setAsyncStackCaptureDebuggeeOnly(enableAsyncStackCaptureDebuggeeOnly)
-      .setImportAssertions(enableImportAssertions);
+      .setImportAttributes(enableImportAttributes)
+      .setImportAttributesAssertSyntax(enableImportAttributesAssertSyntax)
+      .setEnableDestructuringFuse(enableDestructuringFuse);
 
   JS::SetUseFdlibmForSinCosTan(useFdlibmForSinCosTan);
 
@@ -12436,6 +12470,19 @@ bool SetContextJITOptions(JSContext* cx, const OptionParser& op) {
       jit::JitOptions.maybeSetWriteProtectCode(false);
     } else {
       return OptionFailure("write-protect-code", str);
+    }
+  }
+
+  if (const char* str = op.getStringOption("monomorphic-inlining")) {
+    if (strcmp(str, "default") == 0) {
+      jit::JitOptions.monomorphicInlining =
+          jit::UseMonomorphicInlining::Default;
+    } else if (strcmp(str, "always") == 0) {
+      jit::JitOptions.monomorphicInlining = jit::UseMonomorphicInlining::Always;
+    } else if (strcmp(str, "never") == 0) {
+      jit::JitOptions.monomorphicInlining = jit::UseMonomorphicInlining::Never;
+    } else {
+      return OptionFailure("monomorphic-inlining", str);
     }
   }
 
@@ -12718,12 +12765,6 @@ bool SetContextJITOptions(JSContext* cx, const OptionParser& op) {
     jit::JitOptions.disableBailoutLoopCheck = true;
   }
 
-  if (op.getBoolOption("enable-watchtower")) {
-    jit::JitOptions.enableWatchtowerMegamorphic = true;
-  }
-  if (op.getBoolOption("disable-watchtower")) {
-    jit::JitOptions.enableWatchtowerMegamorphic = false;
-  }
   if (op.getBoolOption("only-inline-selfhosted")) {
     jit::JitOptions.onlyInlineSelfHosted = true;
   }
@@ -12739,6 +12780,16 @@ bool SetContextJITOptions(JSContext* cx, const OptionParser& op) {
       jit::JitOptions.disableIteratorIndices = true;
     } else {
       return OptionFailure("ion-iterator-indices", str);
+    }
+  }
+
+  if (const char* str = op.getStringOption("ion-load-keys")) {
+    if (strcmp(str, "on") == 0) {
+      jit::JitOptions.disableMarkLoadsUsedAsPropertyKeys = false;
+    } else if (strcmp(str, "off") == 0) {
+      jit::JitOptions.disableMarkLoadsUsedAsPropertyKeys = true;
+    } else {
+      return OptionFailure("ion-load-keys", str);
     }
   }
 

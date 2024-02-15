@@ -369,25 +369,12 @@ nsNavHistoryResultNode::GetParentResult(nsINavHistoryResult** aResult) {
 }
 
 void nsNavHistoryResultNode::SetTags(const nsAString& aTags) {
-  mTags.SetIsVoid(true);
   if (aTags.IsVoid()) {
+    mTags.SetIsVoid(true);
     return;
   }
 
-  // We'd like to sort tags in the query, and completely skip the
-  // deconstructing, sorting and rebuilding here, unfortunately Sqlite's
-  // group_concat() at this time doesn't guarantee the concat order, even using
-  // a sub query. If that should change in the future, we could surely save some
-  // code here.
-  nsTArray<nsCString> tags;
-  ParseString(NS_ConvertUTF16toUTF8(aTags), ',', tags);
-  tags.Sort();
-  for (nsTArray<nsCString>::index_type i = 0; i < tags.Length(); ++i) {
-    AppendUTF8toUTF16(tags[i], mTags);
-    if (i < tags.Length() - 1) {
-      mTags.AppendLiteral(", ");
-    }
-  }
+  mTags.Assign(aTags);
 }
 
 NS_IMETHODIMP
@@ -4215,13 +4202,12 @@ void nsNavHistoryResult::HandlePlacesEvent(const PlacesEventSequence& aEvents) {
           continue;
         }
         nsCOMPtr<nsIURI> uri, faviconUri;
-        MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(uri), faviconEvent->mUrl));
-        if (!uri) {
+        if (NS_WARN_IF(NS_FAILED(
+                NS_NewURI(getter_AddRefs(uri), faviconEvent->mUrl)))) {
           continue;
         }
-        MOZ_ALWAYS_SUCCEEDS(
-            NS_NewURI(getter_AddRefs(faviconUri), faviconEvent->mFaviconUrl));
-        if (!faviconUri) {
+        if (NS_WARN_IF(NS_FAILED(NS_NewURI(getter_AddRefs(faviconUri),
+                                           faviconEvent->mFaviconUrl)))) {
           continue;
         }
         OnIconChanged(uri, faviconUri, faviconEvent->mPageGuid);
@@ -4234,8 +4220,8 @@ void nsNavHistoryResult::HandlePlacesEvent(const PlacesEventSequence& aEvents) {
         }
 
         nsCOMPtr<nsIURI> uri;
-        MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(uri), visit->mUrl));
-        if (!uri) {
+        if (NS_WARN_IF(
+                NS_FAILED(NS_NewURI(getter_AddRefs(uri), visit->mUrl)))) {
           continue;
         }
         OnVisit(uri, static_cast<int64_t>(visit->mVisitId),
@@ -4253,8 +4239,8 @@ void nsNavHistoryResult::HandlePlacesEvent(const PlacesEventSequence& aEvents) {
 
         nsCOMPtr<nsIURI> uri;
         if (item->mItemType == nsINavBookmarksService::TYPE_BOOKMARK) {
-          MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(uri), item->mUrl));
-          if (!uri) {
+          if (NS_WARN_IF(
+                  NS_FAILED(NS_NewURI(getter_AddRefs(uri), item->mUrl)))) {
             continue;
           }
         }
@@ -4423,8 +4409,8 @@ void nsNavHistoryResult::HandlePlacesEvent(const PlacesEventSequence& aEvents) {
         }
 
         nsCOMPtr<nsIURI> uri;
-        MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(uri), titleEvent->mUrl));
-        if (!uri) {
+        if (NS_WARN_IF(
+                NS_FAILED(NS_NewURI(getter_AddRefs(uri), titleEvent->mUrl)))) {
           continue;
         }
 
@@ -4443,8 +4429,8 @@ void nsNavHistoryResult::HandlePlacesEvent(const PlacesEventSequence& aEvents) {
         }
 
         nsCOMPtr<nsIURI> uri;
-        MOZ_ALWAYS_SUCCEEDS(NS_NewURI(getter_AddRefs(uri), removeEvent->mUrl));
-        if (!uri) {
+        if (NS_WARN_IF(
+                NS_FAILED(NS_NewURI(getter_AddRefs(uri), removeEvent->mUrl)))) {
           continue;
         }
 

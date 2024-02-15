@@ -1030,7 +1030,6 @@ package org.mozilla.geckoview {
     method @AnyThread public void reload(int);
     method @AnyThread @NonNull public GeckoResult<String> reportBackInStock(@NonNull String);
     method @AnyThread @NonNull public GeckoResult<GeckoSession.ReviewAnalysis> requestAnalysis(@NonNull String);
-    method @AnyThread @NonNull public GeckoResult<String> requestAnalysisCreationStatus(@NonNull String);
     method @AnyThread @NonNull public GeckoResult<GeckoSession.AnalysisStatusResponse> requestAnalysisStatus(@NonNull String);
     method @AnyThread @NonNull public GeckoResult<String> requestCreateAnalysis(@NonNull String);
     method @AnyThread @NonNull public GeckoResult<List<GeckoSession.Recommendation>> requestRecommendations(@NonNull String);
@@ -1038,6 +1037,7 @@ package org.mozilla.geckoview {
     method @AnyThread @NonNull public GeckoResult<InputStream> saveAsPdf();
     method @AnyThread @NonNull public GeckoResult<Boolean> sendClickAttributionEvent(@NonNull String);
     method @AnyThread @NonNull public GeckoResult<Boolean> sendImpressionAttributionEvent(@NonNull String);
+    method @AnyThread @NonNull public GeckoResult<Boolean> sendPlacementAttributionEvent(@NonNull String);
     method @AnyThread public void setActive(boolean);
     method @UiThread public void setAutofillDelegate(@Nullable Autofill.Delegate);
     method @AnyThread public void setContentBlockingDelegate(@Nullable ContentBlocking.Delegate);
@@ -2392,6 +2392,7 @@ package org.mozilla.geckoview {
     field public static final int ERROR_MODEL_COULD_NOT_DELETE = -8;
     field public static final int ERROR_MODEL_COULD_NOT_DOWNLOAD = -9;
     field public static final int ERROR_MODEL_COULD_NOT_RETRIEVE = -7;
+    field public static final int ERROR_MODEL_DOWNLOAD_REQUIRED = -11;
     field public static final int ERROR_MODEL_LANGUAGE_REQUIRED = -10;
     field public static final int ERROR_UNKNOWN = -1;
     field public final int code;

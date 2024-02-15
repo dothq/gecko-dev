@@ -6,10 +6,16 @@ ChromeUtils.defineESModuleGetters(this, {
     "resource:///actors/SearchSERPTelemetryChild.sys.mjs",
   CustomizableUITestUtils:
     "resource://testing-common/CustomizableUITestUtils.sys.mjs",
+  Region: "resource://gre/modules/Region.sys.mjs",
+  RemoteSettings: "resource://services-settings/remote-settings.sys.mjs",
   SearchSERPTelemetry: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchSERPTelemetryUtils: "resource:///modules/SearchSERPTelemetry.sys.mjs",
   SearchTestUtils: "resource://testing-common/SearchTestUtils.sys.mjs",
   SearchUtils: "resource://gre/modules/SearchUtils.sys.mjs",
+  SERPCategorizationRecorder: "resource:///modules/SearchSERPTelemetry.sys.mjs",
+  sinon: "resource://testing-common/Sinon.sys.mjs",
+  TELEMETRY_CATEGORIZATION_KEY:
+    "resource:///modules/SearchSERPTelemetry.sys.mjs",
   TelemetryTestUtils: "resource://testing-common/TelemetryTestUtils.sys.mjs",
 });
 
@@ -35,6 +41,12 @@ ChromeUtils.defineLazyGetter(this, "SEARCH_AD_CLICK_SCALARS", () => {
     ...sources.map(v => `browser.search.adclicks.${v}`),
   ];
 });
+
+// For use with categorization.
+const APP_VERSION = Services.appinfo.version;
+const CHANNEL = SearchUtils.MODIFIED_APP_CHANNEL;
+const REGION = Region.home;
+const LOCALE = Services.locale.appLocaleAsBCP47;
 
 let gCUITestUtils = new CustomizableUITestUtils(window);
 
@@ -175,6 +187,8 @@ async function assertSearchSourcesTelemetry(
 }
 
 function resetTelemetry() {
+  // TODO Bug 1868476: Replace when we're using Glean telemetry.
+  fakeTelemetryStorage = [];
   searchCounts.clear();
   Services.telemetry.clearScalars();
   Services.fog.testResetFOG();
@@ -352,12 +366,91 @@ function assertSERPTelemetry(expectedEvents) {
   );
 }
 
+// TODO Bug 1868476: Replace when we're using Glean telemetry.
+let categorizationSandbox;
+let fakeTelemetryStorage = [];
+add_setup(function () {
+  categorizationSandbox = sinon.createSandbox();
+  categorizationSandbox
+    .stub(SERPCategorizationRecorder, "recordCategorizationTelemetry")
+    .callsFake(input => {
+      fakeTelemetryStorage.push(input);
+    });
+
+  registerCleanupFunction(() => {
+    categorizationSandbox.restore();
+    fakeTelemetryStorage = [];
+  });
+});
+
+function assertCategorizationValues(expectedResults) {
+  // TODO Bug 1868476: Replace with calls to Glean telemetry.
+  let actualResults = [...fakeTelemetryStorage];
+
+  Assert.equal(
+    expectedResults.length,
+    actualResults.length,
+    "Should have the correct number of categorization impressions."
+  );
+
+  if (!expectedResults.length) {
+    return;
+  }
+
+  // We use keys in the result vs. Assert.deepEqual to make it easier to
+  // identify exact discrepancies in comparisons, because it can be tedious to
+  // parse a giant list of values.
+  let keys = new Set();
+  for (let expected of expectedResults) {
+    for (let key in expected) {
+      keys.add(key);
+    }
+  }
+  for (let actual of actualResults) {
+    for (let key in actual) {
+      keys.add(key);
+    }
+  }
+  keys = Array.from(keys);
+
+  for (let index = 0; index < expectedResults.length; ++index) {
+    info(`Checking categorization at index: ${index}`);
+    let expected = expectedResults[index];
+    let actual = actualResults[index];
+    for (let key of keys) {
+      // TODO Bug 1868476: This conversion to strings is to mimic Glean
+      // converting all values into strings. Once we receive real values from
+      // Glean, it can be removed.
+      if (actual[key] != null && typeof actual[key] !== "string") {
+        actual[key] = actual[key].toString();
+      }
+      Assert.equal(
+        actual[key],
+        expected[key],
+        `Actual and expected values for ${key} should match.`
+      );
+    }
+  }
+}
+
 function waitForPageWithAdImpressions() {
   return TestUtils.topicObserved("reported-page-with-ad-impressions");
 }
 
 function waitForPageWithCategorizedDomains() {
   return TestUtils.topicObserved("reported-page-with-categorized-domains");
+}
+
+function waitForSingleCategorizedEvent() {
+  return TestUtils.topicObserved("recorded-single-categorization-event");
+}
+
+function waitForAllCategorizedEvents() {
+  return TestUtils.topicObserved("recorded-all-categorization-events");
+}
+
+function waitForDomainToCategoriesUpdate() {
+  return TestUtils.topicObserved("domain-to-categories-map-update-complete");
 }
 
 registerCleanupFunction(async () => {
@@ -402,4 +495,50 @@ async function mockRecordWithAttachment({ id, version, filename }) {
   };
 
   return { record, attachment };
+}
+
+async function resetCategorizationCollection(record) {
+  const client = RemoteSettings(TELEMETRY_CATEGORIZATION_KEY);
+  await client.attachments.cacheImpl.delete(record.id);
+  await client.db.clear();
+  await client.db.importChanges({}, Date.now());
+}
+
+async function insertRecordIntoCollection() {
+  const client = RemoteSettings(TELEMETRY_CATEGORIZATION_KEY);
+  const db = client.db;
+
+  await db.clear();
+  let { record, attachment } = await mockRecordWithAttachment({
+    id: "example_id",
+    version: 1,
+    filename: "domain_category_mappings.json",
+  });
+  await db.create(record);
+  await client.attachments.cacheImpl.set(record.id, attachment);
+  await db.importChanges({}, Date.now());
+
+  return { record, attachment };
+}
+
+async function insertRecordIntoCollectionAndSync() {
+  let { record } = await insertRecordIntoCollection();
+
+  registerCleanupFunction(async () => {
+    await resetCategorizationCollection(record);
+  });
+
+  await syncCollection(record);
+}
+
+async function syncCollection(record) {
+  let arrayWithRecord = record ? [record] : [];
+  await RemoteSettings(TELEMETRY_CATEGORIZATION_KEY).emit("sync", {
+    data: {
+      current: arrayWithRecord,
+      created: arrayWithRecord,
+      updated: [],
+      deleted: [],
+    },
+  });
 }

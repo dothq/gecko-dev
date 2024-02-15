@@ -18,6 +18,7 @@ if CONFIG['TARGET_CPU'] == 'x86_64':
         ASFLAGS += [ '-I%s/media/libaom/config/win/x64/' % TOPSRCDIR ]
         LOCAL_INCLUDES += [ '/media/libaom/config/win/x64/' ]
         EXPORTS.aom += [ 'config/win/x64/config/aom_config.h' ]
+        SOURCES += files['X64_WIN_SOURCES']
         # This code is not included in our PGO profile, and pointlessly
         # PGO-optimizing it slows down our builds a lot.
         NO_PGO = True
@@ -73,7 +74,8 @@ else:
 # We allow warnings for third-party code that can be updated from upstream.
 AllowCompilerWarnings()
 
-FINAL_LIBRARY = 'gkmedias'
+FINAL_LIBRARY = 'gkcodecs'
+NoVisibilityFlags()
 
 if CONFIG['OS_TARGET'] == 'Android':
     # Older versions of the Android NDK don't pre-define anything to indicate
@@ -85,6 +87,8 @@ for f in SOURCES:
         SOURCES[f].flags += CONFIG['SSE2_FLAGS']
     elif f.endswith('ssse3.c'):
         SOURCES[f].flags += ['-mssse3']
+    elif f.endswith('sse3.c'):
+        SOURCES[f].flags += ['-msse3']
     elif f.endswith('sse4.c'):
         SOURCES[f].flags += ['-msse4.1']
     elif f.endswith('sse42.c'):
@@ -93,6 +97,8 @@ for f in SOURCES:
         SOURCES[f].flags += ['-mavx']
     elif f.endswith('avx2.c'):
         SOURCES[f].flags += ['-mavx2']
+
+SOURCES += [ 'build_config.c' ]
 
 # Suppress warnings in third-party code.
 CFLAGS += [
@@ -116,10 +122,11 @@ LOCAL_INCLUDES += [
     '/third_party/aom',
 ]
 
-if CONFIG['OS_TARGET'] == 'Linux':
-    # For fuzzing, We only support building on Linux currently.
-    include('/tools/fuzzing/libfuzzer-config.mozbuild')
-    if CONFIG['FUZZING_INTERFACES']:
-        TEST_DIRS += [
-            'test/fuzztest'
-    ]
+# Disabled for now, see https://bugzilla.mozilla.org/show_bug.cgi?id=1869986
+# if CONFIG['OS_TARGET'] == 'Linux':
+#     # For fuzzing, We only support building on Linux currently.
+#     include('/tools/fuzzing/libfuzzer-config.mozbuild')
+#     if CONFIG['FUZZING_INTERFACES']:
+#         TEST_DIRS += [
+#             'test/fuzztest'
+#     ]

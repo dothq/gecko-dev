@@ -18,10 +18,11 @@ pub use self::{
 
 use self::memory_init::CommandBufferTextureMemoryActions;
 
-use crate::device::Device;
+use crate::device::{Device, DeviceError};
 use crate::error::{ErrorFormatter, PrettyError};
 use crate::hub::Hub;
 use crate::id::CommandBufferId;
+use crate::snatch::SnatchGuard;
 
 use crate::init_tracker::BufferInitTrackerAction;
 use crate::resource::{Resource, ResourceInfo, ResourceType};
@@ -57,20 +58,24 @@ pub(crate) struct CommandEncoder<A: HalApi> {
 //TODO: handle errors better
 impl<A: HalApi> CommandEncoder<A> {
     /// Closes the live encoder
-    fn close_and_swap(&mut self) {
+    fn close_and_swap(&mut self) -> Result<(), DeviceError> {
         if self.is_open {
             self.is_open = false;
-            let new = unsafe { self.raw.end_encoding().unwrap() };
+            let new = unsafe { self.raw.end_encoding()? };
             self.list.insert(self.list.len() - 1, new);
         }
+
+        Ok(())
     }
 
-    fn close(&mut self) {
+    fn close(&mut self) -> Result<(), DeviceError> {
         if self.is_open {
             self.is_open = false;
-            let cmd_buf = unsafe { self.raw.end_encoding().unwrap() };
+            let cmd_buf = unsafe { self.raw.end_encoding()? };
             self.list.push(cmd_buf);
         }
+
+        Ok(())
     }
 
     fn discard(&mut self) {
@@ -80,18 +85,21 @@ impl<A: HalApi> CommandEncoder<A> {
         }
     }
 
-    fn open(&mut self) -> &mut A::CommandEncoder {
+    fn open(&mut self) -> Result<&mut A::CommandEncoder, DeviceError> {
         if !self.is_open {
             self.is_open = true;
             let label = self.label.as_deref();
-            unsafe { self.raw.begin_encoding(label).unwrap() };
+            unsafe { self.raw.begin_encoding(label)? };
         }
-        &mut self.raw
+
+        Ok(&mut self.raw)
     }
 
-    fn open_pass(&mut self, label: Option<&str>) {
+    fn open_pass(&mut self, label: Option<&str>) -> Result<(), DeviceError> {
         self.is_open = true;
-        unsafe { self.raw.begin_encoding(label).unwrap() };
+        unsafe { self.raw.begin_encoding(label)? };
+
+        Ok(())
     }
 }
 
@@ -118,10 +126,13 @@ pub struct CommandBufferMutable<A: HalApi> {
 }
 
 impl<A: HalApi> CommandBufferMutable<A> {
-    pub(crate) fn open_encoder_and_tracker(&mut self) -> (&mut A::CommandEncoder, &mut Tracker<A>) {
-        let encoder = self.encoder.open();
+    pub(crate) fn open_encoder_and_tracker(
+        &mut self,
+    ) -> Result<(&mut A::CommandEncoder, &mut Tracker<A>), DeviceError> {
+        let encoder = self.encoder.open()?;
         let tracker = &mut self.trackers;
-        (encoder, tracker)
+
+        Ok((encoder, tracker))
     }
 }
 
@@ -138,7 +149,7 @@ impl<A: HalApi> Drop for CommandBuffer<A> {
         if self.data.lock().is_none() {
             return;
         }
-        resource_log!("resource::CommandBuffer::drop {}", self.info.label());
+        resource_log!("resource::CommandBuffer::drop {:?}", self.info.label());
         let mut baked = self.extract_baked_commands();
         unsafe {
             baked.encoder.reset_all(baked.list.into_iter());
@@ -193,37 +204,43 @@ impl<A: HalApi> CommandBuffer<A> {
         raw: &mut A::CommandEncoder,
         base: &mut Tracker<A>,
         head: &Tracker<A>,
+        snatch_guard: &SnatchGuard,
     ) {
         profiling::scope!("insert_barriers");
 
         base.buffers.set_from_tracker(&head.buffers);
         base.textures.set_from_tracker(&head.textures);
 
-        Self::drain_barriers(raw, base);
+        Self::drain_barriers(raw, base, snatch_guard);
     }
 
     pub(crate) fn insert_barriers_from_scope(
         raw: &mut A::CommandEncoder,
         base: &mut Tracker<A>,
         head: &UsageScope<A>,
+        snatch_guard: &SnatchGuard,
     ) {
         profiling::scope!("insert_barriers");
 
         base.buffers.set_from_usage_scope(&head.buffers);
         base.textures.set_from_usage_scope(&head.textures);
 
-        Self::drain_barriers(raw, base);
+        Self::drain_barriers(raw, base, snatch_guard);
     }
 
-    pub(crate) fn drain_barriers(raw: &mut A::CommandEncoder, base: &mut Tracker<A>) {
+    pub(crate) fn drain_barriers(
+        raw: &mut A::CommandEncoder,
+        base: &mut Tracker<A>,
+        snatch_guard: &SnatchGuard,
+    ) {
         profiling::scope!("drain_barriers");
 
-        let buffer_barriers = base.buffers.drain_transitions();
-        let (transitions, textures) = base.textures.drain_transitions();
+        let buffer_barriers = base.buffers.drain_transitions(snatch_guard);
+        let (transitions, textures) = base.textures.drain_transitions(snatch_guard);
         let texture_barriers = transitions
             .into_iter()
             .enumerate()
-            .map(|(i, p)| p.into_hal(textures[i].as_ref().unwrap()));
+            .map(|(i, p)| p.into_hal(textures[i].unwrap().raw().unwrap()));
 
         unsafe {
             raw.transition_buffers(buffer_barriers);
@@ -394,6 +411,8 @@ pub enum CommandEncoderError {
     Invalid,
     #[error("Command encoder must be active")]
     NotRecording,
+    #[error(transparent)]
+    Device(#[from] DeviceError),
 }
 
 impl<G: GlobalIdentityHandlerFactory> Global<G> {
@@ -412,12 +431,15 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 let cmd_buf_data = cmd_buf_data.as_mut().unwrap();
                 match cmd_buf_data.status {
                     CommandEncoderStatus::Recording => {
-                        cmd_buf_data.encoder.close();
-                        cmd_buf_data.status = CommandEncoderStatus::Finished;
-                        //Note: if we want to stop tracking the swapchain texture view,
-                        // this is the place to do it.
-                        log::trace!("Command buffer {:?}", encoder_id);
-                        None
+                        if let Err(e) = cmd_buf_data.encoder.close() {
+                            Some(e.into())
+                        } else {
+                            cmd_buf_data.status = CommandEncoderStatus::Finished;
+                            //Note: if we want to stop tracking the swapchain texture view,
+                            // this is the place to do it.
+                            log::trace!("Command buffer {:?}", encoder_id);
+                            None
+                        }
                     }
                     CommandEncoderStatus::Finished => Some(CommandEncoderError::NotRecording),
                     CommandEncoderStatus::Error => {
@@ -450,7 +472,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             list.push(TraceCommand::PushDebugGroup(label.to_string()));
         }
 
-        let cmd_buf_raw = cmd_buf_data.encoder.open();
+        let cmd_buf_raw = cmd_buf_data.encoder.open()?;
         if !self
             .instance
             .flags
@@ -487,7 +509,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             .flags
             .contains(wgt::InstanceFlags::DISCARD_HAL_LABELS)
         {
-            let cmd_buf_raw = cmd_buf_data.encoder.open();
+            let cmd_buf_raw = cmd_buf_data.encoder.open()?;
             unsafe {
                 cmd_buf_raw.insert_debug_marker(label);
             }
@@ -513,7 +535,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             list.push(TraceCommand::PopDebugGroup);
         }
 
-        let cmd_buf_raw = cmd_buf_data.encoder.open();
+        let cmd_buf_raw = cmd_buf_data.encoder.open()?;
         if !self
             .instance
             .flags

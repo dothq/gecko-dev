@@ -54,6 +54,7 @@ support-files = [
   "data1/exp2/manifest.json",
   "data1/exp3/manifest.json",
   "data1/engines.json",
+  "data1/search-config-v2.json",
   "simple-engines/engines.json",
   "simple-engines/basic/manifest.json",
   "simple-engines/hidden/manifest.json",
@@ -75,8 +76,6 @@ support-files = [
 ["test_appDefaultEngine.js"]
 
 ["test_async.js"]
-
-["test_config_attribution.js"]
 
 ["test_config_engine_params.js"]
 support-files = [
@@ -101,6 +100,8 @@ support-files = [
 
 ["test_engine_selector.js"]
 
+["test_engine_selector_engine_orders.js"]
+
 ["test_engine_selector_defaults.js"]
 
 ["test_engine_selector_application.js"]
@@ -109,7 +110,7 @@ support-files = [
 
 ["test_engine_selector_application_name.js"]
 
-["test_engine_selector_environment_base.js"]
+["test_engine_selector_environment.js"]
 
 ["test_engine_selector_order.js"]
 
@@ -119,6 +120,8 @@ support-files = [
 tags = "remotesettings searchmain"
 
 ["test_engine_selector_remote_override.js"]
+
+["test_engine_selector_variants.js"]
 
 ["test_engine_set_alias.js"]
 
@@ -159,8 +162,6 @@ tags = "remotesettings searchmain"
 ["test_migrateWebExtensionEngine.js"]
 
 ["test_missing_engine.js"]
-
-["test_multipleIcons.js"]
 
 ["test_nodb_pluschanges.js"]
 

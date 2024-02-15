@@ -365,6 +365,7 @@ struct HttpChannelOpenArgs
   uint8_t                     redirectionLimit;
   nsString                    classicScriptHintCharset;
   nsString                    documentCharacterSet;
+  bool                        isUserAgentHeaderModified;
 };
 
 struct HttpChannelConnectArgs
@@ -455,7 +456,7 @@ struct CookieStruct
 
 struct DocumentCreationArgs {
   bool uriModified;
-  bool isXFOError;
+  bool isEmbeddingBlockedError;
 };
 
 struct ObjectCreationArgs {

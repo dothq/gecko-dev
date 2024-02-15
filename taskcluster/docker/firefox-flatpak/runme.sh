@@ -71,9 +71,6 @@ done
 
 envsubst < "$SCRIPT_DIRECTORY/org.mozilla.firefox.appdata.xml.in" > "${WORKSPACE}/org.mozilla.firefox.appdata.xml"
 cp -v "$SCRIPT_DIRECTORY/org.mozilla.firefox.desktop" "$WORKSPACE"
-# Add a group policy file to disable app updates, as those are handled by Flathub
-cp -v "$SCRIPT_DIRECTORY/policies.json" "$WORKSPACE"
-cp -v "$SCRIPT_DIRECTORY/default-preferences.js" "$WORKSPACE"
 cp -v "$SCRIPT_DIRECTORY/launch-script.sh" "$WORKSPACE"
 cp -v "$SCRIPT_DIRECTORY/firefox-symbolic.svg" "$WORKSPACE"
 cd "${WORKSPACE}"
@@ -144,13 +141,8 @@ for locale in $locales; do
     ln -sf "/app/share/runtime/langpack/${locale%%-*}/langpack-${locale}@firefox.mozilla.org.xpi" "${appdir}/lib/firefox/distribution/extensions/langpack-${locale}@firefox.mozilla.org.xpi"
 done
 install -D -m644 -t "${appdir}/lib/firefox/distribution" "$DISTRIBUTION_DIR/distribution.ini"
-install -D -m644 -t "${appdir}/lib/firefox/distribution" policies.json
-install -D -m644 -t "${appdir}/lib/firefox/browser/defaults/preferences" default-preferences.js
 install -D -m755 launch-script.sh "${appdir}/bin/firefox"
 
-# We need to set GTK_PATH to load cups printing backend which is missing in
-# freedesktop sdk.
-#
 # We use features=devel to enable ptrace, which we need for the crash
 # reporter.  The application is still confined in a pid namespace, so
 # that won't let us escape the flatpak sandbox.  See bug 1653852.
@@ -159,22 +151,20 @@ flatpak build-finish build                                      \
         --allow=devel                                           \
         --share=ipc                                             \
         --share=network                                         \
-        --env=GTK_PATH=/app/lib/gtkmodules                      \
         --socket=pulseaudio                                     \
         --socket=wayland                                        \
-        --socket=x11                                            \
+        --socket=fallback-x11                                   \
         --socket=pcsc                                           \
         --socket=cups                                           \
         --require-version=0.11.1                                \
         --persist=.mozilla                                      \
         --filesystem=xdg-download:rw                            \
         --filesystem=/run/.heim_org.h5l.kcm-socket              \
+        --filesystem=xdg-run/speech-dispatcher:ro               \
         --device=all                                            \
         --talk-name=org.freedesktop.FileManager1                \
         --system-talk-name=org.freedesktop.NetworkManager       \
         --talk-name=org.a11y.Bus                                \
-        --talk-name=org.gnome.SessionManager                    \
-        --talk-name=org.freedesktop.ScreenSaver                 \
         --talk-name="org.gtk.vfs.*"                             \
         --own-name="org.mpris.MediaPlayer2.firefox.*"           \
         --own-name="org.mozilla.firefox.*"                      \

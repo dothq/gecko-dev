@@ -67,7 +67,7 @@ extern JS_PUBLIC_API JSString* JS_NewStringCopyUTF8Z(
     JSContext* cx, const JS::ConstUTF8CharsZ s);
 
 extern JS_PUBLIC_API JSString* JS_NewStringCopyUTF8N(JSContext* cx,
-                                                     const JS::UTF8Chars s);
+                                                     const JS::UTF8Chars& s);
 
 extern JS_PUBLIC_API JSString* JS_AtomizeStringN(JSContext* cx, const char* s,
                                                  size_t length);
@@ -191,9 +191,8 @@ extern JS_PUBLIC_API bool JS_GetStringCharAt(JSContext* cx, JSString* str,
 extern JS_PUBLIC_API const char16_t* JS_GetTwoByteExternalStringChars(
     JSString* str);
 
-extern JS_PUBLIC_API bool JS_CopyStringChars(JSContext* cx,
-                                             mozilla::Range<char16_t> dest,
-                                             JSString* str);
+extern JS_PUBLIC_API bool JS_CopyStringChars(
+    JSContext* cx, const mozilla::Range<char16_t>& dest, JSString* str);
 
 /**
  * Copies the string's characters to a null-terminated char16_t buffer.

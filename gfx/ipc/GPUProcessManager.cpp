@@ -24,6 +24,7 @@
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUChild.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/ipc/ProcessChild.h"
 #include "mozilla/layers/APZCTreeManagerChild.h"
@@ -69,12 +70,6 @@ namespace mozilla {
 namespace gfx {
 
 using namespace mozilla::layers;
-
-enum class FallbackType : uint32_t {
-  NONE = 0,
-  DECODINGDISABLED,
-  DISABLED,
-};
 
 static StaticAutoPtr<GPUProcessManager> sSingleton;
 
@@ -223,8 +218,11 @@ bool GPUProcessManager::LaunchGPUProcess() {
   auto newTime = TimeStamp::Now();
   if (!IsProcessStable(newTime)) {
     mUnstableProcessAttempts++;
+    mozilla::glean::gpu_process::unstable_launch_attempts.Set(
+        mUnstableProcessAttempts);
   }
   mTotalProcessAttempts++;
+  mozilla::glean::gpu_process::total_launch_attempts.Set(mTotalProcessAttempts);
   mProcessAttemptLastTime = newTime;
   mProcessStable = false;
 
@@ -278,8 +276,8 @@ bool GPUProcessManager::MaybeDisableGPUProcess(const char* aMessage,
     mLastErrorMsg.reset();
   } else {
     wantRestart = gfxPlatform::FallbackFromAcceleration(
-        FeatureStatus::Unavailable, "GPU Process is disabled",
-        "FEATURE_FAILURE_GPU_PROCESS_DISABLED"_ns);
+        FeatureStatus::Unavailable, aMessage,
+        "FEATURE_FAILURE_GPU_PROCESS_ERROR"_ns);
   }
   if (aAllowRestart && wantRestart) {
     // The fallback method can make use of the GPU process.
@@ -296,8 +294,11 @@ bool GPUProcessManager::MaybeDisableGPUProcess(const char* aMessage,
 
   gfxPlatform::DisableGPUProcess();
 
-  Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
-                        uint32_t(FallbackType::DISABLED));
+  mozilla::glean::gpu_process::feature_status.Set(
+      gfxConfig::GetFeature(Feature::GPU_PROCESS)
+          .GetStatusAndFailureIdString());
+
+  mozilla::glean::gpu_process::crash_fallbacks.Get("disabled"_ns).Add(1);
 
   DestroyProcess();
   ShutdownVsyncIOThread();
@@ -321,7 +322,8 @@ bool GPUProcessManager::MaybeDisableGPUProcess(const char* aMessage,
   return true;
 }
 
-nsresult GPUProcessManager::EnsureGPUReady() {
+nsresult GPUProcessManager::EnsureGPUReady(
+    bool aRetryAfterFallback /* = true */) {
   MOZ_ASSERT(NS_IsMainThread());
 
   // We only wait to fail with NS_ERROR_ILLEGAL_DURING_SHUTDOWN if we would
@@ -329,41 +331,63 @@ nsresult GPUProcessManager::EnsureGPUReady() {
   // process.
   bool inShutdown = AppShutdown::IsInOrBeyond(ShutdownPhase::XPCOMShutdown);
 
-  // Launch the GPU process if it is enabled but hasn't been (re-)launched yet.
-  if (!mProcess && gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
-    if (NS_WARN_IF(inShutdown)) {
-      return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
+  while (true) {
+    // Launch the GPU process if it is enabled but hasn't been (re-)launched
+    // yet.
+    if (!mProcess && gfxConfig::IsEnabled(Feature::GPU_PROCESS)) {
+      if (NS_WARN_IF(inShutdown)) {
+        return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
+      }
+
+      if (!LaunchGPUProcess()) {
+        return NS_ERROR_FAILURE;
+      }
     }
 
-    if (!LaunchGPUProcess()) {
-      return NS_ERROR_NOT_AVAILABLE;
-    }
-  }
+    if (mProcess && !mProcess->IsConnected()) {
+      if (NS_WARN_IF(inShutdown)) {
+        return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
+      }
 
-  if (mProcess && !mProcess->IsConnected()) {
-    if (NS_WARN_IF(inShutdown)) {
-      return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
+      if (!mProcess->WaitForLaunch()) {
+        // If this fails, we should have fired OnProcessLaunchComplete and
+        // removed the process.
+        MOZ_ASSERT(!mProcess && !mGPUChild);
+        return NS_ERROR_FAILURE;
+      }
     }
 
-    if (!mProcess->WaitForLaunch()) {
-      // If this fails, we should have fired OnProcessLaunchComplete and
-      // removed the process.
-      MOZ_ASSERT(!mProcess && !mGPUChild);
-      return NS_ERROR_NOT_AVAILABLE;
+    // The only scenario this should be possible is if we raced with the
+    // initialization, which failed, and has already decided to disable the GPU
+    // process.
+    if (!mGPUChild) {
+      MOZ_DIAGNOSTIC_ASSERT(!gfxConfig::IsEnabled(Feature::GPU_PROCESS));
+      break;
     }
-  }
 
-  if (mGPUChild) {
     if (mGPUChild->EnsureGPUReady()) {
       return NS_OK;
     }
 
     // If the initialization above fails, we likely have a GPU process teardown
-    // waiting in our message queue (or will soon). We need to ensure we don't
-    // restart it later because if we fail here, our callers assume they should
-    // fall back to a combined UI/GPU process. This also ensures our internal
-    // state is consistent (e.g. process token is reset).
-    DisableGPUProcess("Failed to initialize GPU process");
+    // waiting in our message queue (or will soon). If the fallback wants us to
+    // give up on the GPU process, we will exit the loop.
+    if (MaybeDisableGPUProcess("Failed to initialize GPU process",
+                               /* aAllowRestart */ true)) {
+      MOZ_DIAGNOSTIC_ASSERT(!gfxConfig::IsEnabled(Feature::GPU_PROCESS));
+      break;
+    }
+
+    // Otherwise HandleProcessLost will explicitly teardown the process and
+    // prevent any pending events from triggering our fallback logic again, and
+    // we will retry with a different configuration.
+    MOZ_DIAGNOSTIC_ASSERT(gfxConfig::IsEnabled(Feature::GPU_PROCESS));
+    OnBlockingProcessUnexpectedShutdown();
+
+    // Some callers may need to reconfigure if we fellback.
+    if (!aRetryAfterFallback) {
+      return NS_ERROR_NOT_AVAILABLE;
+    }
   }
 
   // This is the first time we are trying to use the in-process compositor.
@@ -373,7 +397,7 @@ nsresult GPUProcessManager::EnsureGPUReady() {
     }
     ResetProcessStable();
   }
-  return NS_ERROR_NOT_AVAILABLE;
+  return NS_ERROR_FAILURE;
 }
 
 bool GPUProcessManager::EnsureProtocolsReady() {
@@ -766,10 +790,9 @@ void GPUProcessManager::OnInProcessDeviceReset(bool aTrackThreshold) {
 }
 
 void GPUProcessManager::OnRemoteProcessDeviceReset(GPUProcessHost* aHost) {
-  if (OnDeviceReset(/* aTrackThreshold */ true)) {
-    DestroyProcess();
-    DisableGPUProcess("GPU processed experienced too many device resets");
-    HandleProcessLost();
+  if (OnDeviceReset(/* aTrackThreshold */ true) &&
+      !DisableWebRenderConfig(wr::WebRenderError::EXCESSIVE_RESETS,
+                              nsCString())) {
     return;
   }
 
@@ -781,6 +804,15 @@ void GPUProcessManager::NotifyListenersOnCompositeDeviceReset() {
   for (const auto& listener : mListeners) {
     listener->OnCompositorDeviceReset();
   }
+}
+
+void GPUProcessManager::OnBlockingProcessUnexpectedShutdown() {
+  if (mProcess) {
+    CompositorManagerChild::OnGPUProcessLost(mProcess->GetProcessToken());
+  }
+  DestroyProcess(/* aUnexpectedShutdown */ true);
+  mUnstableProcessAttempts = 0;
+  HandleProcessLost();
 }
 
 void GPUProcessManager::OnProcessUnexpectedShutdown(GPUProcessHost* aHost) {
@@ -800,20 +832,22 @@ void GPUProcessManager::OnProcessUnexpectedShutdown(GPUProcessHost* aHost) {
                    mTotalProcessAttempts);
     if (!MaybeDisableGPUProcess(disableMessage, /* aAllowRestart */ true)) {
       // Fallback wants the GPU process. Reset our counter.
+      MOZ_DIAGNOSTIC_ASSERT(gfxConfig::IsEnabled(Feature::GPU_PROCESS));
       mUnstableProcessAttempts = 0;
       HandleProcessLost();
+    } else {
+      MOZ_DIAGNOSTIC_ASSERT(!gfxConfig::IsEnabled(Feature::GPU_PROCESS));
     }
   } else if (mUnstableProcessAttempts >
                  uint32_t(StaticPrefs::
                               layers_gpu_process_max_restarts_with_decoder()) &&
              mDecodeVideoOnGpuProcess) {
     mDecodeVideoOnGpuProcess = false;
-    Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
-                          uint32_t(FallbackType::DECODINGDISABLED));
+    mozilla::glean::gpu_process::crash_fallbacks.Get("decoding_disabled"_ns)
+        .Add(1);
     HandleProcessLost();
   } else {
-    Telemetry::Accumulate(Telemetry::GPU_PROCESS_CRASH_FALLBACKS,
-                          uint32_t(FallbackType::NONE));
+    mozilla::glean::gpu_process::crash_fallbacks.Get("none"_ns).Add(1);
     HandleProcessLost();
   }
 }
@@ -1038,15 +1072,22 @@ already_AddRefed<CompositorSession> GPUProcessManager::CreateTopLevelCompositor(
 
   LayersId layerTreeId = AllocateLayerTreeId();
 
-  if (!EnsureProtocolsReady()) {
+  RefPtr<CompositorSession> session;
+
+  nsresult rv = EnsureGPUReady(/* aRetryAfterFallback */ false);
+  if (NS_WARN_IF(rv == NS_ERROR_ILLEGAL_DURING_SHUTDOWN)) {
     *aRetryOut = false;
     return nullptr;
   }
 
-  RefPtr<CompositorSession> session;
+  // If we used fallback, then retry creating the compositor sessions because
+  // our configuration may have changed.
+  if (rv == NS_ERROR_NOT_AVAILABLE) {
+    *aRetryOut = true;
+    return nullptr;
+  }
 
-  nsresult rv = EnsureGPUReady();
-  if (NS_WARN_IF(rv == NS_ERROR_ILLEGAL_DURING_SHUTDOWN)) {
+  if (!EnsureProtocolsReady()) {
     *aRetryOut = false;
     return nullptr;
   }
@@ -1055,9 +1096,15 @@ already_AddRefed<CompositorSession> GPUProcessManager::CreateTopLevelCompositor(
     session = CreateRemoteSession(aWidget, aLayerManager, layerTreeId, aScale,
                                   aOptions, aUseExternalSurfaceSize,
                                   aSurfaceSize, aInnerWindowId);
-    if (!session) {
-      // We couldn't create a remote compositor, so abort the process.
-      DisableGPUProcess("Failed to create remote compositor");
+    if (NS_WARN_IF(!session)) {
+      if (!MaybeDisableGPUProcess("Failed to create remote compositor",
+                                  /* aAllowRestart */ true)) {
+        // Fallback wants the GPU process. Reset our counter.
+        MOZ_DIAGNOSTIC_ASSERT(gfxConfig::IsEnabled(Feature::GPU_PROCESS));
+        OnBlockingProcessUnexpectedShutdown();
+      } else {
+        MOZ_DIAGNOSTIC_ASSERT(!gfxConfig::IsEnabled(Feature::GPU_PROCESS));
+      }
       *aRetryOut = true;
       return nullptr;
     }

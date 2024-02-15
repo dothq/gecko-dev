@@ -280,8 +280,8 @@ class ArtifactJob(object):
                     added_entry = True
                     break
 
-                if filename.endswith(".ini"):
-                    # The artifact build writes test .ini files into the object
+                if filename.endswith(".toml"):
+                    # The artifact build writes test .toml files into the object
                     # directory; they don't come from the upstream test archive.
                     self.log(
                         logging.DEBUG,
@@ -343,8 +343,8 @@ class ArtifactJob(object):
                         added_entry = True
                         break
 
-                    if filename.endswith(".ini"):
-                        # The artifact build writes test .ini files into the object
+                    if filename.endswith(".toml"):
+                        # The artifact build writes test .toml files into the object
                         # directory; they don't come from the upstream test archive.
                         self.log(
                             logging.DEBUG,
@@ -471,9 +471,9 @@ class ArtifactJob(object):
 
         if "esr" in version_display or "esr" in source_repo:
             return self.esr_candidate_trees
-        elif re.search("a\d+$", version_display):
+        elif re.search(r"a\d+$", version_display):
             return self.nightly_candidate_trees
-        elif re.search("b\d+$", version_display):
+        elif re.search(r"b\d+$", version_display):
             return self.beta_candidate_trees
 
         return self.default_candidate_trees

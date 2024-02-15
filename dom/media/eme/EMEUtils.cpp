@@ -75,10 +75,27 @@ bool IsWidevineExperimentKeySystemAndSupported(const nsAString& aKeySystem) {
   return aKeySystem.EqualsLiteral(kWidevineExperimentKeySystemName) ||
          aKeySystem.EqualsLiteral(kWidevineExperiment2KeySystemName);
 }
+
+bool IsWMFClearKeySystemAndSupported(const nsAString& aKeySystem) {
+  if (!StaticPrefs::media_eme_wmf_clearkey_enabled()) {
+    return false;
+  }
+  // 1=enabled encrypted and clear, 2=enabled encrytped.
+  if (StaticPrefs::media_wmf_media_engine_enabled() != 1 &&
+      StaticPrefs::media_wmf_media_engine_enabled() != 2) {
+    return false;
+  }
+  return aKeySystem.EqualsLiteral(kClearKeyKeySystemName);
+}
 #endif
 
 nsString KeySystemToProxyName(const nsAString& aKeySystem) {
   if (IsClearkeyKeySystem(aKeySystem)) {
+#ifdef MOZ_WMF_CDM
+    if (StaticPrefs::media_eme_wmf_clearkey_enabled()) {
+      return u"mfcdm-clearkey"_ns;
+    }
+#endif
     return u"gmp-clearkey"_ns;
   }
   if (IsWidevineKeySystem(aKeySystem)) {
@@ -127,7 +144,8 @@ bool IsHardwareDecryptionSupported(
   }
   for (const auto& capabilities : aConfig.mVideoCapabilities) {
     if (capabilities.mRobustness.EqualsLiteral("3000") ||
-        capabilities.mRobustness.EqualsLiteral("HW_SECURE_ALL")) {
+        capabilities.mRobustness.EqualsLiteral("HW_SECURE_ALL") ||
+        capabilities.mRobustness.EqualsLiteral("HW_SECURE_DECODE")) {
       supportHardwareDecryption = true;
       break;
     }
@@ -204,6 +222,18 @@ bool DoesKeySystemSupportClearLead(const nsAString& aKeySystem) {
   }
 #endif
   return aKeySystem.EqualsLiteral(kWidevineKeySystemName);
+}
+
+bool CheckIfHarewareDRMConfigExists(
+    const nsTArray<dom::MediaKeySystemConfiguration>& aConfigs) {
+  bool foundHWDRMconfig = false;
+  for (const auto& config : aConfigs) {
+    if (IsHardwareDecryptionSupported(config)) {
+      foundHWDRMconfig = true;
+      break;
+    }
+  }
+  return foundHWDRMconfig;
 }
 
 }  // namespace mozilla

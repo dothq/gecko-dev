@@ -1,5 +1,7 @@
 use crate::{
-    device::{Device, DeviceError, MissingDownlevelFlags, MissingFeatures, SHADER_STAGE_COUNT},
+    device::{
+        bgl, Device, DeviceError, MissingDownlevelFlags, MissingFeatures, SHADER_STAGE_COUNT,
+    },
     error::{ErrorFormatter, PrettyError},
     hal_api::HalApi,
     id::{
@@ -9,14 +11,14 @@ use crate::{
     init_tracker::{BufferInitTrackerAction, TextureInitTrackerAction},
     resource::{Resource, ResourceInfo, ResourceType},
     resource_log,
+    snatch::SnatchGuard,
     track::{BindGroupStates, UsageConflict},
     validation::{MissingBufferUsageError, MissingTextureUsageError},
-    FastHashMap, Label,
+    Label,
 };
 
 use arrayvec::ArrayVec;
 
-use parking_lot::RwLock;
 #[cfg(feature = "replay")]
 use serde::Deserialize;
 #[cfg(feature = "trace")]
@@ -440,34 +442,34 @@ pub struct BindGroupLayoutDescriptor<'a> {
     pub entries: Cow<'a, [wgt::BindGroupLayoutEntry]>,
 }
 
-pub(crate) type BindEntryMap = FastHashMap<u32, wgt::BindGroupLayoutEntry>;
-
 pub type BindGroupLayouts<A> = crate::storage::Storage<BindGroupLayout<A>, BindGroupLayoutId>;
 
 /// Bind group layout.
-///
-/// The lifetime of BGLs is a bit special. They are only referenced on CPU
-/// without considering GPU operations. And on CPU they get manual
-/// inc-refs and dec-refs. In particular, the following objects depend on them:
-///  - produced bind groups
-///  - produced pipeline layouts
-///  - pipelines with implicit layouts
 #[derive(Debug)]
 pub struct BindGroupLayout<A: HalApi> {
     pub(crate) raw: Option<A::BindGroupLayout>,
     pub(crate) device: Arc<Device<A>>,
-    pub(crate) entries: BindEntryMap,
+    pub(crate) entries: bgl::EntryMap,
+    /// It is very important that we know if the bind group comes from the BGL pool.
+    ///
+    /// If it does, then we need to remove it from the pool when we drop it.
+    ///
+    /// We cannot unconditionally remove from the pool, as BGLs that don't come from the pool
+    /// (derived BGLs) must not be removed.
+    pub(crate) origin: bgl::Origin,
     #[allow(unused)]
-    pub(crate) dynamic_count: usize,
-    pub(crate) count_validator: BindingTypeMaxCountValidator,
+    pub(crate) binding_count_validator: BindingTypeMaxCountValidator,
     pub(crate) info: ResourceInfo<BindGroupLayoutId>,
     pub(crate) label: String,
 }
 
 impl<A: HalApi> Drop for BindGroupLayout<A> {
     fn drop(&mut self) {
+        if matches!(self.origin, bgl::Origin::Pool) {
+            self.device.bgl_pool.remove(&self.entries);
+        }
         if let Some(raw) = self.raw.take() {
-            resource_log!("Destroy raw BindGroupLayout {}", self.info.label());
+            resource_log!("Destroy raw BindGroupLayout {:?}", self.info.label());
             unsafe {
                 use hal::Device;
                 self.device.raw().destroy_bind_group_layout(raw);
@@ -605,7 +607,7 @@ pub struct PipelineLayout<A: HalApi> {
 impl<A: HalApi> Drop for PipelineLayout<A> {
     fn drop(&mut self) {
         if let Some(raw) = self.raw.take() {
-            resource_log!("Destroy raw PipelineLayout {}", self.info.label());
+            resource_log!("Destroy raw PipelineLayout {:?}", self.info.label());
             unsafe {
                 use hal::Device;
                 self.device.raw().destroy_pipeline_layout(raw);
@@ -618,6 +620,14 @@ impl<A: HalApi> PipelineLayout<A> {
     pub(crate) fn raw(&self) -> &A::PipelineLayout {
         self.raw.as_ref().unwrap()
     }
+
+    pub(crate) fn get_binding_maps(&self) -> ArrayVec<&bgl::EntryMap, { hal::MAX_BIND_GROUPS }> {
+        self.bind_group_layouts
+            .iter()
+            .map(|bgl| &bgl.entries)
+            .collect()
+    }
+
     /// Validate push constants match up with expected ranges.
     pub(crate) fn validate_push_constant_ranges(
         &self,
@@ -815,9 +825,9 @@ pub struct BindGroup<A: HalApi> {
     pub(crate) layout: Arc<BindGroupLayout<A>>,
     pub(crate) info: ResourceInfo<BindGroupId>,
     pub(crate) used: BindGroupStates<A>,
-    pub(crate) used_buffer_ranges: RwLock<Vec<BufferInitTrackerAction<A>>>,
-    pub(crate) used_texture_ranges: RwLock<Vec<TextureInitTrackerAction<A>>>,
-    pub(crate) dynamic_binding_info: RwLock<Vec<BindGroupDynamicBindingData>>,
+    pub(crate) used_buffer_ranges: Vec<BufferInitTrackerAction<A>>,
+    pub(crate) used_texture_ranges: Vec<TextureInitTrackerAction<A>>,
+    pub(crate) dynamic_binding_info: Vec<BindGroupDynamicBindingData>,
     /// Actual binding sizes for buffers that don't have `min_binding_size`
     /// specified in BGL. Listed in the order of iteration of `BGL.entries`.
     pub(crate) late_buffer_binding_sizes: Vec<wgt::BufferSize>,
@@ -826,7 +836,7 @@ pub struct BindGroup<A: HalApi> {
 impl<A: HalApi> Drop for BindGroup<A> {
     fn drop(&mut self) {
         if let Some(raw) = self.raw.take() {
-            resource_log!("Destroy raw BindGroup {}", self.info.label());
+            resource_log!("Destroy raw BindGroup {:?}", self.info.label());
             unsafe {
                 use hal::Device;
                 self.device.raw().destroy_bind_group(raw);
@@ -836,8 +846,16 @@ impl<A: HalApi> Drop for BindGroup<A> {
 }
 
 impl<A: HalApi> BindGroup<A> {
-    pub(crate) fn raw(&self) -> &A::BindGroup {
-        self.raw.as_ref().unwrap()
+    pub(crate) fn raw(&self, guard: &SnatchGuard) -> Option<&A::BindGroup> {
+        // Clippy insist on writing it this way. The idea is to return None
+        // if any of the raw buffer is not valid anymore.
+        for buffer in &self.used_buffer_ranges {
+            let _ = buffer.buffer.raw(guard)?;
+        }
+        for texture in &self.used_texture_ranges {
+            let _ = texture.texture.raw(guard)?;
+        }
+        self.raw.as_ref()
     }
     pub(crate) fn validate_dynamic_bindings(
         &self,
@@ -845,17 +863,16 @@ impl<A: HalApi> BindGroup<A> {
         offsets: &[wgt::DynamicOffset],
         limits: &wgt::Limits,
     ) -> Result<(), BindError> {
-        if self.dynamic_binding_info.read().len() != offsets.len() {
+        if self.dynamic_binding_info.len() != offsets.len() {
             return Err(BindError::MismatchedDynamicOffsetCount {
                 group: bind_group_index,
-                expected: self.dynamic_binding_info.read().len(),
+                expected: self.dynamic_binding_info.len(),
                 actual: offsets.len(),
             });
         }
 
         for (idx, (info, &offset)) in self
             .dynamic_binding_info
-            .read()
             .iter()
             .zip(offsets.iter())
             .enumerate()

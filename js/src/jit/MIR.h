@@ -6009,12 +6009,40 @@ class MStringConvertCase : public MUnaryInstruction,
   TRIVIAL_NEW_WRAPPERS
   NAMED_OPERANDS((0, string))
 
+  MDefinition* foldsTo(TempAllocator& alloc) override;
   bool congruentTo(const MDefinition* ins) const override {
     return congruentIfOperandsEqual(ins) &&
            ins->toStringConvertCase()->mode() == mode();
   }
   AliasSet getAliasSet() const override { return AliasSet::None(); }
   bool possiblyCalls() const override { return true; }
+  Mode mode() const { return mode_; }
+};
+
+class MCharCodeConvertCase : public MUnaryInstruction,
+                             public UnboxedInt32Policy<0>::Data {
+ public:
+  enum Mode { LowerCase, UpperCase };
+
+ private:
+  Mode mode_;
+
+  MCharCodeConvertCase(MDefinition* code, Mode mode)
+      : MUnaryInstruction(classOpcode, code), mode_(mode) {
+    setResultType(MIRType::String);
+    setMovable();
+  }
+
+ public:
+  INSTRUCTION_HEADER(CharCodeConvertCase)
+  TRIVIAL_NEW_WRAPPERS
+  NAMED_OPERANDS((0, code))
+
+  bool congruentTo(const MDefinition* ins) const override {
+    return congruentIfOperandsEqual(ins) &&
+           ins->toCharCodeConvertCase()->mode() == mode();
+  }
+  AliasSet getAliasSet() const override { return AliasSet::None(); }
   Mode mode() const { return mode_; }
 };
 
@@ -7402,6 +7430,7 @@ class MClampToUint8 : public MUnaryInstruction, public ClampPolicy::Data {
 class MLoadFixedSlot : public MUnaryInstruction,
                        public SingleObjectPolicy::Data {
   size_t slot_;
+  bool usedAsPropertyKey_ = false;
 
  protected:
   MLoadFixedSlot(MDefinition* obj, size_t slot)
@@ -7438,6 +7467,9 @@ class MLoadFixedSlot : public MUnaryInstruction,
   void printOpcode(GenericPrinter& out) const override;
 #endif
 
+  void setUsedAsPropertyKey() { usedAsPropertyKey_ = true; }
+  bool usedAsPropertyKey() const { return usedAsPropertyKey_; }
+
   ALLOW_CLONE(MLoadFixedSlot)
 };
 
@@ -7445,10 +7477,14 @@ class MLoadFixedSlotAndUnbox : public MUnaryInstruction,
                                public SingleObjectPolicy::Data {
   size_t slot_;
   MUnbox::Mode mode_;
+  bool usedAsPropertyKey_;
 
   MLoadFixedSlotAndUnbox(MDefinition* obj, size_t slot, MUnbox::Mode mode,
-                         MIRType type)
-      : MUnaryInstruction(classOpcode, obj), slot_(slot), mode_(mode) {
+                         MIRType type, bool usedAsPropertyKey = false)
+      : MUnaryInstruction(classOpcode, obj),
+        slot_(slot),
+        mode_(mode),
+        usedAsPropertyKey_(usedAsPropertyKey) {
     setResultType(type);
     setMovable();
     if (mode_ == MUnbox::Fallible) {
@@ -7485,6 +7521,8 @@ class MLoadFixedSlotAndUnbox : public MUnaryInstruction,
   void printOpcode(GenericPrinter& out) const override;
 #endif
 
+  bool usedAsPropertyKey() const { return usedAsPropertyKey_; }
+
   ALLOW_CLONE(MLoadFixedSlotAndUnbox);
 };
 
@@ -7492,10 +7530,14 @@ class MLoadDynamicSlotAndUnbox : public MUnaryInstruction,
                                  public NoTypePolicy::Data {
   size_t slot_;
   MUnbox::Mode mode_;
+  bool usedAsPropertyKey_ = false;
 
   MLoadDynamicSlotAndUnbox(MDefinition* slots, size_t slot, MUnbox::Mode mode,
-                           MIRType type)
-      : MUnaryInstruction(classOpcode, slots), slot_(slot), mode_(mode) {
+                           MIRType type, bool usedAsPropertyKey = false)
+      : MUnaryInstruction(classOpcode, slots),
+        slot_(slot),
+        mode_(mode),
+        usedAsPropertyKey_(usedAsPropertyKey) {
     setResultType(type);
     setMovable();
     if (mode_ == MUnbox::Fallible) {
@@ -7528,6 +7570,8 @@ class MLoadDynamicSlotAndUnbox : public MUnaryInstruction,
 #ifdef JS_JITSPEW
   void printOpcode(GenericPrinter& out) const override;
 #endif
+
+  bool usedAsPropertyKey() const { return usedAsPropertyKey_; }
 
   ALLOW_CLONE(MLoadDynamicSlotAndUnbox);
 };
@@ -7875,6 +7919,7 @@ class MGuardTagNotEqual
 // Load from vp[slot] (slots that are not inline in an object).
 class MLoadDynamicSlot : public MUnaryInstruction, public NoTypePolicy::Data {
   uint32_t slot_;
+  bool usedAsPropertyKey_ = false;
 
   MLoadDynamicSlot(MDefinition* slots, uint32_t slot)
       : MUnaryInstruction(classOpcode, slots), slot_(slot) {
@@ -7912,6 +7957,9 @@ class MLoadDynamicSlot : public MUnaryInstruction, public NoTypePolicy::Data {
 #ifdef JS_JITSPEW
   void printOpcode(GenericPrinter& out) const override;
 #endif
+
+  void setUsedAsPropertyKey() { usedAsPropertyKey_ = true; }
+  bool usedAsPropertyKey() const { return usedAsPropertyKey_; }
 
   ALLOW_CLONE(MLoadDynamicSlot)
 };

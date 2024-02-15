@@ -30,25 +30,40 @@ namespace mozilla {
 
 /* static */
 bool KeySystemConfig::Supports(const nsAString& aKeySystem) {
-  nsCString api = nsLiteralCString(CHROMIUM_CDM_API);
-  nsCString name = NS_ConvertUTF16toUTF8(aKeySystem);
-
-  if (HaveGMPFor(api, {name})) {
+#ifdef MOZ_WIDGET_ANDROID
+  // No GMP on Android, check if we can use MediaDrm for this keysystem.
+  if (mozilla::java::MediaDrmProxy::IsSchemeSupported(
+          NS_ConvertUTF16toUTF8(aKeySystem))) {
     return true;
   }
-#ifdef MOZ_WIDGET_ANDROID
-  // Check if we can use MediaDrm for this keysystem.
-  if (mozilla::java::MediaDrmProxy::IsSchemeSupported(name)) {
+#else
+#  ifdef MOZ_WMF_CDM
+  // Test only, pretend we have already installed CDMs.
+  if (StaticPrefs::media_eme_wmf_use_mock_cdm_for_external_cdms()) {
     return true;
+  }
+#  endif
+  // Check if Widevine L3 or Clearkey has been downloaded via GMP downloader.
+  if (IsWidevineKeySystem(aKeySystem) || IsClearkeyKeySystem(aKeySystem)) {
+    return HaveGMPFor(nsCString(CHROMIUM_CDM_API),
+                      {NS_ConvertUTF16toUTF8(aKeySystem)});
   }
 #endif
+
 #if MOZ_WMF_CDM
+  // Check if Widevine L1 has been downloaded via GMP downloader.
+  if (IsWidevineExperimentKeySystemAndSupported(aKeySystem)) {
+    return HaveGMPFor(nsCString(kWidevineExperimentAPIName),
+                      {nsCString(kWidevineExperimentKeySystemName)});
+  }
+
   if ((IsPlayReadyKeySystemAndSupported(aKeySystem) ||
-       IsWidevineExperimentKeySystemAndSupported(aKeySystem)) &&
+       IsWMFClearKeySystemAndSupported(aKeySystem)) &&
       WMFCDMImpl::Supports(aKeySystem)) {
     return true;
   }
 #endif
+
   return false;
 }
 
@@ -222,6 +237,12 @@ void KeySystemConfig::GetGMPKeySystemConfigs(dom::Promise* aPromise) {
   };
   FallibleTArray<dom::CDMInformation> cdmInfo;
   for (const auto& name : keySystemNames) {
+#ifdef MOZ_WMF_CDM
+    if (IsWMFClearKeySystemAndSupported(name)) {
+      // Using wmf clearkey, not gmp clearkey.
+      continue;
+    }
+#endif
     if (KeySystemConfig::CreateKeySystemConfigs(name, keySystemConfigs)) {
       auto* info = cdmInfo.AppendElement(fallible);
       if (!info) {

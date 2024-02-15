@@ -10,15 +10,15 @@ origin:
 
   url: https://github.com/QuantStack/xsimd
 
-  release: 12.1.1 (2023-12-12T17:17:27+01:00).
-  revision: 12.1.1
+  release: 3216c13f180e671d61b8bf7ecb96168f78592100 (2024-01-02T07:57:02Z).
+  revision: 3216c13f180e671d61b8bf7ecb96168f78592100
 
   license: BSD-3-Clause
 
 vendoring:
   url: https://github.com/QuantStack/xsimd
   source-hosting: github
-  tracking: tag
+  tracking: commit
 
   exclude:
     - ".*"

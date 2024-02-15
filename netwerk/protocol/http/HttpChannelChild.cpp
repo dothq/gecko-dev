@@ -816,10 +816,6 @@ void HttpChannelChild::DoOnDataAvailable(nsIRequest* aRequest,
 
 void HttpChannelChild::SendOnDataFinished(const nsresult& aChannelStatus) {
   LOG(("HttpChannelChild::SendOnDataFinished [this=%p]\n", this));
-  if (MOZ_UNLIKELY(NS_IsMainThread())) {
-    MOZ_ASSERT(false, "SendOnDataFinished should not be called on main thread");
-    return;
-  }
 
   if (mCanceled) return;
 
@@ -898,8 +894,7 @@ void HttpChannelChild::ProcessOnStopRequest(
 
   RefPtr<RecordStopRequestDelta> timing;
   TimeStamp start = TimeStamp::Now();
-  if (StaticPrefs::network_send_OnDataFinished() &&
-      mOMTResult == LABELS_HTTP_CHILD_OMT_STATS::success) {
+  if (StaticPrefs::network_send_OnDataFinished()) {
     timing = new RecordStopRequestDelta;
     mEventQ->RunOrEnqueue(new ChannelFunctionEvent(
         [self = UnsafePtr<HttpChannelChild>(this)]() {
@@ -2483,6 +2478,8 @@ nsresult HttpChannelChild::ContinueAsyncOpen() {
 
   openArgs.classicScriptHintCharset() = mClassicScriptHintCharset;
 
+  openArgs.isUserAgentHeaderModified() = LoadIsUserAgentHeaderModified();
+
   RefPtr<Document> doc;
   mLoadInfo->GetLoadingDocument(getter_AddRefs(doc));
 
@@ -2565,6 +2562,11 @@ HttpChannelChild::SetRequestHeader(const nsACString& aHeader,
   RequestHeaderTuple* tuple = mClientSetRequestHeaders.AppendElement();
   if (!tuple) return NS_ERROR_OUT_OF_MEMORY;
 
+  // Mark that the User-Agent header has been modified.
+  if (nsHttp::ResolveAtom(aHeader) == nsHttp::User_Agent) {
+    StoreIsUserAgentHeaderModified(true);
+  }
+
   tuple->mHeader = aHeader;
   tuple->mValue = aValue;
   tuple->mMerge = aMerge;
@@ -2580,6 +2582,11 @@ HttpChannelChild::SetEmptyRequestHeader(const nsACString& aHeader) {
 
   RequestHeaderTuple* tuple = mClientSetRequestHeaders.AppendElement();
   if (!tuple) return NS_ERROR_OUT_OF_MEMORY;
+
+  // Mark that the User-Agent header has been modified.
+  if (nsHttp::ResolveAtom(aHeader) == nsHttp::User_Agent) {
+    StoreIsUserAgentHeaderModified(true);
+  }
 
   tuple->mHeader = aHeader;
   tuple->mMerge = false;

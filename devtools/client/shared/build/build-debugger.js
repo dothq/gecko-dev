@@ -5,28 +5,7 @@
 "use strict";
 
 const Babel = require("./babel");
-const fs = require("fs");
 const _path = require("path");
-
-const mappings = {
-  "./source-editor": "devtools/client/shared/sourceeditor/editor",
-  "../editor/source-editor": "devtools/client/shared/sourceeditor/editor",
-  react: "devtools/client/shared/vendor/react",
-  "react-dom": "devtools/client/shared/vendor/react-dom",
-  "react-dom-factories": "devtools/client/shared/vendor/react-dom-factories",
-  "react-redux": "devtools/client/shared/vendor/react-redux",
-  redux: "devtools/client/shared/vendor/redux",
-  reselect: "devtools/client/shared/vendor/reselect",
-  "prop-types": "devtools/client/shared/vendor/react-prop-types",
-  "wasmparser/dist/cjs/WasmParser": "devtools/client/shared/vendor/WasmParser",
-  "wasmparser/dist/cjs/WasmDis": "devtools/client/shared/vendor/WasmDis",
-  "devtools/client/shared/vendor/micromatch/micromatch":
-    "devtools/client/shared/vendor/micromatch/micromatch",
-  "framework-actions": "devtools/client/framework/actions/index",
-  "inspector-shared-utils": "devtools/client/inspector/shared/utils",
-};
-
-const mappingValues = Object.values(mappings);
 
 function isRequire(t, node) {
   return node && t.isCallExpression(node) && node.callee.name == "require";
@@ -37,6 +16,7 @@ function shouldLazyLoad(value) {
     !value.includes("codemirror/") &&
     !value.endsWith(".properties") &&
     !value.startsWith("devtools/") &&
+    !value.startsWith("resource://devtools/") &&
     // XXX: the lazyRequire rewriter (in transformMC) fails for this module, it
     // evaluates `t.thisExpression()` as `void 0` instead of `this`. But the
     // rewriter still works for other call sites and seems mandatory for the
@@ -53,44 +33,12 @@ function shouldLazyLoad(value) {
 function transformMC({ types: t }) {
   return {
     visitor: {
-      ModuleDeclaration(path, state) {
-        const source = path.node.source;
-        const value = source && source.value;
-        if (value && value.includes(".css")) {
-          path.remove();
-        }
-      },
-
       StringLiteral(path, state) {
         const { filePath } = state.opts;
         let value = path.node.value;
 
         if (!isRequire(t, path.parent)) {
           return;
-        }
-
-        // Handle require() to files mapped to other mozilla-central files.
-        if (Object.keys(mappings).includes(value)) {
-          path.replaceWith(t.stringLiteral(mappings[value]));
-          return;
-        }
-
-        // Handle implicit index.js requires:
-        // in a node environment, require("my/folder") will automatically load
-        // my/folder/index.js if available. The DevTools load does not handle
-        // this case, so we need to explicitly transform such requires to point
-        // to the index.js file.
-        const dir = _path.dirname(filePath);
-        const depPath = _path.join(dir, `${value}.js`);
-        const exists = fs.existsSync(depPath);
-        if (
-          !exists &&
-          !value.endsWith("index") &&
-          !value.endsWith(".jsm") &&
-          !(value.startsWith("devtools") || mappingValues.includes(value))
-        ) {
-          value = `${value}/index`;
-          path.replaceWith(t.stringLiteral(value));
         }
 
         if (shouldLazyLoad(value)) {
@@ -148,9 +96,8 @@ Babel.registerPlugin("transform-mc", transformMC);
 
 module.exports = function (filePath) {
   return [
-    "proposal-optional-chaining",
     "proposal-class-properties",
     "transform-modules-commonjs",
-    ["transform-mc", { mappings, filePath }],
+    ["transform-mc", { filePath }],
   ];
 };

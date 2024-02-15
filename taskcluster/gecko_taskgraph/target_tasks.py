@@ -244,11 +244,9 @@ def accept_raptor_android_build(platform):
         return False
     if "shippable" not in platform:
         return False
-    if "p2" in platform and "aarch64" in platform:
-        return False
     if "p5" in platform and "aarch64" in platform:
         return False
-    if "g5" in platform:
+    if "p6" in platform and "aarch64" in platform:
         return False
     if "a51" in platform:
         return True
@@ -1051,23 +1049,6 @@ def target_tasks_customv8_update(full_task_graph, parameters, graph_config):
     return ["toolchain-linux64-custom-v8"]
 
 
-@_target_task("chromium_update")
-def target_tasks_chromium_update(full_task_graph, parameters, graph_config):
-    """Select tasks required for building latest chromium versions."""
-    return [
-        "fetch-linux64-chromium",
-        "fetch-win32-chromium",
-        "fetch-win64-chromium",
-        "fetch-mac-chromium",
-        "fetch-mac-chromium-arm",
-        "toolchain-linux64-custom-car",
-        "toolchain-win64-custom-car",
-        "toolchain-macosx64-custom-car",
-        "toolchain-macosx-arm64-custom-car",
-        "toolchain-android-custom-car",
-    ]
-
-
 @_target_task("file_update")
 def target_tasks_file_update(full_task_graph, parameters, graph_config):
     """Select the set of tasks required to perform nightly in-tree file updates"""
@@ -1239,8 +1220,6 @@ def target_tasks_daily_beta_perf(full_task_graph, parameters, graph_config):
         if platform and accept_raptor_android_build(platform):
             # Select browsertime & geckoview specific tests
             if "browsertime" and "geckoview" in try_name:
-                if "g5" in platform:
-                    return False
                 if "power" in try_name:
                     return False
                 if "cpu" in try_name:
@@ -1278,8 +1257,6 @@ def target_tasks_weekly_release_perf(full_task_graph, parameters, graph_config):
         if platform and accept_raptor_android_build(platform):
             # Select browsertime & geckoview specific tests
             if "browsertime" and "geckoview" in try_name:
-                if "g5" in platform:
-                    return False
                 if "power" in try_name:
                     return False
                 if "cpu" in try_name:

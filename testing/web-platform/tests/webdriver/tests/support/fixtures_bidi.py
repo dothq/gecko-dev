@@ -20,10 +20,11 @@ from webdriver.error import TimeoutException
 async def add_preload_script(bidi_session):
     preload_scripts_ids = []
 
-    async def add_preload_script(function_declaration, arguments=None, sandbox=None):
+    async def add_preload_script(function_declaration, arguments=None, contexts=None, sandbox=None):
         script = await bidi_session.script.add_preload_script(
             function_declaration=function_declaration,
             arguments=arguments,
+            contexts=contexts,
             sandbox=sandbox,
         )
         preload_scripts_ids.append(script)
@@ -308,6 +309,15 @@ def compare_png_bidi(bidi_session, url):
                 raise Exception(f"Unexpected object key ${item[0]}")
         return ImageDifference(total_pixels, max_difference)
     return compare_png_bidi
+
+
+@pytest.fixture
+def current_url(bidi_session):
+    async def current_url(context):
+        contexts = await bidi_session.browsing_context.get_tree(root=context, max_depth=0)
+        return contexts[0]["url"]
+
+    return current_url
 
 
 @pytest.fixture

@@ -77,6 +77,7 @@
 #include "mozilla/Preferences.h"
 #include "gfxTextRun.h"
 #include "nsFontFaceUtils.h"
+#include "COLRFonts.h"
 #include "mozilla/ContentBlockingAllowList.h"
 #include "mozilla/GlobalStyleSheetCache.h"
 #include "mozilla/ServoBindings.h"
@@ -292,6 +293,7 @@ nsPresContext::nsPresContext(dom::Document* aDocument, nsPresContextType aType)
       mHadFirstContentfulPaint(false),
       mHadNonTickContentfulPaint(false),
       mHadContentfulPaintComposite(false),
+      mNeedsToUpdateHiddenByContentVisibilityForAnimations(false),
       mUserInputEventsAllowed(false),
 #ifdef DEBUG
       mInitialized(false),
@@ -1038,11 +1040,15 @@ void nsPresContext::DetachPresShell() {
 struct QueryContainerState {
   nsSize mSize;
   WritingMode mWm;
+  StyleContainerType mType;
 
   nscoord GetInlineSize() const { return LogicalSize(mWm, mSize).ISize(mWm); }
 
-  bool Changed(const QueryContainerState& aNewState, StyleContainerType aType) {
-    switch (aType) {
+  bool Changed(const QueryContainerState& aNewState) {
+    if (mType != aNewState.mType) {
+      return true;
+    }
+    switch (mType) {
       case StyleContainerType::Normal:
         break;
       case StyleContainerType::Size:
@@ -1085,13 +1091,13 @@ bool nsPresContext::UpdateContainerQueryStyles() {
 
     auto type = frame->StyleDisplay()->mContainerType;
     MOZ_ASSERT(type != StyleContainerType::Normal,
-               "Non-container frames shouldn't be in this type");
+               "Non-container frames shouldn't be in this set");
 
     const QueryContainerState newState{frame->GetSize(),
-                                       frame->GetWritingMode()};
+                                       frame->GetWritingMode(), type};
     QueryContainerState* oldState = frame->GetProperty(ContainerState());
 
-    const bool changed = !oldState || oldState->Changed(newState, type);
+    const bool changed = !oldState || oldState->Changed(newState);
 
     // Make sure to update the state regardless. It's cheap and it keeps tracks
     // of both axes correctly even if only one axis is contained.
@@ -2948,9 +2954,20 @@ void nsPresContext::FlushFontPaletteValues() {
   mFontPaletteValueSet = styleSet->BuildFontPaletteValueSet();
   mFontPaletteValuesDirty = false;
 
+  if (mFontPaletteCache) {
+    mFontPaletteCache->SetPaletteValueSet(mFontPaletteValueSet);
+  }
+
   // Even if we're not reflowing anything, a change to the palette means we
   // need to repaint in order to show the new colors.
   InvalidatePaintedLayers();
+}
+
+gfx::PaletteCache& nsPresContext::FontPaletteCache() {
+  if (!mFontPaletteCache) {
+    mFontPaletteCache = MakeUnique<gfx::PaletteCache>(mFontPaletteValueSet);
+  }
+  return *mFontPaletteCache.get();
 }
 
 void nsPresContext::SetVisibleArea(const nsRect& r) {
@@ -3081,7 +3098,9 @@ PerformanceMainThread* nsPresContext::GetPerformanceMainThread() const {
   return nullptr;
 }
 
-void nsPresContext::UpdateHiddenByContentVisibilityForAnimations() {
+void nsPresContext::DoUpdateHiddenByContentVisibilityForAnimations() {
+  MOZ_ASSERT(NeedsToUpdateHiddenByContentVisibilityForAnimations());
+  mNeedsToUpdateHiddenByContentVisibilityForAnimations = false;
   mDocument->UpdateHiddenByContentVisibilityForAnimations();
   TimelineManager()->UpdateHiddenByContentVisibilityForAnimations();
 }

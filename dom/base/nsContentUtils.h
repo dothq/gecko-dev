@@ -350,7 +350,8 @@ class nsContentUtils {
 
   // Check whether we should avoid leaking distinguishing information to JS/CSS.
   // This function can be called both in the main thread and worker threads.
-  static bool ShouldResistFingerprinting(RFPTarget aTarget);
+  static bool ShouldResistFingerprinting(bool aIsPrivateMode,
+                                         RFPTarget aTarget);
   static bool ShouldResistFingerprinting(nsIGlobalObject* aGlobalObject,
                                          RFPTarget aTarget);
   // Similar to the function above, but always allows CallerType::System
@@ -1088,7 +1089,7 @@ class nsContentUtils {
   /**
    * Returns true if this document is in a Private Browsing window.
    */
-  static bool IsInPrivateBrowsing(Document* aDoc);
+  static bool IsInPrivateBrowsing(const Document* aDoc);
 
   /**
    * Returns true if this loadGroup uses Private Browsing.
@@ -2517,9 +2518,11 @@ class nsContentUtils {
   static bool IsSystemOrPDFJS(JSContext*, JSObject*);
 
   /**
-   * Checks if internal SWF player is enabled.
+   * Checks if the given JSContext is secure or if the subject principal is
+   * either an addon principal or an expanded principal, which contains at least
+   * one addon principal.
    */
-  static bool IsSWFPlayerEnabled();
+  static bool IsSecureContextOrWebExtension(JSContext*, JSObject*);
 
   enum DocumentViewerType {
     TYPE_UNSUPPORTED,
@@ -2896,12 +2899,6 @@ class nsContentUtils {
       const mozilla::dom::IPCTransferableData& aTransferableData,
       bool aAddDataFlavor, nsITransferable* aTransferable,
       const bool aFilterUnknownFlavors);
-
-  static nsresult IPCTransferableDataToTransferable(
-      const mozilla::dom::IPCTransferableData& aTransferableData,
-      const bool& aIsPrivateData, nsIPrincipal* aRequestingPrincipal,
-      const nsContentPolicyType& aContentPolicyType, bool aAddDataFlavor,
-      nsITransferable* aTransferable, const bool aFilterUnknownFlavors);
 
   static nsresult IPCTransferableToTransferable(
       const mozilla::dom::IPCTransferable& aIPCTransferable,
@@ -3640,9 +3637,43 @@ nsContentUtils::InternalContentPolicyTypeToExternal(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_INTERNAL_FETCH_PRELOAD:
       return ExtContentPolicy::TYPE_FETCH;
 
-    default:
+    case nsIContentPolicy::TYPE_INVALID:
+    case nsIContentPolicy::TYPE_OTHER:
+    case nsIContentPolicy::TYPE_SCRIPT:
+    case nsIContentPolicy::TYPE_IMAGE:
+    case nsIContentPolicy::TYPE_STYLESHEET:
+    case nsIContentPolicy::TYPE_OBJECT:
+    case nsIContentPolicy::TYPE_DOCUMENT:
+    case nsIContentPolicy::TYPE_SUBDOCUMENT:
+    case nsIContentPolicy::TYPE_PING:
+    case nsIContentPolicy::TYPE_XMLHTTPREQUEST:
+    case nsIContentPolicy::TYPE_OBJECT_SUBREQUEST:
+    case nsIContentPolicy::TYPE_DTD:
+    case nsIContentPolicy::TYPE_FONT:
+    case nsIContentPolicy::TYPE_MEDIA:
+    case nsIContentPolicy::TYPE_WEBSOCKET:
+    case nsIContentPolicy::TYPE_CSP_REPORT:
+    case nsIContentPolicy::TYPE_XSLT:
+    case nsIContentPolicy::TYPE_BEACON:
+    case nsIContentPolicy::TYPE_FETCH:
+    case nsIContentPolicy::TYPE_IMAGESET:
+    case nsIContentPolicy::TYPE_WEB_MANIFEST:
+    case nsIContentPolicy::TYPE_SAVEAS_DOWNLOAD:
+    case nsIContentPolicy::TYPE_SPECULATIVE:
+    case nsIContentPolicy::TYPE_UA_FONT:
+    case nsIContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA:
+    case nsIContentPolicy::TYPE_WEB_IDENTITY:
+    case nsIContentPolicy::TYPE_WEB_TRANSPORT:
+      // NOTE: When adding something here make sure the enumerator is defined!
       return static_cast<ExtContentPolicyType>(aType);
+
+    case nsIContentPolicy::TYPE_END:
+      break;
+      // Do not add default: so that compilers can catch the missing case.
   }
+
+  MOZ_ASSERT(false, "Unhandled nsContentPolicyType value");
+  return ExtContentPolicy::TYPE_INVALID;
 }
 
 namespace mozilla {

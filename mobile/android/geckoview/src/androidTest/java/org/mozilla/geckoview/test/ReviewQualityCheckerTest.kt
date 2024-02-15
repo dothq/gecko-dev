@@ -132,9 +132,6 @@ class ReviewQualityCheckerTest : BaseSessionTest() {
         val createResult = mainSession.requestCreateAnalysis("https://www.example.com/mock/")
         assertThat("Analysis status should match", sessionRule.waitForResult(createResult), equalTo("pending"))
 
-        val creationStatus = mainSession.requestAnalysisCreationStatus("https://www.example.com/mock/")
-        assertThat("Analysis status should match", sessionRule.waitForResult(creationStatus), equalTo("in_progress"))
-
         val status = "in_progress"
         val progress = 90.9
 
@@ -220,6 +217,12 @@ class ReviewQualityCheckerTest : BaseSessionTest() {
         assertThat(
             "Impression event success result should be true",
             sessionRule.waitForResult(validImpressionResult),
+            equalTo(true),
+        )
+        val validPlacementResult = mainSession.sendPlacementAttributionEvent(aid)
+        assertThat(
+            "Placement event success result should be true",
+            sessionRule.waitForResult(validPlacementResult),
             equalTo(true),
         )
     }

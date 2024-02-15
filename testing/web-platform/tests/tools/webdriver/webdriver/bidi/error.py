@@ -35,7 +35,7 @@ class InvalidArgumentException(BidiException):
     error_code = "invalid argument"
 
 
-class InvalidSelectorError(BidiException):
+class InvalidSelectorException(BidiException):
     error_code = "invalid selector"
 
 
@@ -85,6 +85,10 @@ class NoSuchScriptException(BidiException):
 
 class UnableToCaptureScreenException(BidiException):
     error_code = "unable to capture screen"
+
+
+class UnableToSetCookieException(BidiException):
+    error_code = "unable to set cookie"
 
 
 class UnknownCommandException(BidiException):

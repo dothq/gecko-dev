@@ -191,23 +191,11 @@ mr2022-onboarding-easy-setup-import-checkbox-label = Import from previous browse
 
 ## MR2022 New User Pin Firefox screen strings
 
-# Title used on about:welcome for new users when Firefox is not pinned.
-# In this context, open up is synonymous with "Discover".
-# The metaphor is that when they open their Firefox browser, it helps them discover an amazing internet.
-# If this translation does not make sense in your language, feel free to use the word "discover."
-mr2022-onboarding-welcome-pin-header = Open up an amazing internet
-# Subtitle is used on onboarding page for new users page when Firefox is not pinned
-mr2022-onboarding-welcome-pin-subtitle = Launch { -brand-short-name } from anywhere with a single click. Every time you do, you’re choosing a more open and independent web.
 # Primary button string used on welcome page for when Firefox is not pinned.
 mr2022-onboarding-pin-primary-button-label = { PLATFORM() ->
     [macos] Keep { -brand-short-name } in Dock
    *[other] Pin { -brand-short-name } to taskbar
 }
-# Subtitle will be used when user already has Firefox pinned, but
-# has not set it as their default browser.
-# When translating "zip", please feel free to pick a verb that signifies movement and/or exploration
-# and makes sense in the context of navigating the web.
-mr2022-onboarding-set-default-only-subtitle = Start with a browser backed by a non-profit. We defend your privacy while you zip around the web.
 
 ## MR2022 Existing User Pin Firefox Screen Strings
 
@@ -238,16 +226,10 @@ mr2022-onboarding-set-default-subtitle = Use a browser backed by a non-profit. W
 mr2022-onboarding-get-started-primary-subtitle = Our latest version is built around you, making it easier than ever to zip around the web. It’s packed with features we think you’ll adore.
 mr2022-onboarding-get-started-primary-button-label = Set up in seconds
 
-## MR2022 Import Settings screen strings
-
-mr2022-onboarding-import-header = Lightning-fast setup
-mr2022-onboarding-import-subtitle = Set up { -brand-short-name } how you like it. Add your bookmarks, passwords, and more from your old browser.
 mr2022-onboarding-import-primary-button-label-no-attribution = Import from previous browser
 
 ## MR2022 Multistage Mobile Download screen strings
 
-mr2022-onboarding-mobile-download-title = Hop from laptop to phone and back again
-mr2022-onboarding-mobile-download-subtitle = Grab tabs from one device and pick up where you left off on another. Plus sync your bookmarks and passwords anywhere you use { -brand-product-name }.
 mr2022-onboarding-mobile-download-cta-text = Scan the QR code to get { -brand-product-name } for mobile or <a data-l10n-name="download-label">send yourself a download link.</a>
 mr2022-onboarding-no-mobile-download-cta-text = Scan the QR code to get { -brand-product-name } for mobile.
 
@@ -321,3 +303,20 @@ onboarding-mobile-download-security-and-privacy-subtitle = When you’re synced 
 # Gratitude screen
 onboarding-gratitude-security-and-privacy-title = { -brand-short-name } has your back
 onboarding-gratitude-security-and-privacy-subtitle = Thank you for using { -brand-short-name }, backed by the Mozilla Foundation. With your support, we’re working to make the internet safer and more accessible for everyone.
+
+## New user time and familiarity survey strings
+
+onboarding-new-user-time-based-survey-title = How long have you been using { -brand-short-name }?
+onboarding-new-user-familiarity-based-survey-title = How familiar are you with { -brand-short-name }?
+
+onboarding-new-user-survey-subtitle = Your feedback helps make { -brand-short-name } even better.
+# When translating "brand new" it means completely new.
+onboarding-new-user-survey-time-based-option-1 = I’m brand new
+onboarding-new-user-survey-time-based-option-2 = Less than 1 month
+onboarding-new-user-survey-time-based-option-3 = More than 1 month, regularly
+onboarding-new-user-survey-time-based-option-4 = More than 1 month, occasionally
+# When translating "brand new" it means completely new.
+onboarding-new-user-survey-familiarity-based-option-1 = I’m brand new
+onboarding-new-user-survey-familiarity-based-option-2 = I’ve used it some
+onboarding-new-user-survey-familiarity-based-option-3 = I’m very familiar with it
+onboarding-new-user-survey-familiarity-based-option-4 = I used it in the past, but it’s been a while

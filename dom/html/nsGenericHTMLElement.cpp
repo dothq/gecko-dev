@@ -93,6 +93,10 @@
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/ElementInternals.h"
 
+#ifdef ACCESSIBILITY
+#  include "nsAccessibilityService.h"
+#endif
+
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -170,7 +174,11 @@ nsresult nsGenericHTMLElement::CopyInnerTo(Element* aDst) {
 }
 
 static const nsAttrValue::EnumTable kDirTable[] = {
-    {"ltr", eDir_LTR}, {"rtl", eDir_RTL}, {"auto", eDir_Auto}, {nullptr, 0}};
+    {"ltr", Directionality::Ltr},
+    {"rtl", Directionality::Rtl},
+    {"auto", Directionality::Auto},
+    {nullptr, 0},
+};
 
 namespace {
 // See <https://html.spec.whatwg.org/#the-popover-attribute>.
@@ -764,7 +772,7 @@ void nsGenericHTMLElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
           NewRunnableMethod("nsGenericHTMLElement::AfterSetPopoverAttr", this,
                             &nsGenericHTMLElement::AfterSetPopoverAttr));
     } else if (aName == nsGkAtoms::dir) {
-      Directionality dir = eDir_LTR;
+      auto dir = Directionality::Ltr;
       // A boolean tracking whether we need to recompute our directionality.
       // This needs to happen after we update our internal "dir" attribute
       // state but before we call SetDirectionalityOnDescendants.
@@ -773,16 +781,16 @@ void nsGenericHTMLElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
       if (aValue && aValue->Type() == nsAttrValue::eEnum) {
         SetHasValidDir();
         dirStates |= ElementState::HAS_DIR_ATTR;
-        Directionality dirValue = (Directionality)aValue->GetEnumValue();
-        if (dirValue == eDir_Auto) {
+        auto dirValue = Directionality(aValue->GetEnumValue());
+        if (dirValue == Directionality::Auto) {
           dirStates |= ElementState::HAS_DIR_ATTR_LIKE_AUTO;
         } else {
           dir = dirValue;
           SetDirectionality(dir, aNotify);
-          if (dirValue == eDir_LTR) {
+          if (dirValue == Directionality::Ltr) {
             dirStates |= ElementState::HAS_DIR_ATTR_LTR;
           } else {
-            MOZ_ASSERT(dirValue == eDir_RTL);
+            MOZ_ASSERT(dirValue == Directionality::Rtl);
             dirStates |= ElementState::HAS_DIR_ATTR_RTL;
           }
         }
@@ -1787,7 +1795,6 @@ void nsGenericHTMLFormElement::ClearForm(bool aRemoveFromForm,
   UnsetFlags(ADDED_TO_FORM);
   SetFormInternal(nullptr, false);
   AfterClearForm(aUnbindOrDelete);
-  UpdateValidityElementStates(true);
 }
 
 nsresult nsGenericHTMLFormElement::BindToTree(BindContext& aContext,
@@ -2139,11 +2146,6 @@ void nsGenericHTMLFormElement::UpdateFormOwner(bool aBindToTree,
     if (!idVal.IsEmpty()) {
       form->AddElementToTable(this, idVal);
     }
-  }
-
-  if (form != oldForm) {
-    // ui-valid / invalid depends on the form for some elements
-    UpdateValidityElementStates(true);
   }
 }
 
@@ -2765,11 +2767,11 @@ nsresult nsGenericHTMLFormControlElement::SubmitDirnameDir(
     nsAutoString dirname;
     GetAttr(nsGkAtoms::dirname, dirname);
     if (!dirname.IsEmpty()) {
-      const Directionality eDir = GetDirectionality();
-      MOZ_ASSERT(eDir == eDir_RTL || eDir == eDir_LTR,
+      const Directionality dir = GetDirectionality();
+      MOZ_ASSERT(dir == Directionality::Ltr || dir == Directionality::Rtl,
                  "The directionality of an element is either ltr or rtl");
-      const nsString dir = eDir == eDir_LTR ? u"ltr"_ns : u"rtl"_ns;
-      return aFormData->AddNameValuePair(dirname, dir);
+      return aFormData->AddNameValuePair(
+          dirname, dir == Directionality::Ltr ? u"ltr"_ns : u"rtl"_ns);
     }
   }
   return NS_OK;
@@ -2853,14 +2855,28 @@ void nsGenericHTMLFormControlElementWithState::HandlePopoverTargetAction() {
 
   bool canHide = action == PopoverTargetAction::Hide ||
                  action == PopoverTargetAction::Toggle;
+  bool shouldHide = canHide && target->IsPopoverOpen();
   bool canShow = action == PopoverTargetAction::Show ||
                  action == PopoverTargetAction::Toggle;
+  bool shouldShow = canShow && !target->IsPopoverOpen();
 
-  if (canHide && target->IsPopoverOpen()) {
+  if (shouldHide) {
     target->HidePopover(IgnoreErrors());
-  } else if (canShow && !target->IsPopoverOpen()) {
+  } else if (shouldShow) {
     target->ShowPopoverInternal(this, IgnoreErrors());
   }
+#ifdef ACCESSIBILITY
+  // Notify the accessibility service about the change.
+  if (shouldHide || shouldShow) {
+    if (RefPtr<Document> doc = GetComposedDoc()) {
+      if (PresShell* presShell = doc->GetPresShell()) {
+        if (nsAccessibilityService* accService = GetAccService()) {
+          accService->PopovertargetMaybeChanged(presShell, this);
+        }
+      }
+    }
+  }
+#endif
 }
 
 void nsGenericHTMLFormControlElementWithState::GetInvokeAction(

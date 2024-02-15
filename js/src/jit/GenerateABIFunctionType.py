@@ -1,5 +1,3 @@
-from collections import OrderedDict
-
 import buildconfig
 import six
 import yaml
@@ -40,20 +38,7 @@ def load_yaml(yaml_path):
     pp.do_filter("substitution")
     pp.do_include(yaml_path)
     contents = pp.out.getvalue()
-
-    # Load into an OrderedDict to ensure order is preserved. Note: Python 3.7+
-    # also preserves ordering for normal dictionaries.
-    # Code based on https://stackoverflow.com/a/21912744.
-    class OrderedLoader(yaml.Loader):
-        pass
-
-    def construct_mapping(loader, node):
-        loader.flatten_mapping(node)
-        return OrderedDict(loader.construct_pairs(node))
-
-    tag = yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG
-    OrderedLoader.add_constructor(tag, construct_mapping)
-    return yaml.load(contents, OrderedLoader)
+    return yaml.safe_load(contents)
 
 
 def cpp_arg_type(arg_type):
@@ -463,8 +448,8 @@ def main(c_out, yaml_path):
     contents = "#define ABI_FUNCTION_TYPE_ENUM \\\n"
     for func_type in func_types:
         name = "Args_" + func_type_name(func_type)
-        args = ", ".join(f"ArgType_{p}" for p in func_type["args"])
-        ret = f"ArgType_{func_type['ret']}"
+        args = ", ".join(f"ABIType::{p}" for p in func_type["args"])
+        ret = f"ABIType::{func_type['ret']}"
 
         contents += f"    {name} = detail::MakeABIFunctionType({ret}, {{{args}}}),\\\n"
     contents += "\n"

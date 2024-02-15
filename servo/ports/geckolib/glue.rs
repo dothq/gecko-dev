@@ -14,6 +14,7 @@ use selectors::matching::{ElementSelectorFlags, MatchingForInvalidation, Selecto
 use selectors::{Element, OpaqueElement};
 use servo_arc::{Arc, ArcBorrow};
 use smallvec::SmallVec;
+use style::custom_properties::DeferFontRelativeCustomPropertyResolution;
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::iter;
@@ -25,7 +26,6 @@ use style::computed_value_flags::ComputedValueFlags;
 use style::context::ThreadLocalStyleContext;
 use style::context::{CascadeInputs, QuirksMode, SharedStyleContext, StyleContext};
 use style::counter_style;
-use style::custom_properties::ComputedCustomProperties;
 use style::data::{self, ElementStyles};
 use style::dom::{ShowSubtreeData, TDocument, TElement, TNode};
 use style::driver;
@@ -110,12 +110,15 @@ use style::invalidation::element::restyle_hints::RestyleHint;
 use style::invalidation::stylesheets::RuleChangeKind;
 use style::media_queries::MediaList;
 use style::parser::{Parse, ParserContext};
-use style::properties::animated_properties::{AnimationValue, AnimationValueMap};
-use style::properties::{parse_one_declaration_into, parse_style_attribute};
-use style::properties::{ComputedValues, CountedUnknownProperty, Importance, NonCustomPropertyId};
-use style::properties::{LonghandId, LonghandIdSet, PropertyDeclarationBlock, PropertyId};
-use style::properties::{PropertyDeclarationId, ShorthandId};
-use style::properties::{SourcePropertyDeclaration, StyleBuilder};
+#[cfg(feature = "gecko_debug")]
+use style::properties::LonghandIdSet;
+use style::properties::{
+    animated_properties::{AnimationValue, AnimationValueMap},
+    parse_one_declaration_into, parse_style_attribute, ComputedValues, CountedUnknownProperty,
+    Importance, LonghandId, NonCustomPropertyId, OwnedPropertyDeclarationId,
+    PropertyDeclarationBlock, PropertyDeclarationId, PropertyDeclarationIdSet, PropertyId,
+    ShorthandId, SourcePropertyDeclaration, StyleBuilder,
+};
 use style::properties_and_values::registry::PropertyRegistration;
 use style::properties_and_values::rule::Inherits as PropertyInherits;
 use style::rule_cache::RuleCacheConditions;
@@ -619,7 +622,7 @@ pub extern "C" fn Servo_ComposeAnimationSegment(
 pub extern "C" fn Servo_AnimationCompose(
     value_map: &mut AnimationValueMap,
     base_values: &structs::RawServoAnimationValueTable,
-    css_property: nsCSSPropertyID,
+    css_property: &structs::AnimatedPropertyID,
     segment: &structs::AnimationPropertySegment,
     last_segment: &structs::AnimationPropertySegment,
     computed_timing: &structs::ComputedTiming,
@@ -629,8 +632,8 @@ pub extern "C" fn Servo_AnimationCompose(
     use style::gecko_bindings::bindings::Gecko_GetPositionInSegment;
     use style::gecko_bindings::bindings::Gecko_GetProgressFromComputedTiming;
 
-    let property = match LonghandId::from_nscsspropertyid(css_property) {
-        Some(longhand) if longhand.is_animatable() => longhand,
+    let property = match OwnedPropertyDeclarationId::from_gecko_animated_property_id(css_property) {
+        Some(property) if property.as_borrowed().is_animatable() => property,
         _ => return,
     };
 
@@ -695,10 +698,21 @@ macro_rules! get_property_id_from_nscsspropertyid {
     }};
 }
 
+macro_rules! get_property_id_from_animatedpropertyid {
+    ($property_id: ident, $ret: expr) => {{
+        match PropertyId::from_gecko_animated_property_id($property_id) {
+            Some(property_id) => property_id,
+            None => {
+                return $ret;
+            },
+        }
+    }};
+}
+
 #[no_mangle]
 pub extern "C" fn Servo_AnimationValue_Serialize(
     value: &AnimationValue,
-    property: nsCSSPropertyID,
+    property: &structs::AnimatedPropertyID,
     raw_data: &PerDocumentStyleData,
     buffer: &mut nsACString,
 ) {
@@ -706,10 +720,9 @@ pub extern "C" fn Servo_AnimationValue_Serialize(
     let data = raw_data.borrow();
     let rv = PropertyDeclarationBlock::with_one(uncomputed_value, Importance::Normal)
         .single_value_to_css(
-            &get_property_id_from_nscsspropertyid!(property, ()),
+            &get_property_id_from_animatedpropertyid!(property, ()),
             buffer,
             None,
-            None, /* No extra custom properties */
             &data.stylist,
         );
     debug_assert!(rv.is_ok());
@@ -1125,10 +1138,10 @@ pub unsafe extern "C" fn Servo_AnimationValueMap_Drop(value_map: *mut AnimationV
 #[no_mangle]
 pub extern "C" fn Servo_AnimationValueMap_GetValue(
     value_map: &AnimationValueMap,
-    property_id: nsCSSPropertyID,
+    property_id: &structs::AnimatedPropertyID,
 ) -> Strong<AnimationValue> {
-    let property = match LonghandId::from_nscsspropertyid(property_id) {
-        Some(longhand) => longhand,
+    let property = match OwnedPropertyDeclarationId::from_gecko_animated_property_id(property_id) {
+        Some(property) => property,
         None => return Strong::null(),
     };
     value_map
@@ -1194,17 +1207,21 @@ pub struct ShouldTransitionResult {
 pub extern "C" fn Servo_ComputedValues_ShouldTransition(
     old: &ComputedValues,
     new: &ComputedValues,
-    prop: nsCSSPropertyID,
+    prop: &structs::AnimatedPropertyID,
     old_transition_value: Option<&AnimationValue>,
     start: &mut structs::RefPtr<AnimationValue>,
     end: &mut structs::RefPtr<AnimationValue>,
 ) -> ShouldTransitionResult {
-    let Some(prop) = LonghandId::from_nscsspropertyid(prop) else {
+    let Some(prop) = OwnedPropertyDeclarationId::from_gecko_animated_property_id(prop) else {
         return Default::default();
     };
-    if prop.is_discrete_animatable() && prop != LonghandId::Visibility {
+    let prop = prop.as_borrowed();
+    if prop.is_discrete_animatable() &&
+        prop != PropertyDeclarationId::Longhand(LonghandId::Visibility)
+    {
         return Default::default();
     }
+
     let Some(new_value) = AnimationValue::from_computed_values(prop, new) else {
         return Default::default();
     };
@@ -1237,13 +1254,16 @@ pub extern "C" fn Servo_ComputedValues_ShouldTransition(
 #[no_mangle]
 pub extern "C" fn Servo_ComputedValues_TransitionValueMatches(
     style: &ComputedValues,
-    prop: nsCSSPropertyID,
+    prop: &structs::AnimatedPropertyID,
     transition_value: &AnimationValue,
 ) -> bool {
-    let Some(prop) = LonghandId::from_nscsspropertyid(prop) else {
+    let Some(prop) = OwnedPropertyDeclarationId::from_gecko_animated_property_id(prop) else {
         return false;
     };
-    if prop.is_discrete_animatable() && prop != LonghandId::Visibility {
+    let prop = prop.as_borrowed();
+    if prop.is_discrete_animatable() &&
+        prop != PropertyDeclarationId::Longhand(LonghandId::Visibility)
+    {
         return false;
     }
     let Some(value) = AnimationValue::from_computed_values(prop, style) else {
@@ -1255,13 +1275,13 @@ pub extern "C" fn Servo_ComputedValues_TransitionValueMatches(
 #[no_mangle]
 pub extern "C" fn Servo_ComputedValues_ExtractAnimationValue(
     computed_values: &ComputedValues,
-    property_id: nsCSSPropertyID,
+    property_id: &structs::AnimatedPropertyID,
 ) -> Strong<AnimationValue> {
-    let property = match LonghandId::from_nscsspropertyid(property_id) {
-        Some(longhand) => longhand,
+    let property = match OwnedPropertyDeclarationId::from_gecko_animated_property_id(property_id) {
+        Some(property) => property,
         None => return Strong::null(),
     };
-    match AnimationValue::from_computed_values(property, &computed_values) {
+    match AnimationValue::from_computed_values(property.as_borrowed(), &computed_values) {
         Some(v) => Arc::new(v).into(),
         None => Strong::null(),
     }
@@ -1399,13 +1419,13 @@ pub unsafe extern "C" fn Servo_Property_GetCSSValuesForProperty(
 }
 
 #[no_mangle]
-pub extern "C" fn Servo_Property_IsAnimatable(prop: nsCSSPropertyID) -> bool {
-    NonCustomPropertyId::from_nscsspropertyid(prop).map_or(false, |p| p.is_animatable())
+pub extern "C" fn Servo_Property_IsAnimatable(prop: &structs::AnimatedPropertyID) -> bool {
+    PropertyId::from_gecko_animated_property_id(prop).map_or(false, |p| p.is_animatable())
 }
 
 #[no_mangle]
-pub extern "C" fn Servo_Property_IsTransitionable(prop: nsCSSPropertyID) -> bool {
-    NonCustomPropertyId::from_nscsspropertyid(prop).map_or(false, |p| p.is_transitionable())
+pub extern "C" fn Servo_Property_IsTransitionable(prop: &structs::AnimatedPropertyID) -> bool {
+    PropertyId::from_gecko_animated_property_id(prop).map_or(false, |p| p.is_transitionable())
 }
 
 #[no_mangle]
@@ -4480,7 +4500,7 @@ fn parse_property_into(
 
 #[no_mangle]
 pub unsafe extern "C" fn Servo_ParseProperty(
-    property: nsCSSPropertyID,
+    property: &structs::AnimatedPropertyID,
     value: &nsACString,
     data: *mut URLExtraData,
     parsing_mode: ParsingMode,
@@ -4488,7 +4508,7 @@ pub unsafe extern "C" fn Servo_ParseProperty(
     loader: *mut Loader,
     rule_type: CssRuleType,
 ) -> Strong<LockedDeclarationBlock> {
-    let id = get_property_id_from_nscsspropertyid!(property, Strong::null());
+    let id = get_property_id_from_animatedpropertyid!(property, Strong::null());
     let mut declarations = SourcePropertyDeclaration::default();
     let reporter = ErrorReporter::new(ptr::null_mut(), loader, data);
     let data = UrlExtraData::from_ptr_ref(&data);
@@ -4698,23 +4718,20 @@ pub extern "C" fn Servo_DeclarationBlock_GetCssText(
 #[no_mangle]
 pub extern "C" fn Servo_DeclarationBlock_SerializeOneValue(
     decls: &LockedDeclarationBlock,
-    property_id: nsCSSPropertyID,
+    property_id: &structs::AnimatedPropertyID,
     buffer: &mut nsACString,
     computed_values: Option<&ComputedValues>,
-    custom_properties: Option<&LockedDeclarationBlock>,
     data: &PerDocumentStyleData,
 ) {
-    let property_id = get_property_id_from_nscsspropertyid!(property_id, ());
+    let property_id = get_property_id_from_animatedpropertyid!(property_id, ());
 
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let guard = global_style_data.shared_lock.read();
-    let custom_properties = custom_properties.map(|block| block.read_with(&guard));
     let data = data.borrow();
     let rv = decls.read_with(&guard).single_value_to_css(
         &property_id,
         buffer,
         computed_values,
-        custom_properties,
         &data.stylist,
     );
     debug_assert!(rv.is_ok());
@@ -4925,11 +4942,14 @@ pub unsafe extern "C" fn Servo_DeclarationBlock_SetPropertyToAnimationValue(
     animation_value: &AnimationValue,
     before_change_closure: DeclarationBlockMutationClosure,
 ) -> bool {
-    let non_custom_property_id = animation_value.id().into();
+    let non_custom_property_id = match animation_value.id() {
+        PropertyDeclarationId::Longhand(id) => Some(id.into()),
+        PropertyDeclarationId::Custom(_) => None,
+    };
     let mut source_declarations = SourcePropertyDeclaration::with_one(animation_value.uncompute());
 
     set_property_to_declarations(
-        Some(non_custom_property_id),
+        non_custom_property_id,
         declarations,
         &mut source_declarations,
         before_change_closure,
@@ -6050,8 +6070,8 @@ pub extern "C" fn Servo_ReparentStyle(
 
 #[cfg(feature = "gecko_debug")]
 fn simulate_compute_values_failure(property: &PropertyValuePair) -> bool {
-    let p = property.mProperty;
-    let id = get_property_id_from_nscsspropertyid!(p, false);
+    let p = &property.mProperty;
+    let id = get_property_id_from_animatedpropertyid!(p, false);
     id.as_shorthand().is_ok() && property.mSimulateComputeValuesFailure
 }
 
@@ -6104,7 +6124,7 @@ impl<'a> PrioritizedPropertyIter<'a> {
             .iter()
             .enumerate()
             .map(|(index, pair)| {
-                let property = PropertyId::from_nscsspropertyid(pair.mProperty)
+                let property = PropertyId::from_gecko_animated_property_id(&pair.mProperty)
                     .unwrap_or(PropertyId::NonCustom(ShorthandId::All.into()));
                 PropertyAndIndex { property, index }
             })
@@ -6116,6 +6136,10 @@ impl<'a> PrioritizedPropertyIter<'a> {
             sorted_property_indices,
             curr: 0,
         }
+    }
+
+    fn reset(&mut self) {
+        self.curr = 0;
     }
 }
 
@@ -6140,6 +6164,9 @@ pub extern "C" fn Servo_GetComputedKeyframeValues(
     raw_data: &PerDocumentStyleData,
     computed_keyframes: &mut nsTArray<structs::ComputedKeyframeValues>,
 ) {
+    use style::properties::PropertyDeclaration;
+    use style::custom_properties::CustomPropertiesBuilder;
+    use style::applicable_declarations::CascadePriority;
     let data = raw_data.borrow();
     let element = GeckoElement(element);
     let pseudo = PseudoElement::from_pseudo_type(pseudo_type, None);
@@ -6172,37 +6199,61 @@ pub extern "C" fn Servo_GetComputedKeyframeValues(
     let guard = global_style_data.shared_lock.read();
     let default_values = data.default_computed_values();
 
-    let mut raw_custom_properties_block; // To make the raw block alive in the scope.
     for (index, keyframe) in keyframes.iter().enumerate() {
-        let mut custom_properties = ComputedCustomProperties::default();
-        for property in keyframe.mPropertyValues.iter() {
-            // Find the block for custom properties first.
-            if property.mProperty == nsCSSPropertyID::eCSSPropertyExtra_variable {
-                raw_custom_properties_block = unsafe { &*property.mServoDeclarationBlock.mRawPtr };
-                let guard = raw_custom_properties_block.read_with(&guard);
-                custom_properties = guard.cascade_custom_properties(&data.stylist, &context);
-                // There should be one PropertyDeclarationBlock for custom properties.
-                break;
-            }
-        }
-
         let ref mut animation_values = computed_keyframes[index];
 
-        let mut seen = LonghandIdSet::new();
+        let mut seen = PropertyDeclarationIdSet::default();
+        let mut iter = PrioritizedPropertyIter::new(&keyframe.mPropertyValues);
+
+        // FIXME: This is pretty much a hack. Instead, the AnimatedValue should be better
+        // integrated in the cascade. This would allow us to fix revert() too.
+        {
+            let mut builder = CustomPropertiesBuilder::new_with_properties(
+                &data.stylist,
+                style.custom_properties().clone(),
+                &mut context,
+            );
+            let priority = CascadePriority::same_tree_author_normal_at_root_layer();
+            for property in &mut iter {
+                let is_custom = match PropertyId::from_gecko_animated_property_id(&property.mProperty) {
+                    Some(PropertyId::Custom(..)) => true,
+                    _ => false,
+                };
+                if !is_custom {
+                    break; // Custom props are guaranteed to sort earlier.
+                }
+                if property.mServoDeclarationBlock.mRawPtr.is_null() {
+                    continue;
+                }
+                let declarations = unsafe { &*property.mServoDeclarationBlock.mRawPtr };
+                let guard = declarations.read_with(&guard);
+                for decl in guard.normal_declaration_iter() {
+                    if let PropertyDeclaration::Custom(ref declaration) = *decl {
+                        builder.cascade(declaration, priority);
+                    }
+                }
+            }
+            iter.reset();
+            let _deferred= builder.build(DeferFontRelativeCustomPropertyResolution::No);
+            debug_assert!(
+                _deferred.is_none(),
+                "Custom property processing deferred despite specifying otherwise?"
+            );
+        };
 
         let mut property_index = 0;
-        for property in PrioritizedPropertyIter::new(&keyframe.mPropertyValues) {
+        for property in iter {
             if simulate_compute_values_failure(property) {
                 continue;
             }
 
             let mut maybe_append_animation_value =
-                |property: LonghandId, value: Option<AnimationValue>| {
+                |property: PropertyDeclarationId, value: Option<AnimationValue>| {
                     debug_assert!(!property.is_logical());
                     debug_assert!(property.is_animatable());
 
                     // 'display' is only animatable from SMIL
-                    if property == LonghandId::Display {
+                    if property == PropertyDeclarationId::Longhand(LonghandId::Display) {
                         return;
                     }
 
@@ -6222,7 +6273,7 @@ pub extern "C" fn Servo_GetComputedKeyframeValues(
                         ptr::write(
                             &mut animation_values[property_index],
                             structs::PropertyStyleAnimationValuePair {
-                                mProperty: property.to_nscsspropertyid(),
+                                mProperty: property.to_gecko_animated_property_id(/* owned = */ true),
                                 mValue: structs::AnimationValue {
                                     mServo: value.map_or(structs::RefPtr::null(), |v| {
                                         structs::RefPtr::from_arc(Arc::new(v))
@@ -6235,28 +6286,20 @@ pub extern "C" fn Servo_GetComputedKeyframeValues(
                 };
 
             if property.mServoDeclarationBlock.mRawPtr.is_null() {
-                let property = LonghandId::from_nscsspropertyid(property.mProperty);
-                if let Some(prop) = property {
-                    maybe_append_animation_value(prop, None);
+                if let Some(prop) =
+                    OwnedPropertyDeclarationId::from_gecko_animated_property_id(&property.mProperty)
+                {
+                    maybe_append_animation_value(prop.as_borrowed(), None);
                 }
                 continue;
             }
 
             let declarations = unsafe { &*property.mServoDeclarationBlock.mRawPtr };
             let guard = declarations.read_with(&guard);
-            let iter = guard.to_animation_value_iter(
-                &mut context,
-                &default_values,
-                if custom_properties.is_empty() {
-                    None
-                } else {
-                    Some(&custom_properties)
-                },
-            );
+            let iter = guard.to_animation_value_iter(&mut context, &default_values);
 
             for value in iter {
-                let id = value.id();
-                maybe_append_animation_value(id, Some(value));
+                maybe_append_animation_value(value.id(), Some(value.clone()));
             }
         }
     }
@@ -6299,14 +6342,16 @@ pub extern "C" fn Servo_GetAnimationValues(
     let iter = guard.to_animation_value_iter(
         &mut context,
         &default_values,
-        None, // SMIL has no extra custom properties.
     );
     animation_values.extend(iter.map(|v| structs::RefPtr::from_arc(Arc::new(v))));
 }
 
 #[no_mangle]
-pub extern "C" fn Servo_AnimationValue_GetPropertyId(value: &AnimationValue) -> nsCSSPropertyID {
-    value.id().to_nscsspropertyid()
+pub extern "C" fn Servo_AnimationValue_GetPropertyId(
+    value: &AnimationValue,
+    property_id: &mut structs::AnimatedPropertyID,
+) {
+    *property_id = value.id().to_gecko_animated_property_id(/* owned = */ true);
 }
 
 #[no_mangle]
@@ -6351,7 +6396,6 @@ pub extern "C" fn Servo_AnimationValue_Compute(
             let animation = AnimationValue::from_declaration(
                 decl,
                 &mut context,
-                None, // No extra custom properties for devtools.
                 default_values,
             );
             animation.map_or(Strong::null(), |value| Arc::new(value).into())
@@ -6399,14 +6443,14 @@ enum Offset {
 }
 
 fn fill_in_missing_keyframe_values(
-    all_properties: &LonghandIdSet,
+    all_properties: &PropertyDeclarationIdSet,
     timing_function: &ComputedTimingFunction,
-    longhands_at_offset: &LonghandIdSet,
+    properties_at_offset: &PropertyDeclarationIdSet,
     offset: Offset,
     keyframes: &mut nsTArray<structs::Keyframe>,
 ) {
     // Return early if all animated properties are already set.
-    if longhands_at_offset.contains_all(all_properties) {
+    if properties_at_offset.contains_all(all_properties) {
         return;
     }
 
@@ -6427,11 +6471,11 @@ fn fill_in_missing_keyframe_values(
 
     // Append properties that have not been set at this offset.
     for property in all_properties.iter() {
-        if !longhands_at_offset.contains(property) {
+        if !properties_at_offset.contains(property) {
             unsafe {
                 Gecko_AppendPropertyValuePair(
                     &mut *(*keyframe).mPropertyValues,
-                    property.to_nscsspropertyid(),
+                    &property.to_gecko_animated_property_id(/* owned = */ false),
                 );
             }
         }
@@ -6448,7 +6492,7 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
     keyframes: &mut nsTArray<structs::Keyframe>,
 ) -> bool {
     use style::gecko_bindings::structs::CompositeOperationOrAuto;
-    use style::properties::longhands::animation_composition::single_value::computed_value::T as Composition;
+    use style::values::computed::AnimationComposition;
 
     debug_assert!(keyframes.len() == 0, "keyframes should be initially empty");
 
@@ -6464,9 +6508,9 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
     let global_style_data = &*GLOBAL_STYLE_DATA;
     let guard = global_style_data.shared_lock.read();
 
-    let mut properties_set_at_current_offset = LonghandIdSet::new();
-    let mut properties_set_at_start = LonghandIdSet::new();
-    let mut properties_set_at_end = LonghandIdSet::new();
+    let mut properties_set_at_current_offset = PropertyDeclarationIdSet::default();
+    let mut properties_set_at_start = PropertyDeclarationIdSet::default();
+    let mut properties_set_at_end = PropertyDeclarationIdSet::default();
     let mut has_complete_initial_keyframe = false;
     let mut has_complete_final_keyframe = false;
     let mut current_offset = -1.;
@@ -6492,9 +6536,9 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
         let composition =
             step.get_animation_composition(&guard)
                 .map_or(CompositeOperationOrAuto::Auto, |val| match val {
-                    Composition::Replace => CompositeOperationOrAuto::Replace,
-                    Composition::Add => CompositeOperationOrAuto::Add,
-                    Composition::Accumulate => CompositeOperationOrAuto::Accumulate,
+                    AnimationComposition::Replace => CompositeOperationOrAuto::Replace,
+                    AnimationComposition::Add => CompositeOperationOrAuto::Add,
+                    AnimationComposition::Accumulate => CompositeOperationOrAuto::Accumulate,
                 });
 
         // Look for an existing keyframe with the same offset, timing function, and compsition, or
@@ -6513,7 +6557,7 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
                 // to represent that all properties animated by the keyframes
                 // animation should be set to the underlying computed value for
                 // that keyframe.
-                let mut seen = LonghandIdSet::new();
+                let mut seen = PropertyDeclarationIdSet::default();
                 for property in animation.properties_changed.iter() {
                     let property = property.to_physical(writing_mode);
                     if seen.contains(property) {
@@ -6523,7 +6567,7 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
 
                     Gecko_AppendPropertyValuePair(
                         &mut *(*keyframe).mPropertyValues,
-                        property.to_nscsspropertyid(),
+                        &property.to_gecko_animated_property_id(/* owned = */ false),
                     );
                 }
                 if current_offset == 0.0 {
@@ -6535,36 +6579,22 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
             KeyframesStepValue::Declarations { ref block } => {
                 let guard = block.read_with(&guard);
 
-                let mut custom_properties = PropertyDeclarationBlock::new();
-
                 // Filter out non-animatable properties and properties with
                 // !important.
                 //
                 // Also, iterate in reverse to respect the source order in case
                 // there are logical and physical longhands in the same block.
                 for declaration in guard.normal_declaration_iter().rev() {
-                    let id = declaration.id();
+                    let id = declaration.id().to_physical(writing_mode);
 
-                    let id = match id {
-                        PropertyDeclarationId::Longhand(id) => {
-                            // Skip the 'display' property because although it
-                            // is animatable from SMIL, it should not be
-                            // animatable from CSS Animations.
-                            if id == LonghandId::Display {
-                                continue;
-                            }
-
-                            if !id.is_animatable() {
-                                continue;
-                            }
-
-                            id.to_physical(writing_mode)
-                        },
-                        PropertyDeclarationId::Custom(..) => {
-                            custom_properties.push(declaration.clone(), Importance::Normal);
-                            continue;
-                        },
-                    };
+                    // Skip non-animatable properties, including the 'display' property because
+                    // although it is animatable from SMIL, it should not be animatable from CSS
+                    // Animations.
+                    if !id.is_animatable() ||
+                        id == PropertyDeclarationId::Longhand(LonghandId::Display)
+                    {
+                        continue;
+                    }
 
                     if properties_set_at_current_offset.contains(id) {
                         continue;
@@ -6572,7 +6602,7 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
 
                     let pair = Gecko_AppendPropertyValuePair(
                         &mut *(*keyframe).mPropertyValues,
-                        id.to_nscsspropertyid(),
+                        &id.to_gecko_animated_property_id(/* owned = */ false),
                     );
 
                     (*pair).mServoDeclarationBlock.set_arc(Arc::new(
@@ -6591,22 +6621,11 @@ pub unsafe extern "C" fn Servo_StyleSet_GetKeyframesForName(
                     }
                     properties_set_at_current_offset.insert(id);
                 }
-
-                if custom_properties.any_normal() {
-                    let pair = Gecko_AppendPropertyValuePair(
-                        &mut *(*keyframe).mPropertyValues,
-                        nsCSSPropertyID::eCSSPropertyExtra_variable,
-                    );
-
-                    (*pair).mServoDeclarationBlock.set_arc(Arc::new(
-                        global_style_data.shared_lock.wrap(custom_properties),
-                    ));
-                }
             },
         }
     }
 
-    let mut properties_changed = LonghandIdSet::new();
+    let mut properties_changed = PropertyDeclarationIdSet::default();
     for property in animation.properties_changed.iter() {
         properties_changed.insert(property.to_physical(writing_mode));
     }
@@ -6934,11 +6953,11 @@ fn add_relative_selector_attribute_dependency<'a>(
 }
 
 fn inherit_relative_selector_search_direction(
-    element: &GeckoElement,
+    parent: Option<GeckoElement>,
     prev_sibling: Option<GeckoElement>,
 ) -> ElementSelectorFlags {
     let mut inherited = ElementSelectorFlags::empty();
-    if let Some(parent) = element.parent_element() {
+    if let Some(parent) = parent {
         if let Some(direction) = parent.relative_selector_search_direction() {
             inherited |= direction
                 .intersection(ElementSelectorFlags::RELATIVE_SELECTOR_SEARCH_DIRECTION_ANCESTOR);
@@ -7257,7 +7276,7 @@ pub extern "C" fn Servo_StyleSet_MaybeInvalidateRelativeSelectorForInsertion(
     let quirks_mode: QuirksMode = data.stylist.quirks_mode();
 
     let inherited =
-        inherit_relative_selector_search_direction(&element, element.prev_sibling_element());
+        inherit_relative_selector_search_direction(element.parent_element(), element.prev_sibling_element());
     // Technically, we're not handling breakouts, where the anchor is a (later-sibling) descendant.
     // For descendant case, we're ok since it's a descendant of an element yet to be styled.
     // For later-sibling descendant, `HAS_SLOW_SELECTOR_LATER_SIBLINGS` is set anyway.
@@ -7335,19 +7354,25 @@ pub extern "C" fn Servo_StyleSet_MaybeInvalidateRelativeSelectorForInsertion(
 #[no_mangle]
 pub extern "C" fn Servo_StyleSet_MaybeInvalidateRelativeSelectorForAppend(
     raw_data: &PerDocumentStyleData,
-    first_element: &RawGeckoElement,
+    first_node: &RawGeckoNode,
 ) {
-    let first_element = GeckoElement(first_element);
-    let data = raw_data.borrow();
-    let quirks_mode: QuirksMode = data.stylist.quirks_mode();
-
+    let first_node = GeckoNode(first_node);
     let inherited = inherit_relative_selector_search_direction(
-        &first_element,
-        first_element.prev_sibling_element(),
+        first_node.parent_element(),
+        first_node.prev_sibling_element(),
     );
     if inherited.is_empty() {
         return;
     }
+    let first_element = if let Some(e) = first_node.as_element() {
+        e
+    } else if let Some(e) = first_node.next_sibling_element() {
+        e
+    } else {
+        return;
+    };
+    let data = raw_data.borrow();
+    let quirks_mode: QuirksMode = data.stylist.quirks_mode();
 
     let mut element = Some(first_element);
     while let Some(e) = element {
@@ -7404,7 +7429,7 @@ pub extern "C" fn Servo_StyleSet_MaybeInvalidateRelativeSelectorForRemoval(
     let data = raw_data.borrow();
     let quirks_mode: QuirksMode = data.stylist.quirks_mode();
 
-    let inherited = inherit_relative_selector_search_direction(&element, prev_sibling);
+    let inherited = inherit_relative_selector_search_direction(element.parent_element(), prev_sibling);
     if inherited.is_empty() {
         return;
     }
@@ -7559,17 +7584,9 @@ pub unsafe extern "C" fn Servo_GetCustomPropertyValue(
     let stylist = &doc_data.stylist;
     let custom_registration = stylist.get_custom_property_registration(&name);
     let computed_value = if custom_registration.map_or(true, |r| r.inherits()) {
-        computed_values
-            .custom_properties
-            .inherited
-            .as_ref()
-            .and_then(|m| m.get(&name))
+        computed_values.custom_properties.inherited.get(&name)
     } else {
-        computed_values
-            .custom_properties
-            .non_inherited
-            .as_ref()
-            .and_then(|m| m.get(&name))
+        computed_values.custom_properties.non_inherited.get(&name)
     };
 
     if let Some(v) = computed_value {
@@ -7585,8 +7602,7 @@ pub extern "C" fn Servo_GetCustomPropertiesCount(computed_values: &ComputedValue
     // Just expose the custom property items from custom_properties.inherited
     // and custom_properties.non_inherited.
     let properties = computed_values.custom_properties();
-    (properties.inherited.as_ref().map_or(0, |m| m.len()) +
-        properties.non_inherited.as_ref().map_or(0, |m| m.len())) as u32
+    properties.inherited.len() as u32 + properties.non_inherited.len() as u32
 }
 
 #[no_mangle]
@@ -8770,7 +8786,7 @@ pub extern "C" fn Servo_RegisterCustomProperty(
             let parsed = Parser::new(&mut input)
                 .parse_entirely(|input| {
                     input.skip_whitespace();
-                    SpecifiedValue::parse(input, url_data)
+                    SpecifiedValue::parse(input, url_data).map(Arc::new)
                 })
                 .ok();
             if parsed.is_none() {
@@ -8782,7 +8798,7 @@ pub extern "C" fn Servo_RegisterCustomProperty(
     };
 
     if let Err(error) =
-        PropertyRegistration::validate_initial_value(&syntax, initial_value.as_ref())
+        PropertyRegistration::validate_initial_value(&syntax, initial_value.as_deref())
     {
         return match error {
             PropertyRegistrationError::InitialValueNotComputationallyIndependent => {

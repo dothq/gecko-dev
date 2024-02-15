@@ -441,6 +441,7 @@ impl<A: HalApi> State<A> {
             //let (expected, provided) = self.binder.entries[index as usize].info();
             return Err(DrawError::IncompatibleBindGroup {
                 index: bind_mask.trailing_zeros(),
+                diff: self.binder.bgl_diff(),
             });
         }
         if self.pipeline.is_none() {
@@ -575,6 +576,8 @@ pub enum RenderPassErrorInner {
     SurfaceTextureDropped,
     #[error("Not enough memory left for render pass")]
     OutOfMemory,
+    #[error("The bind group at index {0:?} is invalid")]
+    InvalidBindGroup(usize),
     #[error("Unable to clear non-present/read-only depth")]
     InvalidDepthOps,
     #[error("Unable to clear non-present/read-only stencil")]
@@ -642,6 +645,11 @@ impl PrettyError for RenderPassErrorInner {
         fmt.error(self);
         if let Self::InvalidAttachment(id) = *self {
             fmt.texture_view_label_with_key(&id, "attachment");
+        };
+        if let Self::Draw(DrawError::IncompatibleBindGroup { diff, .. }) = self {
+            for d in diff {
+                fmt.note(&d);
+            }
         };
     }
 }
@@ -1304,12 +1312,15 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             .contains(wgt::InstanceFlags::DISCARD_HAL_LABELS);
         let label = hal_label(base.label, self.instance.flags);
 
-        let init_scope = PassErrorScope::Pass(encoder_id);
+        let pass_scope = PassErrorScope::Pass(encoder_id);
 
         let hub = A::hub(self);
 
+        let cmd_buf = CommandBuffer::get_encoder(hub, encoder_id).map_pass_err(pass_scope)?;
+        let device = &cmd_buf.device;
+        let snatch_guard = device.snatchable_lock.read();
+
         let (scope, pending_discard_init_fixups) = {
-            let cmd_buf = CommandBuffer::get_encoder(hub, encoder_id).map_pass_err(init_scope)?;
             let mut cmd_buf_data = cmd_buf.data.lock();
             let cmd_buf_data = cmd_buf_data.as_mut().unwrap();
 
@@ -1324,9 +1335,8 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 });
             }
 
-            let device = &cmd_buf.device;
             if !device.is_valid() {
-                return Err(DeviceError::Lost).map_pass_err(init_scope);
+                return Err(DeviceError::Lost).map_pass_err(pass_scope);
             }
 
             let encoder = &mut cmd_buf_data.encoder;
@@ -1339,10 +1349,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
             // We automatically keep extending command buffers over time, and because
             // we want to insert a command buffer _before_ what we're about to record,
             // we need to make sure to close the previous one.
-            encoder.close();
+            encoder.close().map_pass_err(pass_scope)?;
             // We will reset this to `Recording` if we succeed, acts as a fail-safe.
             *status = CommandEncoderStatus::Error;
-            encoder.open_pass(label);
+            encoder.open_pass(label).map_pass_err(pass_scope)?;
 
             let bundle_guard = hub.render_bundles.read();
             let bind_group_guard = hub.bind_groups.read();
@@ -1373,7 +1383,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 &*texture_guard,
                 &*query_set_guard,
             )
-            .map_pass_err(init_scope)?;
+            .map_pass_err(pass_scope)?;
 
             tracker.set_size(
                 Some(&*buffer_guard),
@@ -1454,19 +1464,15 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                         // is held to the bind group itself.
 
                         buffer_memory_init_actions.extend(
-                            bind_group
-                                .used_buffer_ranges
-                                .read()
-                                .iter()
-                                .filter_map(|action| {
-                                    action
-                                        .buffer
-                                        .initialization_status
-                                        .read()
-                                        .check_action(action)
-                                }),
+                            bind_group.used_buffer_ranges.iter().filter_map(|action| {
+                                action
+                                    .buffer
+                                    .initialization_status
+                                    .read()
+                                    .check_action(action)
+                            }),
                         );
-                        for action in bind_group.used_texture_ranges.read().iter() {
+                        for action in bind_group.used_texture_ranges.iter() {
                             info.pending_discard_init_fixups
                                 .extend(texture_memory_actions.register_init_action(action));
                         }
@@ -1480,7 +1486,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             let pipeline_layout = pipeline_layout.as_ref().unwrap().raw();
                             for (i, e) in entries.iter().enumerate() {
                                 if let Some(group) = e.group.as_ref() {
-                                    let raw_bg = group.raw();
+                                    let raw_bg = group
+                                        .raw(&snatch_guard)
+                                        .ok_or(RenderPassErrorInner::InvalidBindGroup(i))
+                                        .map_pass_err(scope)?;
                                     unsafe {
                                         raw.set_bind_group(
                                             pipeline_layout,
@@ -1558,7 +1567,10 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             if !entries.is_empty() {
                                 for (i, e) in entries.iter().enumerate() {
                                     if let Some(group) = e.group.as_ref() {
-                                        let raw_bg = group.raw();
+                                        let raw_bg = group
+                                            .raw(&snatch_guard)
+                                            .ok_or(RenderPassErrorInner::InvalidBindGroup(i))
+                                            .map_pass_err(scope)?;
                                         unsafe {
                                             raw.set_bind_group(
                                                 pipeline.layout.raw(),
@@ -1639,7 +1651,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .map_pass_err(scope)?;
                         let buf_raw = buffer
                             .raw
-                            .as_ref()
+                            .get(&snatch_guard)
                             .ok_or(RenderCommandError::DestroyedBuffer(buffer_id))
                             .map_pass_err(scope)?;
 
@@ -1701,7 +1713,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .map_pass_err(scope)?;
                         let buf_raw = buffer
                             .raw
-                            .as_ref()
+                            .get(&snatch_guard)
                             .ok_or(RenderCommandError::DestroyedBuffer(buffer_id))
                             .map_pass_err(scope)?;
 
@@ -1991,7 +2003,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .map_pass_err(scope)?;
                         let indirect_raw = indirect_buffer
                             .raw
-                            .as_ref()
+                            .get(&snatch_guard)
                             .ok_or(RenderCommandError::DestroyedBuffer(buffer_id))
                             .map_pass_err(scope)?;
 
@@ -2063,7 +2075,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .map_pass_err(scope)?;
                         let indirect_raw = indirect_buffer
                             .raw
-                            .as_ref()
+                            .get(&snatch_guard)
                             .ok_or(RenderCommandError::DestroyedBuffer(buffer_id))
                             .map_pass_err(scope)?;
 
@@ -2080,7 +2092,7 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                             .map_pass_err(scope)?;
                         let count_raw = count_buffer
                             .raw
-                            .as_ref()
+                            .get(&snatch_guard)
                             .ok_or(RenderCommandError::DestroyedBuffer(count_buffer_id))
                             .map_pass_err(scope)?;
 
@@ -2328,6 +2340,9 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                                 ExecutionError::DestroyedBuffer(id) => {
                                     RenderCommandError::DestroyedBuffer(id)
                                 }
+                                ExecutionError::InvalidBindGroup(id) => {
+                                    RenderCommandError::InvalidBindGroup(id)
+                                }
                                 ExecutionError::Unimplemented(what) => {
                                     RenderCommandError::Unimplemented(what)
                                 }
@@ -2349,24 +2364,24 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
 
             log::trace!("Merging renderpass into cmd_buf {:?}", encoder_id);
             let (trackers, pending_discard_init_fixups) =
-                info.finish(raw).map_pass_err(init_scope)?;
+                info.finish(raw).map_pass_err(pass_scope)?;
 
-            encoder.close();
+            encoder.close().map_pass_err(pass_scope)?;
             (trackers, pending_discard_init_fixups)
         };
-
-        let query_set_guard = hub.query_sets.read();
 
         let cmd_buf = hub.command_buffers.get(encoder_id).unwrap();
         let mut cmd_buf_data = cmd_buf.data.lock();
         let cmd_buf_data = cmd_buf_data.as_mut().unwrap();
+
+        let query_set_guard = hub.query_sets.read();
 
         let encoder = &mut cmd_buf_data.encoder;
         let status = &mut cmd_buf_data.status;
         let tracker = &mut cmd_buf_data.trackers;
 
         {
-            let transit = encoder.open();
+            let transit = encoder.open().map_pass_err(pass_scope)?;
 
             fixup_discarded_surfaces(
                 pending_discard_init_fixups.into_iter(),
@@ -2385,11 +2400,16 @@ impl<G: GlobalIdentityHandlerFactory> Global<G> {
                 .map_err(RenderCommandError::InvalidQuerySet)
                 .map_pass_err(PassErrorScope::QueryReset)?;
 
-            super::CommandBuffer::insert_barriers_from_scope(transit, tracker, &scope);
+            super::CommandBuffer::insert_barriers_from_scope(
+                transit,
+                tracker,
+                &scope,
+                &snatch_guard,
+            );
         }
 
         *status = CommandEncoderStatus::Recording;
-        encoder.close_and_swap();
+        encoder.close_and_swap().map_pass_err(pass_scope)?;
 
         Ok(())
     }

@@ -641,7 +641,7 @@ public class GeckoSession {
             case 0: // OPEN_DEFAULTWINDOW
             case 1: // OPEN_CURRENTWINDOW
               return NavigationDelegate.TARGET_WINDOW_CURRENT;
-            default: // OPEN_NEWWINDOW, OPEN_NEWTAB
+            default: // OPEN_NEWWINDOW, OPEN_NEWTAB, OPEN_NEWTAB_BACKGROUND
               return NavigationDelegate.TARGET_WINDOW_NEW;
           }
         }
@@ -3023,19 +3023,6 @@ public class GeckoSession {
    * @return a {@link GeckoResult} result of status of analysis.
    */
   @AnyThread
-  public @NonNull GeckoResult<String> requestAnalysisCreationStatus(@NonNull final String url) {
-    final GeckoBundle bundle = new GeckoBundle(1);
-    bundle.putString("url", url);
-    return mEventDispatcher.queryString("GeckoView:RequestAnalysisCreationStatus", bundle);
-  }
-
-  /**
-   * Request the status of the current analysis of product's reviews for a given product URL.
-   *
-   * @param url The URL of the product page.
-   * @return a {@link GeckoResult} result of status of analysis.
-   */
-  @AnyThread
   public @NonNull GeckoResult<AnalysisStatusResponse> requestAnalysisStatus(
       @NonNull final String url) {
     final GeckoBundle bundle = new GeckoBundle(1);
@@ -3082,6 +3069,19 @@ public class GeckoSession {
     final GeckoBundle bundle = new GeckoBundle(1);
     bundle.putString("aid", aid);
     return mEventDispatcher.queryBoolean("GeckoView:SendImpressionAttributionEvent", bundle);
+  }
+
+  /**
+   * Send a placement event to the Ad Attribution API.
+   *
+   * @param aid Ad id of the recommended product.
+   * @return a {@link GeckoResult} result of whether or not sending the event was successful.
+   */
+  @AnyThread
+  public @NonNull GeckoResult<Boolean> sendPlacementAttributionEvent(@NonNull final String aid) {
+    final GeckoBundle bundle = new GeckoBundle(1);
+    bundle.putString("aid", aid);
+    return mEventDispatcher.queryBoolean("GeckoView:SendPlacementAttributionEvent", bundle);
   }
 
   /**
@@ -4993,7 +4993,7 @@ public class GeckoSession {
           case 0: // OPEN_DEFAULTWINDOW
           case 1: // OPEN_CURRENTWINDOW
             return TARGET_WINDOW_CURRENT;
-          default: // OPEN_NEWWINDOW, OPEN_NEWTAB
+          default: // OPEN_NEWWINDOW, OPEN_NEWTAB, OPEN_NEWTAB_BACKGROUND
             return TARGET_WINDOW_NEW;
         }
       }

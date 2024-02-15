@@ -49,6 +49,10 @@ skip-if = [
 
 ["browser_UrlbarInput_searchTerms_searchMode.js"]
 
+["browser_UrlbarInput_searchTerms_strings.js"]
+
+["browser_UrlbarInput_searchTerms_stringsUnsafe.js"]
+
 ["browser_UrlbarInput_searchTerms_switch_tab.js"]
 
 ["browser_UrlbarInput_searchTerms_telemetry.js"]
@@ -211,6 +215,8 @@ support-files = [
   "dynamicResult1.css",
 ]
 
+["browser_editAndEnterWithSlowQuery.js"]
+
 ["browser_edit_invalid_url.js"]
 
 ["browser_engagement.js"]
@@ -226,7 +232,6 @@ support-files = [
   "searchSuggestionEngine.xml",
   "searchSuggestionEngine.sjs",
 ]
-fail-if = ["a11y_checks"] # Bug 1854660 clicked moz-input-box may not be labeled
 
 ["browser_handleCommand_fallback.js"]
 
@@ -281,9 +286,6 @@ support-files = [
 
 ["browser_locationBarCommand.js"]
 https_first_disabled = true
-skip-if = [
-  "os == 'linux' && bits == 64 && !debug", # Bug 1787020
-]
 
 ["browser_locationBarExternalLoad.js"]
 
@@ -428,7 +430,6 @@ support-files = [
 ]
 
 ["browser_searchMode_indicator_clickthrough.js"]
-fail-if = ["a11y_checks"] # Bug 1854660 clicked "urlbar-input-container" may not be focusable
 
 ["browser_searchMode_localOneOffs_actionText.js"]
 support-files = [
@@ -678,7 +679,9 @@ support-files = [
 ]
 
 ["browser_view_selectionByMouse.js"]
-skip-if = ["os == 'linux' && asan"] # Bug 1789051
+skip-if = [
+  "os == 'linux' && asan", # Bug 1789051
+]
 
 ["browser_waitForLoadStartOrTimeout.js"]
 https_first_disabled = true

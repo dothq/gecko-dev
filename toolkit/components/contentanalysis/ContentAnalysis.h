@@ -29,10 +29,12 @@ class ContentAnalysisRequest final : public nsIContentAnalysisRequest {
   NS_DECL_ISUPPORTS
   NS_DECL_NSICONTENTANALYSISREQUEST
 
-  ContentAnalysisRequest(AnalysisType aAnalysisType, nsString&& aString,
-                         bool aStringIsFilePath, nsCString&& aSha256Digest,
-                         nsString&& aUrl, OperationType aOperationType,
+  ContentAnalysisRequest(AnalysisType aAnalysisType, nsString aString,
+                         bool aStringIsFilePath, nsCString aSha256Digest,
+                         nsString aUrl, OperationType aOperationType,
                          dom::WindowGlobalParent* aWindowGlobalParent);
+  static nsresult GetFileDigest(const nsAString& aFilePath,
+                                nsCString& aDigestString);
 
  private:
   ~ContentAnalysisRequest() = default;
@@ -138,6 +140,16 @@ class ContentAnalysis final : public nsIContentAnalysis {
     bool mAutoAcknowledge;
   };
   DataMutex<nsTHashMap<nsCString, CallbackData>> mCallbackMap;
+
+  struct WarnResponseData {
+    WarnResponseData(CallbackData&& aCallbackData,
+                     RefPtr<ContentAnalysisResponse> aResponse)
+        : mCallbackData(std::move(aCallbackData)), mResponse(aResponse) {}
+    ContentAnalysis::CallbackData mCallbackData;
+    RefPtr<ContentAnalysisResponse> mResponse;
+  };
+  DataMutex<nsTHashMap<nsCString, WarnResponseData>> mWarnResponseDataMap;
+
   friend class ContentAnalysisResponse;
 };
 
@@ -163,6 +175,8 @@ class ContentAnalysisResponse final : public nsIContentAnalysisResponse {
   ContentAnalysisResponse(Action aAction, const nsACString& aRequestToken);
   static already_AddRefed<ContentAnalysisResponse> FromProtobuf(
       content_analysis::sdk::ContentAnalysisResponse&& aResponse);
+
+  void ResolveWarnAction(bool aAllowContent);
 
   // Action requested by the agent
   Action mAction;

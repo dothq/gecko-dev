@@ -75,6 +75,7 @@
 #  include "mozilla/WindowsVersion.h"
 #  include "mozilla/gfx/DeviceManagerDx.h"
 #  include "mozilla/layers/GpuProcessD3D11TextureMap.h"
+#  include "mozilla/layers/GpuProcessD3D11QueryMap.h"
 #  include "mozilla/layers/TextureD3D11.h"
 #  include "mozilla/widget/WinCompositorWindowThread.h"
 #  include "MediaCodecsSupport.h"
@@ -257,6 +258,7 @@ bool GPUParent::Init(mozilla::ipc::UntypedEndpoint&& aEndpoint,
   gfxWindowsPlatform::InitMemoryReportersForGPUProcess();
   DeviceManagerDx::Init();
   GpuProcessD3D11TextureMap::Init();
+  GpuProcessD3D11QueryMap::Init();
 #endif
 
   CompositorThreadHolder::Start();
@@ -360,14 +362,15 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
   // here that would normally be initialized there.
   SkGraphics::Init();
 
-  if (gfxVars::RemoteCanvasEnabled()) {
+  bool useRemoteCanvas =
+      gfxVars::RemoteCanvasEnabled() || gfxVars::UseAcceleratedCanvas2D();
+  if (useRemoteCanvas) {
     gfxGradientCache::Init();
   }
 
 #if defined(XP_WIN)
   if (gfxConfig::IsEnabled(Feature::D3D11_COMPOSITING)) {
-    if (DeviceManagerDx::Get()->CreateCompositorDevices() &&
-        gfxVars::RemoteCanvasEnabled()) {
+    if (DeviceManagerDx::Get()->CreateCompositorDevices() && useRemoteCanvas) {
       if (DeviceManagerDx::Get()->CreateCanvasDevice()) {
         gfxDWriteFont::InitDWriteSupport();
       } else {
@@ -812,6 +815,7 @@ void GPUParent::ActorDestroy(ActorDestroyReason aWhy) {
 #endif
 
 #if defined(XP_WIN)
+        GpuProcessD3D11QueryMap::Shutdown();
         GpuProcessD3D11TextureMap::Shutdown();
         DeviceManagerDx::Shutdown();
 #endif
