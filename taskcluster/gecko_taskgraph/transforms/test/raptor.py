@@ -136,7 +136,7 @@ def split_raptor_subtests(config, tests):
         # test job for every subtest (i.e. split out each page-load URL into its own job)
         subtests = test["raptor"].pop("subtests", None)
         if not subtests:
-            if "macosx1300" not in test["test-platform"]:
+            if "macosx1400" not in test["test-platform"]:
                 yield test
             continue
 
@@ -277,6 +277,8 @@ def add_extra_options(config, tests):
             extra_options.append("--device-name=p5_aarch64")
         elif test_platform.startswith("android-hw-p6"):
             extra_options.append("--device-name=p6_aarch64")
+        elif test_platform.startswith("android-hw-s21"):
+            extra_options.append("--device-name=s21_aarch64")
 
         if test["raptor"].pop("run-visual-metrics", False):
             extra_options.append("--browsertime-video")

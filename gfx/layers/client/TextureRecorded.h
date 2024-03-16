@@ -49,7 +49,8 @@ class RecordedTextureData final : public TextureData {
 
   bool RequiresRefresh() const final;
 
-  void UseCompositableForwarder(CompositableForwarder* aForwarder) final;
+  already_AddRefed<FwdTransactionTracker> UseCompositableForwarder(
+      CompositableForwarder* aForwarder) final;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(RecordedTextureData);
@@ -60,14 +61,13 @@ class RecordedTextureData final : public TextureData {
   RefPtr<CanvasChild> mCanvasChild;
   gfx::IntSize mSize;
   gfx::SurfaceFormat mFormat;
-  RefPtr<gfx::DrawTarget> mDT;
+  RefPtr<gfx::DrawTargetRecording> mDT;
   RefPtr<gfx::SourceSurface> mSnapshot;
-  ThreadSafeWeakPtr<gfx::SourceSurface> mSnapshotWrapper;
+  RefPtr<gfx::SourceSurface> mSnapshotWrapper;
   OpenMode mLockedMode;
   RemoteTextureId mLastRemoteTextureId;
   RemoteTextureOwnerId mRemoteTextureOwnerId;
-  RemoteTextureTxnType mLastTxnType = 0;
-  RemoteTextureTxnId mLastTxnId = 0;
+  RefPtr<layers::FwdTransactionTracker> mFwdTransactionTracker;
   bool mUsedRemoteTexture = false;
   bool mInvalidContents = true;
 };

@@ -172,7 +172,6 @@ nsXULElement* nsXULElement::Construct(
   }
 
   if (nodeInfo->Equals(nsGkAtoms::menupopup) ||
-      nodeInfo->Equals(nsGkAtoms::popup) ||
       nodeInfo->Equals(nsGkAtoms::panel)) {
     return NS_NewXULPopupElement(nodeInfo.forget());
   }
@@ -1281,6 +1280,12 @@ nsresult nsXULPrototypeElement::Deserialize(
   if (NS_WARN_IF(NS_FAILED(rv))) return rv;
   mNodeInfo = aNodeInfos->SafeElementAt(number, nullptr);
   if (!mNodeInfo) {
+    return NS_ERROR_UNEXPECTED;
+  }
+
+  if (mNodeInfo->Equals(nsGkAtoms::parsererror) &&
+      mNodeInfo->NamespaceEquals(
+          nsDependentAtomString(nsGkAtoms::nsuri_parsererror))) {
     return NS_ERROR_UNEXPECTED;
   }
 

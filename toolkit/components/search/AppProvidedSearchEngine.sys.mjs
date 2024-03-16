@@ -27,12 +27,20 @@ export class AppProvidedSearchEngine extends SearchEngine {
   ]);
 
   /**
-   * @param {object} config
+   * @param {object} options
+   *   The options for this search engine.
+   * @param {object} options.config
    *   The engine config from Remote Settings.
+   * @param {object} [options.settings]
+   *   The saved settings for the user.
    */
-  constructor(config) {
-    let extensionId = config.identifier;
-    let id = config.identifier;
+  constructor({ config, settings }) {
+    // TODO Bug 1875912 - Remove the webextension.id and webextension.locale when
+    // we're ready to remove old search-config and use search-config-v2 for all
+    // clients. The id in appProvidedSearchEngine should be changed to
+    // engine.identifier.
+    let extensionId = config.webExtension.id;
+    let id = config.webExtension.id + config.webExtension.locale;
 
     super({
       loadPath: "[app]" + extensionId,
@@ -41,9 +49,11 @@ export class AppProvidedSearchEngine extends SearchEngine {
     });
 
     this._extensionID = extensionId;
-    this._locale = "default";
+    this._locale = config.webExtension.locale;
 
     this.#init(config);
+
+    this._loadSettings(settings);
   }
 
   /**
@@ -61,7 +71,7 @@ export class AppProvidedSearchEngine extends SearchEngine {
   update({ locale, configuration } = {}) {
     this._urls = [];
     this._iconMapObj = null;
-    this.#init(locale, configuration);
+    this.#init(configuration);
     lazy.SearchUtils.notifyAction(this, lazy.SearchUtils.MODIFIED_TYPE.CHANGED);
   }
 
@@ -263,7 +273,8 @@ export class AppProvidedSearchEngine extends SearchEngine {
 
     if (
       !("searchTermParamName" in urlData) &&
-      !urlData.base.includes("{searchTerms}")
+      !urlData.base.includes("{searchTerms}") &&
+      !urlType.includes("trending")
     ) {
       throw new Error("Search terms missing from engine URL.");
     }

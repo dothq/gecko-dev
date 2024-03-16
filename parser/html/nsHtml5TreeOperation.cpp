@@ -393,6 +393,8 @@ nsresult nsHtml5TreeOperation::FosterParent(nsIContent* aNode,
 nsresult nsHtml5TreeOperation::AddAttributes(nsIContent* aNode,
                                              nsHtml5HtmlAttributes* aAttributes,
                                              nsHtml5DocumentBuilder* aBuilder) {
+  MOZ_ASSERT(aNode->IsAnyOfHTMLElements(nsGkAtoms::body, nsGkAtoms::html));
+
   Element* node = aNode->AsElement();
   nsHtml5OtherDocUpdate update(node->OwnerDoc(), aBuilder->GetDocument());
 
@@ -401,7 +403,8 @@ nsresult nsHtml5TreeOperation::AddAttributes(nsIContent* aNode,
     --i;
     nsAtom* localName = aAttributes->getLocalNameNoBoundsCheck(i);
     int32_t nsuri = aAttributes->getURINoBoundsCheck(i);
-    if (!node->HasAttr(nsuri, localName)) {
+    if (!node->HasAttr(nsuri, localName) &&
+        !(nsuri == kNameSpaceID_None && localName == nsGkAtoms::nonce)) {
       nsString value;  // Not Auto, because using it to hold nsStringBuffer*
       aAttributes->getValueNoBoundsCheck(i).ToString(value);
       node->SetAttr(nsuri, localName, aAttributes->getPrefixNoBoundsCheck(i),
@@ -416,6 +419,9 @@ void nsHtml5TreeOperation::SetHTMLElementAttributes(
     Element* aElement, nsAtom* aName, nsHtml5HtmlAttributes* aAttributes) {
   int32_t len = aAttributes->getLength();
   aElement->TryReserveAttributeCount((uint32_t)len);
+  if (aAttributes->getDuplicateAttributeError()) {
+    aElement->SetParserHadDuplicateAttributeError();
+  }
   for (int32_t i = 0; i < len; i++) {
     nsHtml5String val = aAttributes->getValueNoBoundsCheck(i);
     nsAtom* klass = val.MaybeAsAtom();
@@ -541,6 +547,10 @@ nsIContent* nsHtml5TreeOperation::CreateSVGElement(
     return newContent;
   }
 
+  if (aAttributes->getDuplicateAttributeError()) {
+    newContent->SetParserHadDuplicateAttributeError();
+  }
+
   int32_t len = aAttributes->getLength();
   for (int32_t i = 0; i < len; i++) {
     nsHtml5String val = aAttributes->getValueNoBoundsCheck(i);
@@ -587,6 +597,10 @@ nsIContent* nsHtml5TreeOperation::CreateMathMLElement(
 
   if (!aAttributes) {
     return newContent;
+  }
+
+  if (aAttributes->getDuplicateAttributeError()) {
+    newContent->SetParserHadDuplicateAttributeError();
   }
 
   int32_t len = aAttributes->getLength();
@@ -929,6 +943,10 @@ nsresult nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       *aOperation.mFragHandle =
           static_cast<HTMLTemplateElement*>(*aOperation.mTemplateNode)
               ->Content();
+      nsContentUtils::LogSimpleConsoleError(
+          u"Failed to attach Declarative Shadow DOM."_ns, "DOM"_ns,
+          mBuilder->GetDocument()->IsInPrivateBrowsing(),
+          mBuilder->GetDocument()->IsInChromeDocShell());
       return NS_OK;
     }
 

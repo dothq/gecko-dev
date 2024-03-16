@@ -713,6 +713,10 @@ AliasSet MThrow::getAliasSet() const {
   return AliasSet::Store(AliasSet::ExceptionState);
 }
 
+AliasSet MThrowWithStack::getAliasSet() const {
+  return AliasSet::Store(AliasSet::ExceptionState);
+}
+
 AliasSet MNewArrayDynamicLength::getAliasSet() const {
   return AliasSet::Store(AliasSet::ExceptionState);
 }
@@ -1907,6 +1911,73 @@ MDefinition* MCharCodeAt::foldsTo(TempAllocator& alloc) {
 
   char16_t ch = str->latin1OrTwoByteChar(idx);
   return MConstant::New(alloc, Int32Value(ch));
+}
+
+MDefinition* MCodePointAt::foldsTo(TempAllocator& alloc) {
+  MDefinition* string = this->string();
+  if (!string->isConstant() && !string->isFromCharCode()) {
+    return this;
+  }
+
+  MDefinition* index = this->index();
+  if (index->isSpectreMaskIndex()) {
+    index = index->toSpectreMaskIndex()->index();
+  }
+  if (!index->isConstant()) {
+    return this;
+  }
+  int32_t idx = index->toConstant()->toInt32();
+
+  // Handle the pattern |s[idx].codePointAt(0)|.
+  if (string->isFromCharCode()) {
+    if (idx != 0) {
+      return this;
+    }
+
+    // Simplify |CodePointAt(FromCharCode(CharCodeAt(s, idx)), 0)| to just
+    // |CharCodeAt(s, idx)|.
+    auto* charCode = string->toFromCharCode()->code();
+    if (!charCode->isCharCodeAt()) {
+      return this;
+    }
+
+    return charCode;
+  }
+
+  JSLinearString* str = &string->toConstant()->toString()->asLinear();
+  if (idx < 0 || uint32_t(idx) >= str->length()) {
+    return this;
+  }
+
+  char32_t first = str->latin1OrTwoByteChar(idx);
+  if (unicode::IsLeadSurrogate(first) && uint32_t(idx) + 1 < str->length()) {
+    char32_t second = str->latin1OrTwoByteChar(idx + 1);
+    if (unicode::IsTrailSurrogate(second)) {
+      first = unicode::UTF16Decode(first, second);
+    }
+  }
+  return MConstant::New(alloc, Int32Value(first));
+}
+
+MDefinition* MToRelativeStringIndex::foldsTo(TempAllocator& alloc) {
+  MDefinition* index = this->index();
+  MDefinition* length = this->length();
+
+  if (!index->isConstant()) {
+    return this;
+  }
+  if (!length->isStringLength() && !length->isConstant()) {
+    return this;
+  }
+  MOZ_ASSERT_IF(length->isConstant(), length->toConstant()->toInt32() >= 0);
+
+  int32_t relativeIndex = index->toConstant()->toInt32();
+  if (relativeIndex >= 0) {
+    return index;
+  }
+
+  // Safe to truncate because |length| is never negative.
+  return MAdd::New(alloc, index, length, TruncateKind::Truncate);
 }
 
 template <size_t Arity>
@@ -6008,6 +6079,24 @@ MWasmCallCatchable* MWasmCallCatchable::New(TempAllocator& alloc,
   return call;
 }
 
+MWasmCallCatchable* MWasmCallCatchable::NewBuiltinInstanceMethodCall(
+    TempAllocator& alloc, const wasm::CallSiteDesc& desc,
+    const wasm::SymbolicAddress builtin, wasm::FailureMode failureMode,
+    const ABIArg& instanceArg, const Args& args,
+    uint32_t stackArgAreaSizeUnaligned, const MWasmCallTryDesc& tryDesc) {
+  auto callee = wasm::CalleeDesc::builtinInstanceMethod(builtin);
+  MWasmCallCatchable* call = MWasmCallCatchable::New(
+      alloc, desc, callee, args, stackArgAreaSizeUnaligned, tryDesc, nullptr);
+  if (!call) {
+    return nullptr;
+  }
+
+  MOZ_ASSERT(instanceArg != ABIArg());
+  call->instanceArg_ = instanceArg;
+  call->builtinMethodFailureMode_ = failureMode;
+  return call;
+}
+
 MWasmCallUncatchable* MWasmCallUncatchable::New(
     TempAllocator& alloc, const wasm::CallSiteDesc& desc,
     const wasm::CalleeDesc& callee, const Args& args,
@@ -6616,6 +6705,21 @@ bool MMegamorphicLoadSlot::congruentTo(const MDefinition* ins) const {
 }
 
 AliasSet MMegamorphicLoadSlot::getAliasSet() const {
+  return AliasSet::Load(AliasSet::ObjectFields | AliasSet::FixedSlot |
+                        AliasSet::DynamicSlot);
+}
+
+bool MSmallObjectVariableKeyHasProp::congruentTo(const MDefinition* ins) const {
+  if (!ins->isSmallObjectVariableKeyHasProp()) {
+    return false;
+  }
+  if (ins->toSmallObjectVariableKeyHasProp()->shape() != shape()) {
+    return false;
+  }
+  return congruentIfOperandsEqual(ins);
+}
+
+AliasSet MSmallObjectVariableKeyHasProp::getAliasSet() const {
   return AliasSet::Load(AliasSet::ObjectFields | AliasSet::FixedSlot |
                         AliasSet::DynamicSlot);
 }

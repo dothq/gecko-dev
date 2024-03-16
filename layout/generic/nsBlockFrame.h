@@ -422,6 +422,8 @@ class nsBlockFrame : public nsContainerFrame {
 
   virtual ~nsBlockFrame();
 
+  void DidSetComputedStyle(ComputedStyle* aOldStyle) override;
+
 #ifdef DEBUG
   already_AddRefed<ComputedStyle> GetFirstLetterStyle(
       nsPresContext* aPresContext);
@@ -550,6 +552,8 @@ class nsBlockFrame : public nsContainerFrame {
     const nscoord mConsumedBSize;
     const nscoord mEffectiveContentBoxBSize;
     bool mNeedFloatManager;
+    // [out] Whether reflowing resulted in use of an overflow-wrap break.
+    bool mUsedOverflowWrap = false;
     // Settings for the current trial.
     bool mBalancing = false;
     nscoord mInset = 0;
@@ -579,6 +583,7 @@ class nsBlockFrame : public nsContainerFrame {
       mFcBounds.Clear();
       mBlockEndEdgeOfChildren = 0;
       mContainerWidth = 0;
+      mUsedOverflowWrap = false;
     }
   };
 
@@ -673,14 +678,6 @@ class nsBlockFrame : public nsContainerFrame {
     return HasAnyStateBits(NS_BLOCK_HAS_OVERFLOW_OUT_OF_FLOWS);
   }
 
-  /**
-   * @return true if NS_BLOCK_DYNAMIC_BFC should be set on this frame.
-   */
-  bool IsDynamicBFC() const {
-    return StyleDisplay()->IsContainPaint() ||
-           StyleDisplay()->IsContainLayout();
-  }
-
  protected:
   /** grab overflow lines from this block's prevInFlow, and make them
    * part of this block's mLines list.
@@ -742,8 +739,11 @@ class nsBlockFrame : public nsContainerFrame {
    */
   void PrepareResizeReflow(BlockReflowState& aState);
 
-  /** reflow all lines that have been marked dirty */
-  void ReflowDirtyLines(BlockReflowState& aState);
+  /**
+   * Reflow all lines that have been marked dirty.
+   * Returns whether an overflow-wrap break was used anywhere.
+   */
+  bool ReflowDirtyLines(BlockReflowState& aState);
 
   /** Mark a given line dirty due to reflow being interrupted on or before it */
   void MarkLineDirtyForInterrupt(nsLineBox* aLine);
@@ -760,8 +760,10 @@ class nsBlockFrame : public nsContainerFrame {
    *   more inline frames.
    * @param aKeepReflowGoing [OUT]
    *   indicates whether the caller should continue to reflow more lines
+   * @returns
+   *   whether an overflow-wrap breakpoint was used
    */
-  void ReflowLine(BlockReflowState& aState, LineIterator aLine,
+  bool ReflowLine(BlockReflowState& aState, LineIterator aLine,
                   bool* aKeepReflowGoing);
 
   // Return false if it needs another reflow because of reduced space
@@ -804,7 +806,8 @@ class nsBlockFrame : public nsContainerFrame {
   void ReflowBlockFrame(BlockReflowState& aState, LineIterator aLine,
                         bool* aKeepGoing);
 
-  void ReflowInlineFrames(BlockReflowState& aState, LineIterator aLine,
+  // Returns whether an overflow-wrap break was used.
+  bool ReflowInlineFrames(BlockReflowState& aState, LineIterator aLine,
                           bool* aKeepLineGoing);
 
   void DoReflowInlineFrames(

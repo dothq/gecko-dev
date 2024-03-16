@@ -392,12 +392,12 @@ const JSClass* WarpCacheIRTranspiler::classForGuardClassKind(
       return &ArrayObject::class_;
     case GuardClassKind::PlainObject:
       return &PlainObject::class_;
-    case GuardClassKind::ArrayBuffer:
-      return &ArrayBufferObject::class_;
-    case GuardClassKind::SharedArrayBuffer:
-      return &SharedArrayBufferObject::class_;
-    case GuardClassKind::DataView:
-      return &DataViewObject::class_;
+    case GuardClassKind::FixedLengthArrayBuffer:
+      return &FixedLengthArrayBufferObject::class_;
+    case GuardClassKind::FixedLengthSharedArrayBuffer:
+      return &FixedLengthSharedArrayBufferObject::class_;
+    case GuardClassKind::FixedLengthDataView:
+      return &FixedLengthDataViewObject::class_;
     case GuardClassKind::MappedArguments:
       return &MappedArgumentsObject::class_;
     case GuardClassKind::UnmappedArguments:
@@ -746,6 +746,18 @@ bool WarpCacheIRTranspiler::emitMegamorphicHasPropResult(ObjOperandId objId,
   return true;
 }
 
+bool WarpCacheIRTranspiler::emitSmallObjectVariableKeyHasOwnResult(
+    StringOperandId idId, uint32_t propNamesOffset, uint32_t shapeOffset) {
+  MDefinition* id = getOperand(idId);
+  SharedShape* shape = &shapeStubField(shapeOffset)->asShared();
+
+  auto* ins = MSmallObjectVariableKeyHasProp::New(alloc(), id, shape);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
 bool WarpCacheIRTranspiler::emitMegamorphicSetElement(ObjOperandId objId,
                                                       ValOperandId idId,
                                                       ValOperandId rhsId,
@@ -801,6 +813,17 @@ bool WarpCacheIRTranspiler::emitGuardIsTypedArray(ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
 
   auto* ins = MGuardIsTypedArray::New(alloc(), obj);
+  add(ins);
+
+  setOperand(objId, ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitGuardIsFixedLengthTypedArray(
+    ObjOperandId objId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* ins = MGuardIsFixedLengthTypedArray::New(alloc(), obj);
   add(ins);
 
   setOperand(objId, ins);
@@ -1363,6 +1386,15 @@ bool WarpCacheIRTranspiler::emitTruncateDoubleToUInt32(
   return defineOperand(resultId, ins);
 }
 
+bool WarpCacheIRTranspiler::emitDoubleToUint8Clamped(NumberOperandId inputId,
+                                                     Int32OperandId resultId) {
+  MDefinition* input = getOperand(inputId);
+  auto* ins = MClampToUint8::New(alloc(), input);
+  add(ins);
+
+  return defineOperand(resultId, ins);
+}
+
 bool WarpCacheIRTranspiler::emitGuardToInt32ModUint32(ValOperandId valId,
                                                       Int32OperandId resultId) {
   MDefinition* input = getOperand(valId);
@@ -1448,6 +1480,16 @@ bool WarpCacheIRTranspiler::emitBooleanToNumber(BooleanOperandId inputId,
   add(ins);
 
   return defineOperand(resultId, ins);
+}
+
+bool WarpCacheIRTranspiler::emitStringToAtom(StringOperandId strId) {
+  MDefinition* str = getOperand(strId);
+
+  auto* ins = MToHashableString::New(alloc(), str);
+  add(ins);
+
+  setOperand(strId, ins);
+  return true;
 }
 
 bool WarpCacheIRTranspiler::emitLoadInt32Result(Int32OperandId valId) {
@@ -2164,6 +2206,32 @@ bool WarpCacheIRTranspiler::emitLinearizeForCharAccess(
   return defineOperand(resultId, ins);
 }
 
+bool WarpCacheIRTranspiler::emitLinearizeForCodePointAccess(
+    StringOperandId strId, Int32OperandId indexId, StringOperandId resultId) {
+  MDefinition* str = getOperand(strId);
+  MDefinition* index = getOperand(indexId);
+
+  auto* ins = MLinearizeForCodePointAccess::New(alloc(), str, index);
+  add(ins);
+
+  return defineOperand(resultId, ins);
+}
+
+bool WarpCacheIRTranspiler::emitToRelativeStringIndex(Int32OperandId indexId,
+                                                      StringOperandId strId,
+                                                      Int32OperandId resultId) {
+  MDefinition* str = getOperand(strId);
+  MDefinition* index = getOperand(indexId);
+
+  auto* length = MStringLength::New(alloc(), str);
+  add(length);
+
+  auto* ins = MToRelativeStringIndex::New(alloc(), index, length);
+  add(ins);
+
+  return defineOperand(resultId, ins);
+}
+
 bool WarpCacheIRTranspiler::emitLoadStringCharResult(StringOperandId strId,
                                                      Int32OperandId indexId,
                                                      bool handleOOB) {
@@ -2175,6 +2243,39 @@ bool WarpCacheIRTranspiler::emitLoadStringCharResult(StringOperandId strId,
     add(charCode);
 
     auto* fromCharCode = MFromCharCodeEmptyIfNegative::New(alloc(), charCode);
+    add(fromCharCode);
+
+    pushResult(fromCharCode);
+    return true;
+  }
+
+  auto* length = MStringLength::New(alloc(), str);
+  add(length);
+
+  index = addBoundsCheck(index, length);
+
+  auto* charCode = MCharCodeAt::New(alloc(), str, index);
+  add(charCode);
+
+  auto* fromCharCode = MFromCharCode::New(alloc(), charCode);
+  add(fromCharCode);
+
+  pushResult(fromCharCode);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadStringAtResult(StringOperandId strId,
+                                                   Int32OperandId indexId,
+                                                   bool handleOOB) {
+  MDefinition* str = getOperand(strId);
+  MDefinition* index = getOperand(indexId);
+
+  if (handleOOB) {
+    auto* charCode = MCharCodeAtOrNegative::New(alloc(), str, index);
+    add(charCode);
+
+    auto* fromCharCode =
+        MFromCharCodeUndefinedIfNegative::New(alloc(), charCode);
     add(fromCharCode);
 
     pushResult(fromCharCode);
@@ -2222,6 +2323,34 @@ bool WarpCacheIRTranspiler::emitLoadStringCharCodeResult(StringOperandId strId,
   add(charCode);
 
   pushResult(charCode);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadStringCodePointResult(
+    StringOperandId strId, Int32OperandId indexId, bool handleOOB) {
+  MDefinition* str = getOperand(strId);
+  MDefinition* index = getOperand(indexId);
+
+  if (handleOOB) {
+    auto* codePoint = MCodePointAtOrNegative::New(alloc(), str, index);
+    add(codePoint);
+
+    auto* ins = MNegativeToUndefined::New(alloc(), codePoint);
+    add(ins);
+
+    pushResult(ins);
+    return true;
+  }
+
+  auto* length = MStringLength::New(alloc(), str);
+  add(length);
+
+  index = addBoundsCheck(index, length);
+
+  auto* codePoint = MCodePointAt::New(alloc(), str, index);
+  add(codePoint);
+
+  pushResult(codePoint);
   return true;
 }
 
@@ -4128,7 +4257,8 @@ bool WarpCacheIRTranspiler::emitNewArrayFromLengthResult(
 
 bool WarpCacheIRTranspiler::emitNewTypedArrayFromLengthResult(
     uint32_t templateObjectOffset, Int32OperandId lengthId) {
-  JSObject* templateObj = tenuredObjectStubField(templateObjectOffset);
+  auto* templateObj = &tenuredObjectStubField(templateObjectOffset)
+                           ->as<FixedLengthTypedArrayObject>();
   MDefinition* length = getOperand(lengthId);
 
   // TODO: support pre-tenuring.
@@ -4136,8 +4266,7 @@ bool WarpCacheIRTranspiler::emitNewTypedArrayFromLengthResult(
 
   if (length->isConstant()) {
     int32_t len = length->toConstant()->toInt32();
-    if (len > 0 &&
-        uint32_t(len) == templateObj->as<TypedArrayObject>().length()) {
+    if (len > 0 && uint32_t(len) == templateObj->length()) {
       auto* templateConst = constant(ObjectValue(*templateObj));
       auto* obj = MNewTypedArray::New(alloc(), templateConst, heap);
       add(obj);

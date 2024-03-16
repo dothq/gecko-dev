@@ -107,6 +107,14 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
                 )
                 activity = "mozilla.telemetry.glean.debug.GleanDebugActivity"
 
+            if self.device.shell_output("getprop ro.product.model") in ["Pixel 6"]:
+                args_list.extend(
+                    [
+                        '--firefox.geckodriverArgs="--android-storage"',
+                        '--firefox.geckodriverArgs="app"',
+                    ]
+                )
+
             args_list.extend(
                 [
                     "--browser",
@@ -161,6 +169,9 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
             "--disable-site-isolation-trials",
         ]
 
+        # Disable finch experiments
+        chrome_args += ["--enable-benchmarking"]
+
         if test.get("playback", False):
             pb_args = [
                 "--proxy-server=%s:%d" % (self.playback.host, self.playback.port),
@@ -190,9 +201,6 @@ class BrowsertimeAndroid(PerftestAndroid, Browsertime):
             path = os.path.join(self.profile_data_dir, "raptor-android")
             LOG.info("Merging profile: {}".format(path))
             self.profile.merge(path)
-            self.profile.set_preferences(
-                {"browser.tabs.remote.autostart": self.config["e10s"]}
-            )
 
             # There's no great way to have "after" advice in Python, so we do this
             # in super and then again here since the profile merging re-introduces

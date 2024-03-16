@@ -12,7 +12,6 @@ $tags:
 
 urlbar:
   abandonment:
-    disabled: true
     type: event
     description: Recorded when the user abandons a search (blurring the urlbar).
     extra_keys:
@@ -121,7 +120,9 @@ urlbar:
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
           `rust_amo`,
+          `rust_mdn`,
           `rust_pocket`,
+          `rust_yelp`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -154,7 +155,6 @@ urlbar:
       - fx-search-telemetry@mozilla.com
     expires: never
   engagement:
-    disabled: true
     type: event
     description: Recorded when the user executes an action on a result.
     extra_keys:
@@ -252,7 +252,9 @@ urlbar:
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
           `rust_amo`,
+          `rust_mdn`,
           `rust_pocket`,
+          `rust_yelp`,
           `search_engine`,
           `search_history`,
           `search_shortcut_button`,
@@ -370,7 +372,9 @@ urlbar:
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
           `rust_amo`,
+          `rust_mdn`,
           `rust_pocket`,
+          `rust_yelp`,
           `search_engine`,
           `search_history`,
           `search_suggest`,
@@ -514,7 +518,9 @@ urlbar:
           `rust_adm_nonsponsored`,
           `rust_adm_sponsored`,
           `rust_amo`,
+          `rust_mdn`,
           `rust_pocket`,
+          `rust_yelp`,
           `search_engine`,
           `search_history`,
           `search_suggest`,

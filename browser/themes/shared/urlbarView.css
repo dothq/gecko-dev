@@ -24,9 +24,20 @@
 
   --urlbarView-item-inline-padding: var(--urlbar-icon-padding);
   --urlbarView-item-block-padding: 6px;
-  --urlbarView-favicon-width: 16px;
+
+  /* The inline margins of a row icon. Rows with different icon sizes will define
+     different values for these variables so that the icons of all rows are
+     center-aligned along one vertical axis. Row icons happen to use the
+     `.urlbarView-favicon` class but not all icons are favicons (e.g., rich
+     search suggestion icons are images from the search engine). */
   --urlbarView-icon-margin-start: 0px;
   --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline));
+
+  /* The size and inline margins of a standard 16px favicon. The margin variables
+     can be used to align any 16px content along the vertical icon axis. */
+  --urlbarView-favicon-width: 16px;
+  --urlbarView-favicon-margin-start: var(--urlbarView-icon-margin-start);
+  --urlbarView-favicon-margin-end: var(--urlbarView-icon-margin-end);
 
   --urlbarView-rich-suggestion-default-icon-size: 28px;
 
@@ -52,6 +63,12 @@
     --urlbarView-result-button-background-opacity: 100%;
     --urlbarView-secondary-text-color: currentColor;
   }
+
+  /* stylelint-disable-next-line media-query-no-invalid */
+  @media (-moz-bool-pref: "browser.urlbar.richSuggestions.featureGate") {
+    --urlbarView-favicon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - var(--urlbarView-favicon-width)) / 2);
+    --urlbarView-favicon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - var(--urlbarView-favicon-width)) / 2));
+    }
 }
 
 .urlbarView {
@@ -89,14 +106,18 @@
 .urlbarView-row {
   --urlbarView-second-line-indent: calc(var(--urlbarView-icon-margin-start) + var(--urlbarView-icon-margin-end) + var(--urlbarView-favicon-width));
 
-  /* Align the favicons and titles of rows with standard 16px icons with those
-     of rich suggestions. */
+  /* Align icons that are smaller than the default rich suggestion icon size
+    (28px) with default-size rich suggestion icons. */
   /* stylelint-disable-next-line media-query-no-invalid */
   @media (-moz-bool-pref: "browser.urlbar.richSuggestions.featureGate") {
     &:not([rich-suggestion]),
     &[rich-suggestion][icon-size="16"] {
-      --urlbarView-icon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2);
-      --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - 16px) / 2));
+      --urlbarView-icon-margin-start: var(--urlbarView-favicon-margin-start);
+      --urlbarView-icon-margin-end: var(--urlbarView-favicon-margin-end);
+    }
+    &[rich-suggestion][icon-size="24"] {
+      --urlbarView-icon-margin-start: calc((var(--urlbarView-rich-suggestion-default-icon-size) - 24px) / 2);
+      --urlbarView-icon-margin-end: calc(var(--urlbar-icon-padding) + var(--identity-box-margin-inline) + ((var(--urlbarView-rich-suggestion-default-icon-size) - 24px) / 2));
     }
   }
 
@@ -221,16 +242,6 @@
         margin-top: 2px;
       }
     }
-  }
-}
-
-/* Display userContext icon instead of text, when window is too narrow. */
-.urlbarView-results[wrap] > .urlbarView-row[type=switchtab] {
-  .urlbarView-userContext-label {
-    display: none;
-  }
-  .urlbarView-userContext-icons {
-    display: inline-block;
   }
 }
 
@@ -441,6 +452,8 @@
 
   > .urlbarView-row-inner {
     min-height: 32px;
+    align-items: center;
+
     /* Add space between the tip title (and the rest of row-inner) and its
        button. */
     margin-inline-end: 1.8em;
@@ -529,8 +542,8 @@
     position: absolute;
     bottom: 0.72em;
     font-size: var(--urlbarView-small-font-size);
-    margin-inline-start: calc(var(--urlbarView-item-inline-padding) + var(--urlbarView-icon-margin-start));
-    padding-inline-start: calc(var(--urlbarView-favicon-width) + var(--urlbarView-icon-margin-end));
+    margin-inline-start: calc(var(--urlbarView-item-inline-padding) + var(--urlbarView-favicon-margin-start));
+    padding-inline-start: calc(var(--urlbarView-favicon-width) + var(--urlbarView-favicon-margin-end));
     background-image: url("chrome://branding/content/icon32.png");
     background-repeat: no-repeat;
     background-position: 0 center;
@@ -549,26 +562,41 @@
 }
 
 /* user context box */
-.urlbarView-userContext-indicator {
-  align-items: center;
+.urlbarView-userContext {
+  border-top: 4px solid var(--identity-tab-color);
 }
 
-.urlbarView-userContext-label {
-  color: var(--identity-tab-color);
-}
-
-.urlbarView-userContext-icons {
-  height: var(--urlbarView-favicon-width);
-  vertical-align: middle;
+.urlbarView-userContext-icon {
+  height: 14px;
   background-image: var(--identity-icon);
   -moz-context-properties: fill;
-  fill: var(--identity-icon-color);
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center center;
+  vertical-align: top;
+  margin-inline-start: 0.35em;
+}
+
+.urlbarView-userContext-iconMode {
   display: none;
 }
 
+.urlbarView-userContext-textMode {
+  display: inline-block;
+  > span {
+    font-variant: small-caps;
+  }
+}
+
+/* Display userContext icon instead of text, when window is too narrow. */
+.urlbarView-results[wrap] {
+  .urlbarView-userContext-textMode {
+    display: none;
+  }
+  .urlbarView-userContext-iconMode {
+    display: inline-block;
+  }
+}
 
 /* Tail suggestions */
 
@@ -661,6 +689,10 @@
     background-color: var(--urlbar-box-focus-bgcolor);
     border-radius: var(--toolbarbutton-border-radius);
     padding: 6px 8px;
+
+    &.urlbarView-userContext {
+      padding-top: 2px;
+    }
     margin-block: -6px;
     margin-inline-start: 8px;
 
@@ -757,6 +789,12 @@
     flex-basis: 24px;
   }
 
+  &[icon-size="38"] {
+    width: 38px;
+    height: 38px;
+    flex-basis: 38px;
+  }
+
   &[icon-size="52"] {
     width: 52px;
     height: 52px;
@@ -838,6 +876,16 @@
 
 .urlbarView-row:is([type$=_amo], [type$=_pocket])[icon-size="24"]:is([selected], :hover) > .urlbarView-row-inner > .urlbarView-favicon {
   background-color: var(--urlbarView-result-button-selected-background-color);
+}
+
+.urlbarView-row[type$=_yelp][icon-size="38"] > .urlbarView-row-inner > .urlbarView-favicon {
+  padding: calc((52px - 38px) / 2);
+  border: 1px solid var(--urlbar-box-focus-bgcolor);
+  border-radius: 2px;
+}
+
+.urlbarView-row[type$=_yelp][icon-size="38"]:is([selected], :hover) > .urlbarView-row-inner > .urlbarView-favicon {
+  border-color: var(--urlbarView-result-button-selected-background-color);
 }
 
 /* Search one-offs */

@@ -130,7 +130,11 @@ extern bool enableShadowRealms;
 extern bool enableArrayGrouping;
 extern bool enableWellFormedUnicodeStrings;
 extern bool enableArrayBufferTransfer;
+extern bool enableArrayBufferResizable;
 extern bool enableSymbolsAsWeakMapKeys;
+#ifdef ENABLE_JSON_PARSE_WITH_SOURCE
+extern bool enableJSONParseWithSource;
+#endif
 extern bool enableNewSetMethods;
 extern bool enableImportAttributes;
 extern bool enableImportAttributesAssertSyntax;

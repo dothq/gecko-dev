@@ -20,6 +20,10 @@
       "type": "string"
     },
 
+    "AllowFileSelectionDialogs": {
+      "type": "boolean"
+    },
+
     "AppAutoUpdate": {
       "type": "boolean"
     },
@@ -483,6 +487,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "Fallback": {
+          "type": "boolean"
         },
         "Locked": {
           "type": "boolean"

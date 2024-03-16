@@ -1304,7 +1304,8 @@ static_assert(sizeof(ScriptWarmUpData) == sizeof(uintptr_t),
 // This class doesn't use the GC barrier wrapper classes. BaseScript::swapData
 // performs a manual pre-write barrier when detaching PrivateScriptData from a
 // script.
-class alignas(uintptr_t) PrivateScriptData final : public TrailingArray {
+class alignas(uintptr_t) PrivateScriptData final
+    : public TrailingArray<PrivateScriptData> {
  private:
   uint32_t ngcthings = 0;
 
@@ -1664,6 +1665,10 @@ class BaseScript : public gc::TenuredCellWithNonGCPointer<uint8_t> {
   static constexpr size_t offsetOfWarmUpData() {
     return offsetof(BaseScript, warmUpData_);
   }
+
+#if defined(DEBUG) || defined(JS_JITSPEW)
+  void dumpStringContent(js::GenericPrinter& out) const;
+#endif
 };
 
 extern void SweepScriptData(JSRuntime* rt);

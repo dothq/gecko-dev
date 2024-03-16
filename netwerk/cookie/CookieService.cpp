@@ -409,7 +409,7 @@ CookieService::GetCookieStringFromDocument(Document* aDocument,
 
   // check if the nsIPrincipal is using an https secure protocol.
   // if it isn't, then we can't send a secure cookie over the connection.
-  bool potentiallyTurstworthy = principal->GetIsOriginPotentiallyTrustworthy();
+  bool potentiallyTrustworthy = principal->GetIsOriginPotentiallyTrustworthy();
 
   bool thirdParty = true;
   nsPIDOMWindowInner* innerWindow = aDocument->GetInnerWindow();
@@ -446,7 +446,7 @@ CookieService::GetCookieStringFromDocument(Document* aDocument,
     }
 
     // if the cookie is secure and the host scheme isn't, we can't send it
-    if (cookie->IsSecure() && !potentiallyTurstworthy) {
+    if (cookie->IsSecure() && !potentiallyTrustworthy) {
       continue;
     }
 
@@ -1020,7 +1020,7 @@ void CookieService::GetCookiesForURI(
   // check if aHostURI is using an https secure protocol.
   // if it isn't, then we can't send a secure cookie over the connection.
   // if SchemeIs fails, assume an insecure connection, to be on the safe side
-  bool potentiallyTurstworthy =
+  bool potentiallyTrustworthy =
       nsMixedContentBlocker::IsPotentiallyTrustworthyOrigin(aHostURI);
 
   int64_t currentTimeInUsec = PR_Now();
@@ -1049,7 +1049,7 @@ void CookieService::GetCookiesForURI(
     // cookie if possible. But for process synchronization purposes, we may want
     // the content process to know about the cookie (without it's value). In
     // which case we will wipe the value before sending
-    if (cookie->IsSecure() && !potentiallyTurstworthy &&
+    if (cookie->IsSecure() && !potentiallyTrustworthy &&
         !aAllowSecureCookiesToInsecureOrigin) {
       continue;
     }
@@ -1187,7 +1187,7 @@ bool CookieService::CanSetCookie(
   // 1 = nonsecure and "https:"
   // 2 = secure and "http:"
   // 3 = secure and "https:"
-  bool potentiallyTurstworthy =
+  bool potentiallyTrustworthy =
       nsMixedContentBlocker::IsPotentiallyTrustworthyOrigin(aHostURI);
 
   int64_t currentTimeInUsec = PR_Now();
@@ -1272,7 +1272,7 @@ bool CookieService::CanSetCookie(
   }
 
   // magic prefix checks. MUST be run after CheckDomain() and CheckPath()
-  if (!CheckPrefixes(aCookieData, potentiallyTurstworthy)) {
+  if (!CheckPrefixes(aCookieData, potentiallyTrustworthy)) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, savedCookieHeader,
                       "failed the prefix tests");
     CookieLogging::LogMessageToConsole(
@@ -1312,7 +1312,7 @@ bool CookieService::CanSetCookie(
   // If the new cookie is non-https and wants to set secure flag,
   // browser have to ignore this new cookie.
   // (draft-ietf-httpbis-cookie-alone section 3.1)
-  if (aCookieData.isSecure() && !potentiallyTurstworthy) {
+  if (aCookieData.isSecure() && !potentiallyTrustworthy) {
     COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieHeader,
                       "non-https cookie can't set secure flag");
     CookieLogging::LogMessageToConsole(
@@ -1663,6 +1663,19 @@ bool CookieService::ParseAttributes(nsIConsoleReportCollector* aCRC,
                                 SAMESITE_MDN_URL});
   }
 
+  // Ensure the partitioned cookie is set with the secure attribute.
+  if (aCookieData.isPartitioned() && !aCookieData.isSecure()) {
+    CookieLogging::LogMessageToConsole(
+        aCRC, aHostURI, nsIScriptError::errorFlag, CONSOLE_REJECTION_CATEGORY,
+        "CookieRejectedPartitionedRequiresSecure"_ns,
+        AutoTArray<nsString, 1>{NS_ConvertUTF8toUTF16(aCookieData.name())});
+
+    // We only drop the cookie if CHIPS is enabled.
+    if (StaticPrefs::network_cookie_cookieBehavior_optInPartitioning()) {
+      return newCookie;
+    }
+  }
+
   if (aCookieData.rawSameSite() == nsICookie::SAMESITE_NONE &&
       aCookieData.sameSite() == nsICookie::SAMESITE_LAX) {
     bool laxByDefault =
@@ -1980,22 +1993,6 @@ bool CookieService::CheckPath(CookieStruct& aCookieData,
   // if a path is given, check the host has permission
   if (aCookieData.path().IsEmpty() || aCookieData.path().First() != '/') {
     aCookieData.path() = GetPathFromURI(aHostURI);
-
-#if 0
-  } else {
-    /**
-     * The following test is part of the RFC2109 spec.  Loosely speaking, it says that a site
-     * cannot set a cookie for a path that it is not on.  See bug 155083.  However this patch
-     * broke several sites -- nordea (bug 155768) and citibank (bug 156725).  So this test has
-     * been disabled, unless we can evangelize these sites.
-     */
-    // get path from aHostURI
-    nsAutoCString pathFromURI;
-    if (NS_FAILED(aHostURI->GetPathQueryRef(pathFromURI)) ||
-        !StringBeginsWith(pathFromURI, aCookieData.path())) {
-      return false;
-    }
-#endif
   }
 
   if (!CookieCommons::CheckPathSize(aCookieData)) {

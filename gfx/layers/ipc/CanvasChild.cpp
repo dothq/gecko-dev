@@ -37,8 +37,7 @@ class RecorderHelpers final : public CanvasDrawEventRecorder::Helpers {
                       Handle&& aReadHandle, nsTArray<Handle>&& aBufferHandles,
                       uint64_t aBufferSize,
                       CrossProcessSemaphoreHandle&& aReaderSem,
-                      CrossProcessSemaphoreHandle&& aWriterSem,
-                      bool aUseIPDLThread) override {
+                      CrossProcessSemaphoreHandle&& aWriterSem) override {
     NS_ASSERT_OWNINGTHREAD(RecorderHelpers);
     if (NS_WARN_IF(!mCanvasChild)) {
       return false;
@@ -46,7 +45,7 @@ class RecorderHelpers final : public CanvasDrawEventRecorder::Helpers {
     return mCanvasChild->SendInitTranslator(
         aTextureType, aBackendType, std::move(aReadHandle),
         std::move(aBufferHandles), aBufferSize, std::move(aReaderSem),
-        std::move(aWriterSem), aUseIPDLThread);
+        std::move(aWriterSem));
   }
 
   bool AddBuffer(Handle&& aBufferHandle, uint64_t aBufferSize) override {
@@ -127,7 +126,13 @@ class SourceSurfaceCanvasRecording final : public gfx::SourceSurface {
     return do_AddRef(mDataSourceSurface);
   }
 
-  void DrawTargetWillChange() { mDetached = true; }
+  void AttachSurface() { mDetached = false; }
+  void DetachSurface() { mDetached = true; }
+
+  already_AddRefed<gfx::SourceSurface> ExtractSubrect(
+      const gfx::IntRect& aRect) final {
+    return mRecordedSurface->ExtractSubrect(aRect);
+  }
 
  private:
   void EnsureDataSurfaceOnMainThread() {
@@ -300,7 +305,7 @@ bool CanvasChild::ShouldBeCleanedUp() const {
   return !mRecorder || mRecorder->hasOneRef();
 }
 
-already_AddRefed<gfx::DrawTarget> CanvasChild::CreateDrawTarget(
+already_AddRefed<gfx::DrawTargetRecording> CanvasChild::CreateDrawTarget(
     int64_t aTextureId, const RemoteTextureOwnerId& aTextureOwnerId,
     gfx::IntSize aSize, gfx::SurfaceFormat aFormat) {
   NS_ASSERT_OWNINGTHREAD(CanvasChild);
@@ -311,7 +316,7 @@ already_AddRefed<gfx::DrawTarget> CanvasChild::CreateDrawTarget(
 
   RefPtr<gfx::DrawTarget> dummyDt = gfx::Factory::CreateDrawTarget(
       gfx::BackendType::SKIA, gfx::IntSize(1, 1), aFormat);
-  RefPtr<gfx::DrawTarget> dt = MakeAndAddRef<gfx::DrawTargetRecording>(
+  RefPtr<gfx::DrawTargetRecording> dt = MakeAndAddRef<gfx::DrawTargetRecording>(
       mRecorder, aTextureId, aTextureOwnerId, dummyDt, aSize);
 
   mTextureInfo.insert({aTextureId, {}});
@@ -403,7 +408,9 @@ already_AddRefed<gfx::DataSourceSurface> CanvasChild::GetDataSurface(
       MOZ_ASSERT(shmemPtr);
       mRecorder->RecordEvent(RecordedPrepareShmem(aTextureId));
       auto checkpoint = CreateCheckpoint();
-      mRecorder->WaitForCheckpoint(checkpoint);
+      if (NS_WARN_IF(!mRecorder->WaitForCheckpoint(checkpoint))) {
+        return nullptr;
+      }
       gfx::IntSize size = aSurface->GetSize();
       gfx::SurfaceFormat format = aSurface->GetFormat();
       auto stride = ImageDataSerializer::ComputeRGBStride(format, size.width);
@@ -422,9 +429,13 @@ already_AddRefed<gfx::DataSourceSurface> CanvasChild::GetDataSurface(
     return nullptr;
   }
 
-  mDataSurfaceShmemAvailable = false;
   RecordEvent(RecordedGetDataForSurface(aSurface));
   auto checkpoint = CreateCheckpoint();
+  if (NS_WARN_IF(!mRecorder->WaitForCheckpoint(checkpoint))) {
+    return nullptr;
+  }
+
+  mDataSurfaceShmemAvailable = false;
   struct DataShmemHolder {
     RefPtr<ipc::SharedMemoryBasic> shmem;
     RefPtr<CanvasChild> canvasChild;
@@ -437,8 +448,6 @@ already_AddRefed<gfx::DataSourceSurface> CanvasChild::GetDataSurface(
   RefPtr<gfx::DataSourceSurface> dataSurface =
       gfx::Factory::CreateWrappingDataSourceSurface(
           data, stride, ssSize, ssFormat, ReleaseDataShmemHolder, closure);
-
-  mRecorder->WaitForCheckpoint(checkpoint);
   return dataSurface.forget();
 }
 
@@ -477,10 +486,17 @@ void CanvasChild::ReturnDataSurfaceShmem(
   }
 }
 
+void CanvasChild::AttachSurface(const RefPtr<gfx::SourceSurface>& aSurface) {
+  if (auto* surface =
+          static_cast<SourceSurfaceCanvasRecording*>(aSurface.get())) {
+    surface->AttachSurface();
+  }
+}
+
 void CanvasChild::DetachSurface(const RefPtr<gfx::SourceSurface>& aSurface) {
   if (auto* surface =
           static_cast<SourceSurfaceCanvasRecording*>(aSurface.get())) {
-    surface->DrawTargetWillChange();
+    surface->DetachSurface();
   }
 }
 

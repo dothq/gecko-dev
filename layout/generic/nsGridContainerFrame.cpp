@@ -9,32 +9,28 @@
 #include "nsGridContainerFrame.h"
 
 #include <functional>
-#include <limits>
 #include <stdlib.h>  // for div()
-#include <numeric>
 #include <type_traits>
 #include "gfxContext.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/Baseline.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/CSSAlignUtils.h"
-#include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/dom/Grid.h"
 #include "mozilla/dom/GridBinding.h"
 #include "mozilla/IntegerRange.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/PodOperations.h"  // for PodZero
-#include "mozilla/Poison.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_layout.h"
 #include "nsAbsoluteContainingBlock.h"
 #include "nsAlgorithm.h"  // for clamped()
-#include "nsCSSAnonBoxes.h"
 #include "nsCSSFrameConstructor.h"
-#include "nsTHashMap.h"
 #include "nsDisplayList.h"
-#include "nsHashKeys.h"
 #include "nsFieldSetFrame.h"
-#include "nsIFrameInlines.h"
+#include "nsHashKeys.h"
+#include "nsIFrameInlines.h"  // for nsIFrame::GetLogicalNormalPosition (don't remove)
+#include "nsLayoutUtils.h"
 #include "nsPlaceholderFrame.h"
 #include "nsPresContext.h"
 #include "nsReadableUtils.h"
@@ -593,42 +589,56 @@ struct nsGridContainerFrame::GridItemInfo {
    * Item state per axis.
    */
   enum StateBits : uint16_t {
-    // clang-format off
-    eIsFlexing =              0x1, // does the item span a flex track?
-    eFirstBaseline =          0x2, // participate in 'first baseline' alignment?
-    // ditto 'last baseline', mutually exclusive w. eFirstBaseline
-    eLastBaseline =           0x4,
+    // Does the item span a flex track?
+    eIsFlexing = 0x1,
+
+    // First or last baseline alignment preference. They are mutually exclusive.
+    // This does *NOT* represent the baseline alignment group. See the member
+    // variable for that.
+    // <https://drafts.csswg.org/css-align-3/#baseline-alignment-preference>
+    eFirstBaseline = 0x2,
+    eLastBaseline = 0x4,
     eIsBaselineAligned = eFirstBaseline | eLastBaseline,
+
     // One of e[Self|Content]Baseline is set when eIsBaselineAligned is true
-    eSelfBaseline =           0x8, // is it *-self:[last ]baseline alignment?
+    eSelfBaseline = 0x8,  // is it *-self:[last ]baseline alignment?
     // Ditto *-content:[last ]baseline. Mutually exclusive w. eSelfBaseline.
-    eContentBaseline =       0x10,
+    eContentBaseline = 0x10,
+
     // The baseline affects the margin or padding on the item's end side when
     // this bit is set.  In a grid-axis it's always set for eLastBaseline and
     // always unset for eFirstBaseline.  In a masonry-axis, it's set for
     // baseline groups in the EndStretch set and unset for the StartStretch set.
-    eEndSideBaseline =       0x20,
+    eEndSideBaseline = 0x20,
     eAllBaselineBits = eIsBaselineAligned | eSelfBaseline | eContentBaseline |
                        eEndSideBaseline,
+
     // Should apply Automatic Minimum Size per:
     // https://drafts.csswg.org/css-grid/#min-size-auto
-    eApplyAutoMinSize =      0x40,
+    eApplyAutoMinSize = 0x40,
     // Clamp per https://drafts.csswg.org/css-grid/#min-size-auto
     eClampMarginBoxMinSize = 0x80,
-    eIsSubgrid =            0x100,
+    eIsSubgrid = 0x100,
     // set on subgrids and items in subgrids if they are adjacent to the grid
     // start/end edge (excluding grid-aligned abs.pos. frames)
-    eStartEdge =            0x200,
-    eEndEdge =              0x400,
+    eStartEdge = 0x200,
+    eEndEdge = 0x400,
     eEdgeBits = eStartEdge | eEndEdge,
     // Set if this item was auto-placed in this axis.
-    eAutoPlacement =        0x800,
+    eAutoPlacement = 0x800,
     // Set if this item is the last item in its track (masonry layout only)
-    eIsLastItemInMasonryTrack =   0x1000,
-    // clang-format on
+    eIsLastItemInMasonryTrack = 0x1000,
   };
 
   GridItemInfo(nsIFrame* aFrame, const GridArea& aArea);
+
+  GridItemInfo(const GridItemInfo& aOther)
+      : mFrame(aOther.mFrame), mArea(aOther.mArea) {
+    mBaselineOffset = aOther.mBaselineOffset;
+    mState = aOther.mState;
+  }
+
+  GridItemInfo& operator=(const GridItemInfo&) = delete;
 
   static bool BaselineAlignmentAffectsEndSide(StateBits state) {
     return state & StateBits::eEndSideBaseline;
@@ -654,10 +664,12 @@ struct nsGridContainerFrame::GridItemInfo {
    */
   GridItemInfo Transpose() const {
     GridItemInfo info(mFrame, GridArea(mArea.mRows, mArea.mCols));
-    info.mState[0] = mState[1];
-    info.mState[1] = mState[0];
-    info.mBaselineOffset[0] = mBaselineOffset[1];
-    info.mBaselineOffset[1] = mBaselineOffset[0];
+    info.mState[eLogicalAxisBlock] = mState[eLogicalAxisInline];
+    info.mState[eLogicalAxisInline] = mState[eLogicalAxisBlock];
+    info.mBaselineOffset[eLogicalAxisBlock] =
+        mBaselineOffset[eLogicalAxisInline];
+    info.mBaselineOffset[eLogicalAxisInline] =
+        mBaselineOffset[eLogicalAxisBlock];
     return info;
   }
 
@@ -798,15 +810,34 @@ struct nsGridContainerFrame::GridItemInfo {
            !a->mFrame->HasAnyStateBits(NS_FRAME_OUT_OF_FLOW);
   }
 
+  // Return true if this items block size is dependent on the size of the
+  // container it is in.
+  bool IsBSizeDependentOnContainerSize(WritingMode aContainerWM) const {
+    const auto IsDependentOnContainerSize = [](const auto& size) -> bool {
+      return size.HasPercent() || size.IsMozAvailable();
+    };
+
+    const nsStylePosition* stylePos = mFrame->StylePosition();
+    bool isItemAutoSize =
+        IsDependentOnContainerSize(stylePos->BSize(aContainerWM)) ||
+        IsDependentOnContainerSize(stylePos->MinBSize(aContainerWM)) ||
+        IsDependentOnContainerSize(stylePos->MaxBSize(aContainerWM));
+
+    return isItemAutoSize;
+  }
+
   nsIFrame* const mFrame;
   GridArea mArea;
+
   // Offset from the margin edge to the baseline (LogicalAxis index).  It's from
-  // the start edge when eFirstBaseline is set, end edge otherwise. It's mutable
-  // since we update the value fairly late (just before reflowing the item).
-  mutable nscoord mBaselineOffset[2];
-  mutable StateBits mState[2];  // state bits per axis (LogicalAxis index)
-  static_assert(mozilla::eLogicalAxisBlock == 0, "unexpected index value");
-  static_assert(mozilla::eLogicalAxisInline == 1, "unexpected index value");
+  // the start edge for first baseline sharing group, otherwise from the end
+  // edge.
+  // It's mutable since we update the value fairly late (just before reflowing
+  // the item).
+  mutable PerLogicalAxis<nscoord> mBaselineOffset;
+
+  // State bits per axis.
+  mutable PerLogicalAxis<StateBits> mState;
 };
 
 using GridItemInfo = nsGridContainerFrame::GridItemInfo;
@@ -814,11 +845,12 @@ using ItemState = GridItemInfo::StateBits;
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(ItemState)
 
 GridItemInfo::GridItemInfo(nsIFrame* aFrame, const GridArea& aArea)
-    : mFrame(aFrame), mArea(aArea) {
+    : mFrame(aFrame), mArea(aArea), mBaselineOffset{0, 0} {
   mState[eLogicalAxisBlock] =
       StateBits(mArea.mRows.mStart == kAutoLine ? eAutoPlacement : 0);
   mState[eLogicalAxisInline] =
       StateBits(mArea.mCols.mStart == kAutoLine ? eAutoPlacement : 0);
+
   if (auto* gridFrame = GetGridContainerFrame(mFrame)) {
     auto parentWM = aFrame->GetParent()->GetWritingMode();
     bool isOrthogonal = parentWM.IsOrthogonalTo(gridFrame->GetWritingMode());
@@ -831,8 +863,6 @@ GridItemInfo::GridItemInfo(nsIFrame* aFrame, const GridArea& aArea)
           StateBits::eIsSubgrid;
     }
   }
-  mBaselineOffset[eLogicalAxisBlock] = nscoord(0);
-  mBaselineOffset[eLogicalAxisInline] = nscoord(0);
 }
 
 void GridItemInfo::ReverseDirection(LogicalAxis aAxis, uint32_t aGridEnd) {
@@ -2890,12 +2920,18 @@ struct MOZ_STACK_CLASS nsGridContainerFrame::GridReflowInput {
               mGridItems.AppendElement(GridItemInfo(child, itemInfo.mArea));
           // Copy the item's baseline data so that the item's last fragment can
           // do 'last baseline' alignment if necessary.
-          item->mState[0] |= itemInfo.mState[0] & ItemState::eAllBaselineBits;
-          item->mState[1] |= itemInfo.mState[1] & ItemState::eAllBaselineBits;
-          item->mBaselineOffset[0] = itemInfo.mBaselineOffset[0];
-          item->mBaselineOffset[1] = itemInfo.mBaselineOffset[1];
-          item->mState[0] |= itemInfo.mState[0] & ItemState::eAutoPlacement;
-          item->mState[1] |= itemInfo.mState[1] & ItemState::eAutoPlacement;
+          item->mState[eLogicalAxisBlock] |=
+              itemInfo.mState[eLogicalAxisBlock] & ItemState::eAllBaselineBits;
+          item->mState[eLogicalAxisInline] |=
+              itemInfo.mState[eLogicalAxisInline] & ItemState::eAllBaselineBits;
+          item->mBaselineOffset[eLogicalAxisBlock] =
+              itemInfo.mBaselineOffset[eLogicalAxisBlock];
+          item->mBaselineOffset[eLogicalAxisInline] =
+              itemInfo.mBaselineOffset[eLogicalAxisInline];
+          item->mState[eLogicalAxisBlock] |=
+              itemInfo.mState[eLogicalAxisBlock] & ItemState::eAutoPlacement;
+          item->mState[eLogicalAxisInline] |=
+              itemInfo.mState[eLogicalAxisInline] & ItemState::eAutoPlacement;
           break;
         }
       }
@@ -5282,7 +5318,8 @@ static nscoord MeasuringReflow(nsIFrame* aChild,
                                const LogicalSize& aCBSize,
                                nscoord aIMinSizeClamp = NS_MAXSIZE,
                                nscoord aBMinSizeClamp = NS_MAXSIZE) {
-  nsContainerFrame* parent = aChild->GetParent();
+  MOZ_ASSERT(aChild->IsGridItem(), "aChild should be a grid item!");
+  auto* parent = static_cast<nsGridContainerFrame*>(aChild->GetParent());
   nsPresContext* pc = aChild->PresContext();
   Maybe<ReflowInput> dummyParentState;
   const ReflowInput* rs = aReflowInput;
@@ -5301,6 +5338,11 @@ static nscoord MeasuringReflow(nsIFrame* aChild,
 #endif
   auto wm = aChild->GetWritingMode();
   ComputeSizeFlags csFlags = ComputeSizeFlag::IsGridMeasuringReflow;
+  // Shrink-wrap grid items that will be aligned (rather than stretched) in
+  // their own inline axis.
+  if (!parent->GridItemShouldStretch(aChild, eLogicalAxisInline)) {
+    csFlags += ComputeSizeFlag::ShrinkWrap;
+  }
   if (aAvailableSize.ISize(wm) == INFINITE_ISIZE_COORD) {
     csFlags += ComputeSizeFlag::ShrinkWrap;
   }
@@ -6077,7 +6119,6 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
       LogicalSize cbSize(childWM, 0, NS_UNCONSTRAINEDSIZE);
       ::MeasuringReflow(child, aState.mReflowInput, rc, avail, cbSize);
 
-      nscoord baseline;
       nsGridContainerFrame* grid = do_QueryFrame(child);
       auto frameSize =
           isInlineAxis ? child->ISize(containerWM) : child->BSize(containerWM);
@@ -6086,96 +6127,69 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
           frameSize + (isInlineAxis ? margin.IStartEnd(containerWM)
                                     : margin.BStartEnd(containerWM));
 
-      // Check if the item crosses any tracks that is intrinsically sized.
-      auto range = gridItem.mArea.LineRangeForAxis(mAxis).Range();
-      auto isTrackAutoSize =
-          std::find_if(range.begin(), range.end(), [&](auto track) {
-            constexpr auto intrinsicSizeFlags = TrackSize::eIntrinsicMinSizing |
-                                                TrackSize::eIntrinsicMaxSizing |
-                                                TrackSize::eFitContent |
-                                                TrackSize::eFlexMaxSizing;
-            return (mSizes[track].mState & intrinsicSizeFlags) != 0;
-          }) != range.end();
+      Maybe<nscoord> baseline;
+      auto baselineSharingGroup = state & ItemState::eFirstBaseline
+                                      ? BaselineSharingGroup::First
+                                      : BaselineSharingGroup::Last;
+      if (grid) {
+        baseline.emplace((isOrthogonal == isInlineAxis)
+                             ? grid->GetBBaseline(baselineSharingGroup)
+                             : grid->GetIBaseline(baselineSharingGroup));
+      } else {
+        baseline = child->GetNaturalBaselineBOffset(
+            childWM, baselineSharingGroup, BaselineExportContext::Other);
 
-      const auto ItemParticipatesInBaselineAlignment = [&]() -> bool {
-        // If baseline alignment is specified on a grid item whose size in that
-        // axis depends on the size of an intrinsically-sized track, that item
-        // does not participate in baseline alignment, and instead uses its
-        // fallback alignment as if that were originally specified.
-        // https://drafts.csswg.org/css-grid-1/#row-align
+        if (!baseline) {
+          // If baseline alignment is specified on a grid item whose size in
+          // that axis depends on the size of an intrinsically-sized track, that
+          // item does not participate in baseline alignment, and instead uses
+          // its fallback alignment as if that were originally specified.
+          // https://drafts.csswg.org/css-grid-1/#row-align
 
-        if (!isTrackAutoSize) {
-          return true;
+          // Check if the item crosses any tracks that are intrinsically sized.
+          auto range = gridItem.mArea.LineRangeForAxis(mAxis).Range();
+          auto isTrackAutoSize =
+              std::find_if(range.begin(), range.end(), [&](auto track) {
+                constexpr auto intrinsicSizeFlags =
+                    TrackSize::eIntrinsicMinSizing |
+                    TrackSize::eIntrinsicMaxSizing | TrackSize::eFitContent |
+                    TrackSize::eFlexMaxSizing;
+                return (mSizes[track].mState & intrinsicSizeFlags) != 0;
+              }) != range.end();
+
+          // If either the track or the item is not auto sized, then the item
+          // participates in baseline alignment.
+          if (!isTrackAutoSize ||
+              !gridItem.IsBSizeDependentOnContainerSize(containerWM)) {
+            baseline.emplace(Baseline::SynthesizeBOffsetFromBorderBox(
+                child, containerWM, baselineSharingGroup));
+          }
+        }
+      }
+
+      if (baseline) {
+        nscoord finalBaseline = *baseline;
+        NS_ASSERTION(finalBaseline != NS_INTRINSIC_ISIZE_UNKNOWN,
+                     "about to use an unknown baseline");
+
+        if (baselineSharingGroup == BaselineSharingGroup::First) {
+          finalBaseline += isInlineAxis ? margin.IStart(containerWM)
+                                        : margin.BStart(containerWM);
+
+        } else {
+          finalBaseline += isInlineAxis ? margin.IEnd(containerWM)
+                                        : margin.BEnd(containerWM);
+          state |= ItemState::eEndSideBaseline;
         }
 
-        const auto IsDependentOnContainerSize = [](const auto& size) -> bool {
-          return size.HasPercent() || size.IsMozAvailable();
-        };
-
-        const nsStylePosition* stylePos = child->StylePosition();
-        bool isItemAutoSize =
-            IsDependentOnContainerSize(stylePos->BSize(containerWM)) ||
-            IsDependentOnContainerSize(stylePos->MinBSize(containerWM)) ||
-            IsDependentOnContainerSize(stylePos->MaxBSize(containerWM));
-
-        return !isItemAutoSize;
-      };
-
-      const auto CalculateAndAppendItemWithBaseline =
-          [&](BaselineSharingGroup aBaselineSharingGroup) {
-            const auto isFirstBaseline =
-                aBaselineSharingGroup == BaselineSharingGroup::First;
-            bool hasBaseline = false;
-            if (grid) {
-              if (isOrthogonal == isInlineAxis) {
-                baseline = grid->GetBBaseline(aBaselineSharingGroup);
-              } else {
-                baseline = grid->GetIBaseline(aBaselineSharingGroup);
-              }
-              hasBaseline = true;
-            } else {
-              auto maybeBaseline = child->GetNaturalBaselineBOffset(
-                  childWM, aBaselineSharingGroup, BaselineExportContext::Other);
-              if (maybeBaseline) {
-                hasBaseline = true;
-                baseline = *maybeBaseline;
-              } else {
-                hasBaseline = false;
-              }
-
-              if (!hasBaseline && ItemParticipatesInBaselineAlignment()) {
-                baseline = Baseline::SynthesizeBOffsetFromBorderBox(
-                    child, containerWM, aBaselineSharingGroup);
-                hasBaseline = true;
-              }
-            }
-
-            if (hasBaseline) {
-              NS_ASSERTION(baseline != NS_INTRINSIC_ISIZE_UNKNOWN,
-                           "about to use an unknown baseline");
-
-              if (isFirstBaseline) {
-                baseline += isInlineAxis ? margin.IStart(containerWM)
-                                         : margin.BStart(containerWM);
-
-              } else {
-                baseline += isInlineAxis ? margin.IEnd(containerWM)
-                                         : margin.BEnd(containerWM);
-                state |= ItemState::eEndSideBaseline;
-              }
-
-              (isFirstBaseline ? firstBaselineItems : lastBaselineItems)
-                  .AppendElement(ItemBaselineData{baselineTrack, baseline,
-                                                  alignSize, &gridItem});
-            } else {
-              state &= ~ItemState::eAllBaselineBits;
-            }
-          };
-
-      if (state & ItemState::eFirstBaseline) {
-        CalculateAndAppendItemWithBaseline(BaselineSharingGroup::First);
+        auto& baselineItems =
+            (baselineSharingGroup == BaselineSharingGroup::First)
+                ? firstBaselineItems
+                : lastBaselineItems;
+        baselineItems.AppendElement(ItemBaselineData{
+            baselineTrack, finalBaseline, alignSize, &gridItem});
       } else {
-        CalculateAndAppendItemWithBaseline(BaselineSharingGroup::Last);
+        state &= ~ItemState::eAllBaselineBits;
       }
     }
 
@@ -9788,12 +9802,7 @@ nscoord nsGridContainerFrame::SynthesizeBaseline(
     // No item in this fragment - synthesize a baseline from our border-box.
     return ::SynthesizeBaselineFromBorderBox(aGroup, aCBWM, aAxis, aCBSize);
   }
-  auto GetBBaseline = [](BaselineSharingGroup aGroup, WritingMode aWM,
-                         const nsIFrame* aFrame, nscoord* aBaseline) {
-    return aGroup == BaselineSharingGroup::First
-               ? nsLayoutUtils::GetFirstLineBaseline(aWM, aFrame, aBaseline)
-               : nsLayoutUtils::GetLastLineBaseline(aWM, aFrame, aBaseline);
-  };
+
   nsIFrame* child = aGridOrderItem.mItem->mFrame;
   nsGridContainerFrame* grid = do_QueryFrame(child);
   auto childWM = child->GetWritingMode();
@@ -9802,6 +9811,7 @@ nscoord nsGridContainerFrame::SynthesizeBaseline(
   nscoord baseline;
   nscoord start;
   nscoord size;
+
   if (aAxis == eLogicalAxisBlock) {
     start = child->GetLogicalNormalPosition(aCBWM, aCBPhysicalSize).B(aCBWM);
     size = child->BSize(aCBWM);
@@ -9835,11 +9845,14 @@ nscoord nsGridContainerFrame::SynthesizeBaseline(
     if (grid && aGridOrderItem.mIsInEdgeTrack) {
       baseline = isOrthogonal ? grid->GetBBaseline(aGroup)
                               : grid->GetIBaseline(aGroup);
-    } else if (isOrthogonal && aGridOrderItem.mIsInEdgeTrack &&
-               GetBBaseline(aGroup, childWM, child, &baseline)) {
-      if (aGroup == BaselineSharingGroup::Last) {
-        baseline = size - baseline;  // convert to distance from border-box end
-      }
+    } else if (isOrthogonal && aGridOrderItem.mIsInEdgeTrack) {
+      baseline = child
+                     ->GetNaturalBaselineBOffset(childWM, aGroup,
+                                                 BaselineExportContext::Other)
+                     .valueOrFrom([aGroup, childWM, childAxis, size]() {
+                       return ::SynthesizeBaselineFromBorderBox(
+                           aGroup, childWM, childAxis, size);
+                     });
     } else {
       baseline =
           ::SynthesizeBaselineFromBorderBox(aGroup, childWM, childAxis, size);

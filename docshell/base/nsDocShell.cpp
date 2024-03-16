@@ -1779,20 +1779,6 @@ nsDocShell::GetHasTrackingContentBlocked(Promise** aPromise) {
 }
 
 NS_IMETHODIMP
-nsDocShell::GetAllowPlugins(bool* aAllowPlugins) {
-  NS_ENSURE_ARG_POINTER(aAllowPlugins);
-
-  *aAllowPlugins = mBrowsingContext->GetAllowPlugins();
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsDocShell::SetAllowPlugins(bool aAllowPlugins) {
-  // XXX should enable or disable a plugin host
-  return mBrowsingContext->SetAllowPlugins(aAllowPlugins);
-}
-
-NS_IMETHODIMP
 nsDocShell::GetCssErrorReportingEnabled(bool* aEnabled) {
   MOZ_ASSERT(aEnabled);
   *aEnabled = mCSSErrorReportingEnabled;
@@ -6280,8 +6266,8 @@ nsresult nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
     TimeStamp channelCreationTime;
     rv = timingChannel->GetChannelCreation(&channelCreationTime);
     if (NS_SUCCEEDED(rv) && !channelCreationTime.IsNull()) {
-      Telemetry::AccumulateTimeDelta(Telemetry::TOTAL_CONTENT_PAGE_LOAD_TIME,
-                                     channelCreationTime);
+      glean::performance_page::total_content_page_load.AccumulateRawDuration(
+          TimeStamp::Now() - channelCreationTime);
     }
   }
 
@@ -8814,6 +8800,7 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
       newURIPartitionedPrincipalToInherit, newCsp, true, true);
 
   nsCOMPtr<nsIInputStream> postData;
+  nsCOMPtr<nsIReferrerInfo> referrerInfo;
   uint32_t cacheKey = 0;
 
   bool scrollRestorationIsManual = false;
@@ -8822,15 +8809,15 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
       /* save current position of scroller(s) (bug 59774) */
       mOSHE->SetScrollPosition(scrollPos.x, scrollPos.y);
       scrollRestorationIsManual = mOSHE->GetScrollRestorationIsManual();
-      // Get the postdata and page ident from the current page, if
-      // the new load is being done via normal means.  Note that
-      // "normal means" can be checked for just by checking for
-      // LOAD_CMD_NORMAL, given the loadType and allowScroll check
-      // above -- it filters out some LOAD_CMD_NORMAL cases that we
-      // wouldn't want here.
+      // Get the postdata, page ident and referrer info from the current page,
+      // if the new load is being done via normal means.  Note that "normal
+      // means" can be checked for just by checking for LOAD_CMD_NORMAL, given
+      // the loadType and allowScroll check above -- it filters out some
+      // LOAD_CMD_NORMAL cases that we wouldn't want here.
       if (aLoadState->LoadType() & LOAD_CMD_NORMAL) {
         postData = mOSHE->GetPostData();
         cacheKey = mOSHE->GetCacheKey();
+        referrerInfo = mOSHE->GetReferrerInfo();
       }
 
       // Link our new SHEntry to the old SHEntry's back/forward
@@ -8908,6 +8895,12 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
       if (cacheKey != 0) {
         mOSHE->SetCacheKey(cacheKey);
       }
+
+      // As the document has not changed, the referrer info hasn't changed too,
+      // so we can just copy it over.
+      if (referrerInfo) {
+        mOSHE->SetReferrerInfo(referrerInfo);
+      }
     }
 
     /* Set the title for the SH entry for this target url so that
@@ -8965,14 +8958,15 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
         scrollRestorationIsManual.emplace(
             mActiveEntry->GetScrollRestorationIsManual());
 
-        // Get the postdata and page ident from the current page, if the new
-        // load is being done via normal means.  Note that "normal means" can be
-        // checked for just by checking for LOAD_CMD_NORMAL, given the loadType
-        // and allowScroll check above -- it filters out some LOAD_CMD_NORMAL
-        // cases that we wouldn't want here.
+        // Get the postdata, page ident and referrer info from the current page,
+        // if the new load is being done via normal means.  Note that "normal
+        // means" can be checked for just by checking for LOAD_CMD_NORMAL, given
+        // the loadType and allowScroll check above -- it filters out some
+        // LOAD_CMD_NORMAL cases that we wouldn't want here.
         if (aLoadState->LoadType() & LOAD_CMD_NORMAL) {
           postData = mActiveEntry->GetPostData();
           cacheKey = mActiveEntry->GetCacheKey();
+          referrerInfo = mActiveEntry->GetReferrerInfo();
         }
       }
 
@@ -8998,6 +8992,12 @@ nsresult nsDocShell::HandleSameDocumentNavigation(
       // cache first
       if (cacheKey != 0) {
         mActiveEntry->SetCacheKey(cacheKey);
+      }
+
+      // As the document has not changed, the referrer info hasn't changed too,
+      // so we can just copy it over.
+      if (referrerInfo) {
+        mActiveEntry->SetReferrerInfo(referrerInfo);
       }
 
       // Set the title for the SH entry for this target url so that
@@ -10684,7 +10684,6 @@ nsresult nsDocShell::OpenRedirectedChannel(nsDocShellLoadState* aLoadState) {
              ExtContentPolicy::TYPE_SUBDOCUMENT) {
     li->UpdateFrameBrowsingContextID(mBrowsingContext->Id());
   }
-  // TODO: more attributes need to be updated on the LoadInfo (bug 1561706)
 
   // If we did a process switch, then we should have an existing allocated
   // ClientInfo, so we just need to allocate a corresponding ClientSource.
@@ -13100,19 +13099,6 @@ bool nsDocShell::ShouldBlockLoadingForBackButton() {
   bool canGoForward = false;
   GetCanGoForward(&canGoForward);
   return canGoForward;
-}
-
-bool nsDocShell::PluginsAllowedInCurrentDoc() {
-  if (!mDocumentViewer) {
-    return false;
-  }
-
-  Document* doc = mDocumentViewer->GetDocument();
-  if (!doc) {
-    return false;
-  }
-
-  return doc->GetAllowPlugins();
 }
 
 //----------------------------------------------------------------------

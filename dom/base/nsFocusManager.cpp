@@ -53,6 +53,7 @@
 #include "mozilla/dom/HTMLImageElement.h"
 #include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/HTMLSlotElement.h"
+#include "mozilla/dom/HTMLAreaElement.h"
 #include "mozilla/dom/BrowserBridgeChild.h"
 #include "mozilla/dom/Text.h"
 #include "mozilla/dom/XULPopupElement.h"
@@ -1424,10 +1425,11 @@ void nsFocusManager::ActivateOrDeactivate(nsPIDOMWindowOuter* aWindow,
 
     chromeTop->SetIsActiveBrowserWindow(aActive);
     chromeTop->CallOnAllTopDescendants(
-        [aActive](CanonicalBrowsingContext* aBrowsingContext) -> CallState {
+        [aActive](CanonicalBrowsingContext* aBrowsingContext) {
           aBrowsingContext->SetIsActiveBrowserWindow(aActive);
           return CallState::Continue;
-        });
+        },
+        /* aIncludeNestedBrowsers = */ true);
   }
 
   if (aWindow->GetExtantDoc()) {
@@ -1849,14 +1851,13 @@ Maybe<uint64_t> nsFocusManager::SetFocusInner(Element* aNewContent,
   return Some(actionId);
 }
 
-static already_AddRefed<BrowsingContext> GetParentIgnoreChromeBoundary(
-    BrowsingContext* aBC) {
+static BrowsingContext* GetParentIgnoreChromeBoundary(BrowsingContext* aBC) {
   // Chrome BrowsingContexts are only available in the parent process, so if
   // we're in a content process, we only worry about the context tree.
   if (XRE_IsParentProcess()) {
     return aBC->Canonical()->GetParentCrossChromeBoundary();
   }
-  return do_AddRef(aBC->GetParent());
+  return aBC->GetParent();
 }
 
 bool nsFocusManager::IsSameOrAncestor(BrowsingContext* aPossibleAncestor,
@@ -1865,7 +1866,7 @@ bool nsFocusManager::IsSameOrAncestor(BrowsingContext* aPossibleAncestor,
     return false;
   }
 
-  for (RefPtr<BrowsingContext> bc = aContext; bc;
+  for (BrowsingContext* bc = aContext; bc;
        bc = GetParentIgnoreChromeBoundary(bc)) {
     if (bc == aPossibleAncestor) {
       return true;
@@ -4170,7 +4171,7 @@ nsresult nsFocusManager::GetNextTabbableContent(
 
       // look for the next or previous content node in tree order
       iterStartContent = aForward ? iterStartContent->GetNextNode()
-                                  : iterStartContent->GetPreviousContent();
+                                  : iterStartContent->GetPrevNode();
       if (!iterStartContent) {
         break;
       }
@@ -5455,14 +5456,8 @@ Element* nsFocusManager::GetTheFocusableArea(Element* aTarget,
 
   // If focus target is an area element with one or more shapes that are
   // focusable areas.
-  if (aTarget->IsHTMLElement(nsGkAtoms::area)) {
-    // HTML areas do not have their own frame, and the img frame we get from
-    // GetPrimaryFrame() is not relevant as to whether it is focusable or
-    // not, so we have to do all the relevant checks manually for them.
-    return frame->IsVisibleConsideringAncestors() &&
-                   aTarget->IsFocusableWithoutStyle()
-               ? aTarget
-               : nullptr;
+  if (auto* area = HTMLAreaElement::FromNode(aTarget)) {
+    return IsAreaElementFocusable(*area) ? area : nullptr;
   }
 
   // For these 3 steps mentioned in the spec
@@ -5499,6 +5494,19 @@ Element* nsFocusManager::GetTheFocusableArea(Element* aTarget,
     }
   }
   return nullptr;
+}
+
+/* static */
+bool nsFocusManager::IsAreaElementFocusable(HTMLAreaElement& aArea) {
+  nsIFrame* frame = aArea.GetPrimaryFrame();
+  if (!frame) {
+    return false;
+  }
+  // HTML areas do not have their own frame, and the img frame we get from
+  // GetPrimaryFrame() is not relevant as to whether it is focusable or
+  // not, so we have to do all the relevant checks manually for them.
+  return frame->IsVisibleConsideringAncestors() &&
+         aArea.IsFocusableWithoutStyle(false /* aWithMouse */);
 }
 
 nsresult NS_NewFocusManager(nsIFocusManager** aResult) {

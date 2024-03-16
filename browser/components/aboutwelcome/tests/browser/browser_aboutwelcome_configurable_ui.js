@@ -4,8 +4,8 @@ const { ExperimentFakes } = ChromeUtils.importESModule(
   "resource://testing-common/NimbusTestUtils.sys.mjs"
 );
 
-const { AboutWelcomeTelemetry } = ChromeUtils.import(
-  "resource:///modules/aboutwelcome/AboutWelcomeTelemetry.jsm"
+const { AboutWelcomeTelemetry } = ChromeUtils.importESModule(
+  "resource:///modules/aboutwelcome/AboutWelcomeTelemetry.sys.mjs"
 );
 
 const BASE_SCREEN_CONTENT = {
@@ -605,8 +605,9 @@ add_task(async function test_aboutwelcome_history_updates_disabled() {
     return content.window.history.length;
   });
 
-  ok(
-    startHistoryLength === endHistoryLength,
+  Assert.strictEqual(
+    startHistoryLength,
+    endHistoryLength,
     "No entries added to the session's history stack with history updates disabled"
   );
 

@@ -89,6 +89,7 @@
 #include "js/HashTable.h"
 #include "js/Interrupt.h"
 #include "js/LocaleSensitive.h"
+#include "js/Prefs.h"
 #include "js/Printf.h"
 #include "js/PropertyAndElement.h"  // JS_DefineProperties, JS_DefineProperty, JS_DefinePropertyById, JS_Enumerate, JS_GetProperty, JS_GetPropertyById, JS_HasProperty, JS_SetElement, JS_SetProperty
 #include "js/PropertySpec.h"
@@ -208,22 +209,6 @@ static bool GetRealmConfiguration(JSContext* cx, unsigned argc, Value* vp) {
                       importAttributes ? TrueHandleValue : FalseHandleValue)) {
     return false;
   }
-
-#ifdef NIGHTLY_BUILD
-  bool arrayGrouping = cx->realm()->creationOptions().getArrayGroupingEnabled();
-  if (!JS_SetProperty(cx, info, "enableArrayGrouping",
-                      arrayGrouping ? TrueHandleValue : FalseHandleValue)) {
-    return false;
-  }
-#endif
-
-#ifdef NIGHTLY_BUILD
-  bool newSetMethods = cx->realm()->creationOptions().getNewSetMethodsEnabled();
-  if (!JS_SetProperty(cx, info, "enableNewSetMethods",
-                      newSetMethods ? TrueHandleValue : FalseHandleValue)) {
-    return false;
-  }
-#endif
 
   if (args.length() == 1) {
     RootedString str(cx, ToString(cx, args[0]));
@@ -616,6 +601,15 @@ static bool GetBuildConfiguration(JSContext* cx, unsigned argc, Value* vp) {
   value = BooleanValue(false);
 #endif
   if (!JS_SetProperty(cx, info, "decorators", value)) {
+    return false;
+  }
+
+#ifdef ENABLE_JSON_PARSE_WITH_SOURCE
+  value = BooleanValue(true);
+#else
+  value = BooleanValue(false);
+#endif
+  if (!JS_SetProperty(cx, info, "json-parse-with-source", value)) {
     return false;
   }
 
@@ -1812,6 +1806,15 @@ static bool DisassembleNative(JSContext* cx, unsigned argc, Value* vp) {
     return false;
   }
 
+#ifdef JS_CODEGEN_ARM
+  // The ARM32 disassembler is currently not fuzzing-safe because it doesn't
+  // handle constant pools correctly (bug 1875363).
+  if (fuzzingSafe) {
+    JS_ReportErrorASCII(cx, "disnative is not fuzzing-safe on ARM32");
+    return false;
+  }
+#endif
+
   // Dump the raw code to a file before disassembling in case
   // finishString triggers a GC and discards the jitcode.
   if (!fuzzingSafe && args.length() > 1 && args[1].isString()) {
@@ -2207,8 +2210,8 @@ static bool WasmGcArrayLength(JSContext* cx, unsigned argc, Value* vp) {
 
 static bool LargeArrayBufferSupported(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
-  args.rval().setBoolean(ArrayBufferObject::MaxByteLength >
-                         ArrayBufferObject::MaxByteLengthForSmallBuffer);
+  args.rval().setBoolean(ArrayBufferObject::ByteLengthLimit >
+                         ArrayBufferObject::ByteLengthLimitForSmallBuffer);
   return true;
 }
 
@@ -4403,7 +4406,7 @@ static bool DumpHeap(JSContext* cx, unsigned argc, Value* vp) {
 
   FILE* dumpFile = stdout;
   auto closeFile = mozilla::MakeScopeExit([&dumpFile] {
-    if (dumpFile != stdout) {
+    if (dumpFile && dumpFile != stdout) {
       fclose(dumpFile);
     }
   });
@@ -5765,14 +5768,10 @@ static bool DetachArrayBuffer(JSContext* cx, unsigned argc, Value* vp) {
 
 static bool EnsureNonInline(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
+  Rooted<JSObject*> callee(cx, &args.callee());
 
-  if (args.length() != 1) {
-    JS_ReportErrorASCII(cx, "ensureNonInline() requires a single argument");
-    return false;
-  }
-
-  if (!args[0].isObject()) {
-    JS_ReportErrorASCII(cx, "ensureNonInline must be passed an object");
+  if (!args.get(0).isObject()) {
+    js::ReportUsageErrorASCII(cx, callee, "Single object argument required");
     return false;
   }
 
@@ -5782,6 +5781,30 @@ static bool EnsureNonInline(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   args.rval().setUndefined();
+  return true;
+}
+
+static bool PinArrayBufferOrViewLength(JSContext* cx, unsigned argc,
+                                       Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  Rooted<JSObject*> callee(cx, &args.callee());
+
+  if (!args.get(0).isObject()) {
+    js::ReportUsageErrorASCII(
+        cx, callee, "ArrayBuffer or ArrayBufferView argument required");
+    return false;
+  }
+  RootedObject obj(cx, &args[0].toObject());
+  if (!obj->canUnwrapAs<ArrayBufferViewObject>() &&
+      !obj->canUnwrapAs<ArrayBufferObjectMaybeShared>()) {
+    js::ReportUsageErrorASCII(
+        cx, callee, "ArrayBuffer or ArrayBufferView argument required");
+    return false;
+  }
+
+  bool pin = args.get(1).isUndefined() ? true : ToBoolean(args.get(1));
+
+  args.rval().setBoolean(JS::PinArrayBufferOrViewLength(obj, pin));
   return true;
 }
 
@@ -6192,6 +6215,31 @@ static bool DumpObject(JSContext* cx, unsigned argc, Value* vp) {
   DumpObject(obj);
 
   args.rval().setUndefined();
+  return true;
+}
+
+static bool DumpValue(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  args.get(0).get().dump();
+  args.rval().setUndefined();
+  return true;
+}
+
+static bool DumpValueToString(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  JSSprinter out(cx);
+  if (!out.init()) {
+    return false;
+  }
+  args.get(0).get().dump(out);
+
+  JSString* rep = out.release(cx);
+  if (!rep) {
+    return false;
+  }
+
+  args.rval().setString(rep);
   return true;
 }
 #endif
@@ -7049,7 +7097,7 @@ static bool DumpStringRepresentation(JSContext* cx, unsigned argc, Value* vp) {
   }
 
   Fprinter out(stderr);
-  str->dumpRepresentation(out, 0);
+  str->dumpRepresentation(out);
 
   args.rval().setUndefined();
   return true;
@@ -7067,7 +7115,7 @@ static bool GetStringRepresentation(JSContext* cx, unsigned argc, Value* vp) {
   if (!out.init()) {
     return false;
   }
-  str->dumpRepresentation(out, 0);
+  str->dumpRepresentation(out);
 
   JSString* rep = out.release(cx);
   if (!rep) {
@@ -7092,6 +7140,12 @@ static bool ParseCompileOptionsForModule(JSContext* cx,
   if (!v.isUndefined() && JS::ToBoolean(v)) {
     options.setModule();
     isModule = true;
+
+    // js::ParseCompileOptions should already be called.
+    if (options.lineno == 0) {
+      JS_ReportErrorASCII(cx, "Module cannot be compiled with lineNumber == 0");
+      return false;
+    }
   } else {
     isModule = false;
   }
@@ -7218,13 +7272,13 @@ static bool EvalStencil(JSContext* cx, uint32_t argc, Value* vp) {
 
   /* Prepare the input byte array. */
   if (!args[0].isObject()) {
-    JS_ReportErrorASCII(cx, "evalStencil: Object expected");
+    JS_ReportErrorASCII(cx, "evalStencil: Stencil object expected");
     return false;
   }
   Rooted<js::StencilObject*> stencilObj(
       cx, args[0].toObject().maybeUnwrapIf<js::StencilObject>());
   if (!stencilObj) {
-    JS_ReportErrorASCII(cx, "evalStencil: Stencil expected");
+    JS_ReportErrorASCII(cx, "evalStencil: Stencil object expected");
     return false;
   }
 
@@ -7395,12 +7449,13 @@ static bool EvalStencilXDR(JSContext* cx, uint32_t argc, Value* vp) {
 
   /* Prepare the input byte array. */
   if (!args[0].isObject()) {
-    JS_ReportErrorASCII(cx, "evalStencilXDR: stencil XDR object expected");
+    JS_ReportErrorASCII(cx, "evalStencilXDR: Stencil XDR object expected");
+    return false;
   }
   Rooted<StencilXDRBufferObject*> xdrObj(
       cx, args[0].toObject().maybeUnwrapIf<StencilXDRBufferObject>());
   if (!xdrObj) {
-    JS_ReportErrorASCII(cx, "evalStencilXDR: stencil XDR object expected");
+    JS_ReportErrorASCII(cx, "evalStencilXDR: Stencil XDR object expected");
     return false;
   }
   MOZ_ASSERT(xdrObj->hasBuffer());
@@ -8105,8 +8160,6 @@ static bool GetDefaultLocale(JSContext* cx, unsigned argc, Value* vp) {
 
   UniqueChars locale = JS_GetDefaultLocale(cx);
   if (!locale) {
-    JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                              JSMSG_DEFAULT_LOCALE_ERROR);
     return false;
   }
 
@@ -8341,6 +8394,23 @@ static bool GetFuseState(JSContext* cx, unsigned argc, Value* vp) {
   FOR_EACH_REALM_FUSE(FUSE)
 #undef FUSE
 
+  // Register hasSeenUndefinedFuse
+  fuseObj = JS_NewPlainObject(cx);
+  if (!fuseObj) {
+    return false;
+  }
+  intactValue.setBoolean(
+      cx->runtime()->hasSeenObjectEmulateUndefinedFuse.ref().intact());
+  if (!JS_DefineProperty(cx, fuseObj, "intact", intactValue,
+                         JSPROP_ENUMERATE)) {
+    return false;
+  }
+
+  if (!JS_DefineProperty(cx, returnObj, "hasSeenObjectEmulateUndefinedFuse",
+                         fuseObj, JSPROP_ENUMERATE)) {
+    return false;
+  }
+
   args.rval().setObject(*returnObj);
   return true;
 }
@@ -8358,6 +8428,74 @@ static bool PopAllFusesInRealm(JSContext* cx, unsigned argc, Value* vp) {
 
   args.rval().setUndefined();
   return true;
+}
+
+static bool GetAllPrefNames(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  RootedValueVector values(cx);
+
+  auto addPref = [cx, &values](const char* name) {
+    JSString* s = JS_NewStringCopyZ(cx, name);
+    if (!s) {
+      return false;
+    }
+    return values.append(StringValue(s));
+  };
+
+#define ADD_NAME(NAME, CPP_NAME, TYPE, SETTER, IS_STARTUP_PREF) \
+  if (!addPref(NAME)) {                                         \
+    return false;                                               \
+  }
+  FOR_EACH_JS_PREF(ADD_NAME)
+#undef ADD_NAME
+
+  ArrayObject* arr = NewDenseCopiedArray(cx, values.length(), values.begin());
+  if (!arr) {
+    return false;
+  }
+
+  args.rval().setObject(*arr);
+  return true;
+}
+
+static bool GetPrefValue(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+  if (!args.requireAtLeast(cx, "getPrefValue", 1)) {
+    return false;
+  }
+
+  if (!args[0].isString()) {
+    JS_ReportErrorASCII(cx, "expected string argument");
+    return false;
+  }
+
+  Rooted<JSLinearString*> name(cx, args[0].toString()->ensureLinear(cx));
+  if (!name) {
+    return false;
+  }
+
+  auto setReturnValue = [&args](auto value) {
+    using T = decltype(value);
+    if constexpr (std::is_same_v<T, bool>) {
+      args.rval().setBoolean(value);
+    } else {
+      static_assert(std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>);
+      args.rval().setNumber(value);
+    }
+  };
+
+  // Search for a matching pref and return its value.
+#define CHECK_PREF(NAME, CPP_NAME, TYPE, SETTER, IS_STARTUP_PREF) \
+  if (StringEqualsAscii(name, NAME)) {                            \
+    setReturnValue(JS::Prefs::CPP_NAME());                        \
+    return true;                                                  \
+  }
+  FOR_EACH_JS_PREF(CHECK_PREF)
+#undef CHECK_PREF
+
+  JS_ReportErrorASCII(cx, "invalid pref name");
+  return false;
 }
 
 static bool GetErrorNotes(JSContext* cx, unsigned argc, Value* vp) {
@@ -9751,6 +9889,11 @@ JS_FOR_WASM_FEATURES(WASM_FEATURE)
 "  Ensure that the memory for the given ArrayBuffer or ArrayBufferView\n"
 "  is not inline."),
 
+    JS_FN_HELP("pinArrayBufferOrViewLength", PinArrayBufferOrViewLength, 1, 0,
+"pinArrayBufferOrViewLength(view or buffer[, pin])",
+"  Prevent or allow (if `pin` is false) changes to the length of the given\n"
+"  ArrayBuffer or ArrayBufferView. `pin` defaults to true."),
+
     JS_FN_HELP("JSONStringify", JSONStringify, 4, 0,
 "JSONStringify(value, behavior)",
 "  Same as JSON.stringify(value), but allows setting behavior:\n"
@@ -9813,8 +9956,16 @@ JS_FOR_WASM_FEATURES(WASM_FEATURE)
 
 #if defined(DEBUG) || defined(JS_JITSPEW)
     JS_FN_HELP("dumpObject", DumpObject, 1, 0,
-"dumpObject()",
+"dumpObject(obj)",
 "  Dump an internal representation of an object."),
+
+    JS_FN_HELP("dumpValue", DumpValue, 1, 0,
+"dumpValue(v)",
+"  Dump an internal representation of a value."),
+
+    JS_FN_HELP("dumpValueToString", DumpValueToString, 1, 0,
+"dumpValue(v)",
+"  Return a dump of an internal representation of a value."),
 #endif
 
     JS_FN_HELP("sharedMemoryEnabled", SharedMemoryEnabled, 0, 0,
@@ -10107,6 +10258,14 @@ JS_FN_HELP("isSmallFunction", IsSmallFunction, 1, 0,
   "popAllFusesInRealm()",
   " Pops all the fuses in the current realm"),
 
+    JS_FN_HELP("getAllPrefNames", GetAllPrefNames, 0, 0,
+"getAllPrefNames()",
+"  Returns an array containing the names of all JS prefs."),
+
+    JS_FN_HELP("getPrefValue", GetPrefValue, 1, 0,
+"getPrefValue(name)",
+"  Return the value of the JS pref with the given name."),
+
   JS_FS_HELP_END
 };
 // clang-format on
@@ -10161,9 +10320,9 @@ JS_FN_HELP("getEnvironmentObjectType", GetEnvironmentObjectType, 1, 0,
       "      the starting point will be the set of GC roots."),
 
     JS_FN_HELP("getFuseState", GetFuseState, 0, 0,
-"getFuseState()",
-"  Return an object describing the calling realm's fuse state"),
-
+      "getFuseState()",
+      "  Return an object describing the calling realm's fuse state, "
+      "as well as the state of any runtime fuses."),
 
     JS_FS_HELP_END
 };

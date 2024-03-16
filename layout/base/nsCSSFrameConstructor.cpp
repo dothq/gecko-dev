@@ -2244,7 +2244,7 @@ nsIFrame* nsCSSFrameConstructor::ConstructTableCell(
 
   nsTableFrame* tableFrame =
       static_cast<nsTableRowFrame*>(aParentFrame)->GetTableFrame();
-  nsContainerFrame* newFrame;
+  nsContainerFrame* cellFrame;
   // <mtable> is border separate in mathml.css and the MathML code doesn't
   // implement border collapse. For those users who style <mtable> with border
   // collapse, give them the default non-MathML table frames that understand
@@ -2254,35 +2254,45 @@ nsIFrame* nsCSSFrameConstructor::ConstructTableCell(
   // frames won't understand MathML attributes and will therefore miss the
   // special handling that the MathML code does.
   if (isMathMLContent && !tableFrame->IsBorderCollapse()) {
-    newFrame = NS_NewMathMLmtdFrame(mPresShell, computedStyle, tableFrame);
+    cellFrame = NS_NewMathMLmtdFrame(mPresShell, computedStyle, tableFrame);
   } else {
     // Warning: If you change this and add a wrapper frame around table cell
     // frames, make sure Bug 368554 doesn't regress!
     // See IsInAutoWidthTableCellForQuirk() in nsImageFrame.cpp.
-    newFrame = NS_NewTableCellFrame(mPresShell, computedStyle, tableFrame);
+    cellFrame = NS_NewTableCellFrame(mPresShell, computedStyle, tableFrame);
   }
 
   // Initialize the table cell frame
-  InitAndRestoreFrame(aState, content, aParentFrame, newFrame);
-  newFrame->AddStateBits(NS_FRAME_OWNS_ANON_BOXES);
+  InitAndRestoreFrame(aState, content, aParentFrame, cellFrame);
+  cellFrame->AddStateBits(NS_FRAME_OWNS_ANON_BOXES);
 
   // Resolve pseudo style and initialize the body cell frame
   RefPtr<ComputedStyle> innerPseudoStyle =
       mPresShell->StyleSet()->ResolveInheritingAnonymousBoxStyle(
           PseudoStyleType::cellContent, computedStyle);
 
-  // Create a block frame that will format the cell's content
   nsContainerFrame* cellInnerFrame;
+  nsContainerFrame* scrollFrame = nullptr;
+  bool isScrollable = false;
+  // Create a block frame that will format the cell's content
   if (isMathMLContent) {
     cellInnerFrame = NS_NewMathMLmtdInnerFrame(mPresShell, innerPseudoStyle);
   } else {
+    isScrollable = innerPseudoStyle->StyleDisplay()->IsScrollableOverflow() &&
+                   !aState.mPresContext->IsPaginated() &&
+                   StaticPrefs::layout_tables_scrollable_cells();
+    if (isScrollable) {
+      innerPseudoStyle = BeginBuildingScrollFrame(
+          aState, content, innerPseudoStyle, cellFrame,
+          PseudoStyleType::scrolledContent, false, scrollFrame);
+    }
     cellInnerFrame = NS_NewBlockFormattingContext(mPresShell, innerPseudoStyle);
   }
-
-  InitAndRestoreFrame(aState, content, newFrame, cellInnerFrame);
+  auto* parent = scrollFrame ? scrollFrame : cellFrame;
+  InitAndRestoreFrame(aState, content, parent, cellInnerFrame);
 
   nsFrameConstructorSaveState absoluteSaveState;
-  MakeTablePartAbsoluteContainingBlock(aState, absoluteSaveState, newFrame);
+  MakeTablePartAbsoluteContainingBlock(aState, absoluteSaveState, cellFrame);
 
   nsFrameConstructorSaveState floatSaveState;
   aState.MaybePushFloatContainingBlock(cellInnerFrame, floatSaveState);
@@ -2301,9 +2311,13 @@ nsIFrame* nsCSSFrameConstructor::ConstructTableCell(
 
   cellInnerFrame->SetInitialChildList(FrameChildListID::Principal,
                                       std::move(childList));
-  SetInitialSingleChild(newFrame, cellInnerFrame);
-  aFrameList.AppendFrame(nullptr, newFrame);
-  return newFrame;
+
+  if (isScrollable) {
+    FinishBuildingScrollFrame(scrollFrame, cellInnerFrame);
+  }
+  SetInitialSingleChild(cellFrame, scrollFrame ? scrollFrame : cellInnerFrame);
+  aFrameList.AppendFrame(nullptr, cellFrame);
+  return cellFrame;
 }
 
 static inline bool NeedFrameFor(const nsFrameConstructorState& aState,
@@ -3172,7 +3186,7 @@ nsIFrame* nsCSSFrameConstructor::ConstructFieldSetFrame(
   // Create the inner ::-moz-fieldset-content frame.
   nsContainerFrame* contentFrameTop;
   nsContainerFrame* contentFrame;
-  auto parent = scrollFrame ? scrollFrame : fieldsetFrame;
+  auto* parent = scrollFrame ? scrollFrame : fieldsetFrame;
   MOZ_ASSERT(fieldsetContentDisplay->DisplayOutside() ==
              StyleDisplayOutside::Block);
   switch (fieldsetContentDisplay->DisplayInside()) {
@@ -3646,14 +3660,6 @@ nsCSSFrameConstructor::FindInputData(const Element& aElement,
                        ArrayLength(sInputData));
 }
 
-static nsIFrame* NS_NewSubDocumentOrImageFrame(mozilla::PresShell* aPresShell,
-                                               mozilla::ComputedStyle* aStyle) {
-  return StaticPrefs::
-                 browser_opaqueResponseBlocking_syntheticBrowsingContext_AtStartup()
-             ? NS_NewSubDocumentFrame(aPresShell, aStyle)
-             : NS_NewImageFrame(aPresShell, aStyle);
-}
-
 /* static */
 const nsCSSFrameConstructor::FrameConstructionData*
 nsCSSFrameConstructor::FindObjectData(const Element& aElement,
@@ -3665,33 +3671,15 @@ nsCSSFrameConstructor::FindObjectData(const Element& aElement,
                "embed and object must implement "
                "nsIObjectLoadingContent!");
   objContent->GetDisplayedType(&type);
-  if (type == nsIObjectLoadingContent::TYPE_IMAGE &&
-      aElement.State().HasState(ElementState::BROKEN)) {
-    // GetDisplayedType isn't necessarily nsIObjectLoadingContent::TYPE_NULL for
-    // cases when the object is broken/suppressed/etc (e.g. a broken image), but
-    // we want to treat those cases as TYPE_NULL
-    type = nsIObjectLoadingContent::TYPE_NULL;
-  }
-
-  if (type == nsIObjectLoadingContent::TYPE_FALLBACK &&
-      !StaticPrefs::layout_use_plugin_fallback()) {
-    type = nsIObjectLoadingContent::TYPE_NULL;
-  }
 
   static constexpr FrameConstructionDataByInt sObjectData[] = {
+      // TODO(emilio): Can we remove the NS_NewEmptyFrame case and just use a
+      // subdocument frame here?
       SIMPLE_INT_CREATE(nsIObjectLoadingContent::TYPE_LOADING,
                         NS_NewEmptyFrame),
-      SIMPLE_INT_CREATE(nsIObjectLoadingContent::TYPE_FALLBACK,
-                        ToCreationFunc(NS_NewBlockFrame)),
-      SIMPLE_INT_CREATE(nsIObjectLoadingContent::TYPE_IMAGE,
-                        NS_NewSubDocumentOrImageFrame),
       SIMPLE_INT_CREATE(nsIObjectLoadingContent::TYPE_DOCUMENT,
                         NS_NewSubDocumentFrame),
-      // Fake plugin handlers load as documents
-      // XXXmats is TYPE_FAKE_PLUGIN something we need?
-      SIMPLE_INT_CREATE(nsIObjectLoadingContent::TYPE_FAKE_PLUGIN,
-                        NS_NewSubDocumentFrame)
-      // Nothing for TYPE_NULL so we'll construct frames by display there
+      // Nothing for TYPE_FALLBACK so we'll construct frames by display there
   };
 
   return FindDataByInt((int32_t)type, aElement, aStyle, sObjectData,
@@ -8050,23 +8038,6 @@ nsIFrame* nsCSSFrameConstructor::CreateContinuingFrame(
   // aFrame cannot be a dynamic reflow root because it has a continuation now.
   aFrame->RemoveStateBits(NS_FRAME_DYNAMIC_REFLOW_ROOT);
 
-  // XXXalaskanemily: This avoids linear-time FirstContinuation lookups during
-  // paginated reflow, but there are a lot of smarter ways to manage this. We
-  // might also want to share the struct (refcount or some guarantee the struct
-  // will remain valid during reflow).
-  if (nsIFrame::PageValues* pageValues =
-          aFrame->GetProperty(nsIFrame::PageValuesProperty())) {
-    // It is possible that both values of a PageValues struct can be
-    // overwritten with null. If that's the case, then as a minor optimization
-    // we don't need to create a copy of the struct since this property being
-    // missing is equivalent to having null start/end values.
-    if (pageValues->mStartPageValue || pageValues->mEndPageValue) {
-      nsIFrame::PageValues* const newPageValues =
-          new nsIFrame::PageValues(*pageValues);
-      newFrame->SetProperty(nsIFrame::PageValuesProperty(), newPageValues);
-    }
-  }
-
   MOZ_ASSERT(!newFrame->GetNextSibling(), "unexpected sibling");
   return newFrame;
 }
@@ -10740,8 +10711,7 @@ nsBlockFrame* nsCSSFrameConstructor::BeginBuildingColumns(
           PseudoStyleType::columnContent, columnSetStyle);
   aColumnContent->SetComputedStyleWithoutNotification(blockStyle);
   InitAndRestoreFrame(aState, aContent, columnSet, aColumnContent);
-  aColumnContent->AddStateBits(NS_FRAME_HAS_MULTI_COLUMN_ANCESTOR |
-                               NS_BLOCK_STATIC_BFC);
+  aColumnContent->AddStateBits(NS_FRAME_HAS_MULTI_COLUMN_ANCESTOR);
 
   // Set up the parent-child chain.
   SetInitialSingleChild(columnSetWrapper, columnSet);

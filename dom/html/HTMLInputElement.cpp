@@ -818,7 +818,8 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
     mode = nsIFilePicker::modeOpen;
   }
 
-  nsresult rv = filePicker->Init(win, title, mode);
+  nsresult rv =
+      filePicker->Init(win, title, mode, OwnerDoc()->GetBrowsingContext());
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (!okButtonLabel.IsEmpty()) {
@@ -4022,14 +4023,27 @@ nsresult HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor) {
           break;
       }
 
-      // Bug 1459231: Temporarily needed till links respect activation target
-      // Then also remove NS_OUTER_ACTIVATE_EVENT
-      if ((aVisitor.mItemFlags & NS_OUTER_ACTIVATE_EVENT) &&
-          (mType == FormControlType::InputReset ||
-           mType == FormControlType::InputSubmit ||
-           mType == FormControlType::InputImage) &&
-          mForm) {
-        aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+      // Bug 1459231: Temporarily needed till links respect activation target,
+      // then also remove NS_OUTER_ACTIVATE_EVENT. The appropriate
+      // behavior/model for links is still under discussion (see
+      // https://github.com/whatwg/html/issues/1576). For now, we aim for
+      // consistency with other browsers.
+      if (aVisitor.mItemFlags & NS_OUTER_ACTIVATE_EVENT) {
+        switch (mType) {
+          case FormControlType::InputReset:
+          case FormControlType::InputSubmit:
+          case FormControlType::InputImage:
+            if (mForm) {
+              aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+            }
+            break;
+          case FormControlType::InputCheckbox:
+          case FormControlType::InputRadio:
+            aVisitor.mEvent->mFlags.mMultipleActionsPrevented = true;
+            break;
+          default:
+            break;
+        }
       }
     }
   }  // if

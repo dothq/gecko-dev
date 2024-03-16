@@ -50,6 +50,7 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/ScrollbarPreferences.h"
 #include "mozilla/ScrollingMetrics.h"
+#include "mozilla/StaticPrefs_bidi.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_toolkit.h"
 #include "mozilla/StaticPtr.h"
@@ -566,35 +567,10 @@ ScrollReflowInput::ScrollReflowInput(nsHTMLScrollFrame* aFrame,
     mHScrollbarAllowedForScrollingVVInsideLV = false;
     mVScrollbar = ShowScrollbar::Never;
     mVScrollbarAllowedForScrollingVVInsideLV = false;
-  } else if (const auto& scrollbarGutterStyle =
-                 scrollbarStyle->StyleDisplay()->mScrollbarGutter;
-             scrollbarGutterStyle && !mOverlayScrollbars) {
-    const auto stable =
-        bool(scrollbarGutterStyle & StyleScrollbarGutter::STABLE);
-    const auto bothEdges =
-        bool(scrollbarGutterStyle & StyleScrollbarGutter::BOTH_EDGES);
-
-    const nscoord scrollbarSize = nsHTMLScrollFrame::GetNonOverlayScrollbarSize(
-        aFrame->PresContext(), scrollbarWidth);
-    if (mReflowInput.GetWritingMode().IsVertical()) {
-      if (bothEdges) {
-        mScrollbarGutter.top = mScrollbarGutter.bottom = scrollbarSize;
-      } else if (stable) {
-        // The horizontal scrollbar gutter is always at the bottom side.
-        mScrollbarGutter.bottom = scrollbarSize;
-      }
-    } else {
-      if (bothEdges) {
-        mScrollbarGutter.left = mScrollbarGutter.right = scrollbarSize;
-      } else if (stable) {
-        if (aFrame->IsScrollbarOnRight()) {
-          mScrollbarGutter.right = scrollbarSize;
-        } else {
-          mScrollbarGutter.left = scrollbarSize;
-        }
-      }
-    }
   }
+
+  mScrollbarGutter = aFrame->ComputeStableScrollbarGutter(
+      scrollbarWidth, scrollbarStyle->StyleDisplay()->mScrollbarGutter);
 }
 
 }  // namespace mozilla
@@ -1158,9 +1134,8 @@ void nsHTMLScrollFrame::ReflowContents(ScrollReflowInput& aState,
 
 void nsHTMLScrollFrame::PlaceScrollArea(ScrollReflowInput& aState,
                                         const nsPoint& aScrollPosition) {
-  nsIFrame* scrolledFrame = mScrolledFrame;
   // Set the x,y of the scrolled frame to the correct value
-  scrolledFrame->SetPosition(ScrollPort().TopLeft() - aScrollPosition);
+  mScrolledFrame->SetPosition(ScrollPort().TopLeft() - aScrollPosition);
 
   // Recompute our scrollable overflow, taking perspective children into
   // account. Note that this only recomputes the overflow areas stored on the
@@ -1185,35 +1160,28 @@ void nsHTMLScrollFrame::PlaceScrollArea(ScrollReflowInput& aState,
   // This needs to happen before SyncFrameViewAfterReflow so
   // HasOverflowRect() will return the correct value.
   OverflowAreas overflow(scrolledArea, scrolledArea);
-  scrolledFrame->FinishAndStoreOverflow(overflow, scrolledFrame->GetSize());
+  mScrolledFrame->FinishAndStoreOverflow(overflow, mScrolledFrame->GetSize());
 
   // Note that making the view *exactly* the size of the scrolled area
   // is critical, since the view scrolling code uses the size of the
   // scrolled view to clamp scroll requests.
-  // Normally the scrolledFrame won't have a view but in some cases it
+  // Normally the mScrolledFrame won't have a view but in some cases it
   // might create its own.
   nsContainerFrame::SyncFrameViewAfterReflow(
-      scrolledFrame->PresContext(), scrolledFrame, scrolledFrame->GetView(),
+      mScrolledFrame->PresContext(), mScrolledFrame, mScrolledFrame->GetView(),
       scrolledArea, ReflowChildFlags::Default);
 }
 
-nscoord nsHTMLScrollFrame::IntrinsicScrollbarGutterSizeAtInlineEdges(
-    gfxContext* aRenderingContext) {
+nscoord nsHTMLScrollFrame::IntrinsicScrollbarGutterSizeAtInlineEdges() {
   const bool isVerticalWM = GetWritingMode().IsVertical();
-  nsScrollbarFrame* inlineEndScrollbarBox =
-      isVerticalWM ? mHScrollbarBox : mVScrollbarBox;
-  if (!inlineEndScrollbarBox) {
-    // No scrollbar box frame means no intrinsic size.
-    return 0;
-  }
-
   if (PresContext()->UseOverlayScrollbars()) {
     return 0;
   }
 
   const auto* styleForScrollbar = nsLayoutUtils::StyleForScrollbar(this);
-  if (styleForScrollbar->StyleUIReset()->ScrollbarWidth() ==
-      StyleScrollbarWidth::None) {
+  const auto& styleScrollbarWidth =
+      styleForScrollbar->StyleUIReset()->ScrollbarWidth();
+  if (styleScrollbarWidth == StyleScrollbarWidth::None) {
     // Scrollbar shouldn't appear at all with "scrollbar-width: none".
     return 0;
   }
@@ -1232,13 +1200,59 @@ nscoord nsHTMLScrollFrame::IntrinsicScrollbarGutterSizeAtInlineEdges(
     return 0;
   }
 
-  // No need to worry about reflow depth here since it's just for scrollbars.
-  nsSize scrollbarPrefSize = inlineEndScrollbarBox->ScrollbarMinSize();
   const nscoord scrollbarSize =
-      isVerticalWM ? scrollbarPrefSize.height : scrollbarPrefSize.width;
+      GetNonOverlayScrollbarSize(PresContext(), styleScrollbarWidth);
   const auto bothEdges =
       bool(styleScrollbarGutter & StyleScrollbarGutter::BOTH_EDGES);
   return bothEdges ? scrollbarSize * 2 : scrollbarSize;
+}
+
+nsMargin nsHTMLScrollFrame::ComputeStableScrollbarGutter(
+    const StyleScrollbarWidth& aStyleScrollbarWidth,
+    const StyleScrollbarGutter& aStyleScrollbarGutter) const {
+  if (PresContext()->UseOverlayScrollbars()) {
+    // Overlay scrollbars do not consume space per spec.
+    return {};
+  }
+
+  if (aStyleScrollbarWidth == StyleScrollbarWidth::None) {
+    // Scrollbar shouldn't appear at all with "scrollbar-width: none".
+    return {};
+  }
+
+  if (aStyleScrollbarGutter == StyleScrollbarGutter::AUTO) {
+    // Scrollbars create space depending on the 'overflow' property and whether
+    // the content overflows. Callers need to check this scenario if they want
+    // to consider the space created by the actual scrollbars.
+    return {};
+  }
+
+  const bool bothEdges =
+      bool(aStyleScrollbarGutter & StyleScrollbarGutter::BOTH_EDGES);
+  const bool isVerticalWM = GetWritingMode().IsVertical();
+  const nscoord scrollbarSize =
+      GetNonOverlayScrollbarSize(PresContext(), aStyleScrollbarWidth);
+
+  nsMargin scrollbarGutter;
+  if (bothEdges) {
+    if (isVerticalWM) {
+      scrollbarGutter.top = scrollbarGutter.bottom = scrollbarSize;
+    } else {
+      scrollbarGutter.left = scrollbarGutter.right = scrollbarSize;
+    }
+  } else {
+    MOZ_ASSERT(bool(aStyleScrollbarGutter & StyleScrollbarGutter::STABLE),
+               "scrollbar-gutter value should be 'stable'!");
+    if (isVerticalWM) {
+      // The horizontal scrollbar-gutter is always at the bottom side.
+      scrollbarGutter.bottom = scrollbarSize;
+    } else if (IsScrollbarOnRight()) {
+      scrollbarGutter.right = scrollbarSize;
+    } else {
+      scrollbarGutter.left = scrollbarSize;
+    }
+  }
+  return scrollbarGutter;
 }
 
 // Legacy, this sucks!
@@ -1269,7 +1283,7 @@ nscoord nsHTMLScrollFrame::GetMinISize(gfxContext* aRenderingContext) {
   }();
 
   DISPLAY_MIN_INLINE_SIZE(this, result);
-  return result + IntrinsicScrollbarGutterSizeAtInlineEdges(aRenderingContext);
+  return result + IntrinsicScrollbarGutterSizeAtInlineEdges();
 }
 
 /* virtual */
@@ -1279,8 +1293,8 @@ nscoord nsHTMLScrollFrame::GetPrefISize(gfxContext* aRenderingContext) {
                        ? *containISize
                        : mScrolledFrame->GetPrefISize(aRenderingContext);
   DISPLAY_PREF_INLINE_SIZE(this, result);
-  return NSCoordSaturatingAdd(
-      result, IntrinsicScrollbarGutterSizeAtInlineEdges(aRenderingContext));
+  return NSCoordSaturatingAdd(result,
+                              IntrinsicScrollbarGutterSizeAtInlineEdges());
 }
 
 // When we have perspective set on the outer scroll frame, and transformed
@@ -5587,14 +5601,6 @@ auto nsHTMLScrollFrame::GetNeededAnonymousContent() const
     if (styles.mVertical != StyleOverflow::Hidden) {
       result += AnonymousContentType::VerticalScrollbar;
     }
-
-    // If we have scrollbar-gutter, construct the scrollbar frames to query its
-    // size to reserve the gutter space at the inline start or end edges.
-    if (StyleDisplay()->mScrollbarGutter & StyleScrollbarGutter::STABLE) {
-      result += GetWritingMode().IsVertical()
-                    ? AnonymousContentType::HorizontalScrollbar
-                    : AnonymousContentType::VerticalScrollbar;
-    }
   }
 
   // Check if the frame is resizable. Note:
@@ -6020,19 +6026,16 @@ nsSize nsHTMLScrollFrame::GetSnapportSize() const {
 }
 
 bool nsHTMLScrollFrame::IsScrollbarOnRight() const {
-  nsPresContext* presContext = PresContext();
-
   // The position of the scrollbar in top-level windows depends on the pref
   // layout.scrollbar.side. For non-top-level elements, it depends only on the
   // directionaliy of the element (equivalent to a value of "1" for the pref).
   if (!mIsRoot) {
     return IsPhysicalLTR();
   }
-  switch (presContext->GetCachedIntPref(kPresContext_ScrollbarSide)) {
+  switch (StaticPrefs::layout_scrollbar_side()) {
     default:
     case 0:  // UI directionality
-      return presContext->GetCachedIntPref(kPresContext_BidiDirection) ==
-             IBMBIDI_TEXTDIRECTION_LTR;
+      return StaticPrefs::bidi_direction() == IBMBIDI_TEXTDIRECTION_LTR;
     case 1:  // Document / content directionality
       return IsPhysicalLTR();
     case 2:  // Always right

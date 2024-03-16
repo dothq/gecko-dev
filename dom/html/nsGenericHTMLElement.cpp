@@ -93,10 +93,6 @@
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/ElementInternals.h"
 
-#ifdef ACCESSIBILITY
-#  include "nsAccessibilityService.h"
-#endif
-
 using namespace mozilla;
 using namespace mozilla::dom;
 
@@ -275,7 +271,7 @@ static bool IsOffsetParent(nsIFrame* aFrame) {
   LayoutFrameType frameType = aFrame->Type();
 
   if (frameType == LayoutFrameType::TableCell ||
-      frameType == LayoutFrameType::Table) {
+      frameType == LayoutFrameType::TableWrapper) {
     // Per the IDL for Element, only td, th, and table are acceptable
     // offsetParents apart from body or positioned elements; we need to check
     // the content type as well as the frame type so we ignore anonymous tables
@@ -740,11 +736,6 @@ void nsGenericHTMLElement::AfterSetPopoverAttr() {
     }
 
     if (newState == PopoverAttributeState::None) {
-      // HidePopoverInternal above could have removed the popover from the top
-      // layer.
-      if (GetPopoverData()) {
-        OwnerDoc()->RemovePopoverFromTopLayer(*this);
-      }
       ClearPopoverData();
       RemoveStates(ElementState::POPOVER_OPEN);
     } else {
@@ -771,6 +762,8 @@ void nsGenericHTMLElement::AfterSetAttr(int32_t aNamespaceID, nsAtom* aName,
       nsContentUtils::AddScriptRunner(
           NewRunnableMethod("nsGenericHTMLElement::AfterSetPopoverAttr", this,
                             &nsGenericHTMLElement::AfterSetPopoverAttr));
+    } else if (aName == nsGkAtoms::popovertarget) {
+      ClearExplicitlySetAttrElement(nsGkAtoms::popovertarget);
     } else if (aName == nsGkAtoms::dir) {
       auto dir = Directionality::Ltr;
       // A boolean tracking whether we need to recompute our directionality.
@@ -2865,18 +2858,6 @@ void nsGenericHTMLFormControlElementWithState::HandlePopoverTargetAction() {
   } else if (shouldShow) {
     target->ShowPopoverInternal(this, IgnoreErrors());
   }
-#ifdef ACCESSIBILITY
-  // Notify the accessibility service about the change.
-  if (shouldHide || shouldShow) {
-    if (RefPtr<Document> doc = GetComposedDoc()) {
-      if (PresShell* presShell = doc->GetPresShell()) {
-        if (nsAccessibilityService* accService = GetAccService()) {
-          accService->PopovertargetMaybeChanged(presShell, this);
-        }
-      }
-    }
-  }
-#endif
 }
 
 void nsGenericHTMLFormControlElementWithState::GetInvokeAction(
@@ -3418,7 +3399,7 @@ void nsGenericHTMLElement::ShowPopoverInternal(Element* aInvoker,
   nsWeakPtr originallyFocusedElement;
   if (IsAutoPopover()) {
     auto originalState = GetPopoverAttributeState();
-    RefPtr<nsINode> ancestor = GetTopmostPopoverAncestor(aInvoker);
+    RefPtr<nsINode> ancestor = GetTopmostPopoverAncestor(aInvoker, true);
     if (!ancestor) {
       ancestor = document;
     }

@@ -5,11 +5,6 @@
 
 // Test edge cases for engagement.
 
-Services.scriptloader.loadSubScript(
-  "chrome://mochitests/content/browser/browser/components/urlbar/tests/ext/browser/head.js",
-  this
-);
-
 add_setup(async function () {
   await setup();
 });
@@ -53,7 +48,7 @@ class AnotherHeuristicProvider extends UrlbarTestUtils.TestProvider {
   }
 
   async startQuery(context, addCallback) {
-    for (const result of this._results) {
+    for (const result of this.results) {
       addCallback(this, result);
     }
 

@@ -63,6 +63,9 @@
 #include "mozilla/ServoStyleSet.h"
 #include "mozilla/Telemetry.h"
 #include "nsFlexContainerFrame.h"
+#include "nsFileControlFrame.h"
+#include "nsMathMLContainerFrame.h"
+#include "nsSelectsAreaFrame.h"
 
 #include "nsBidiPresUtils.h"
 
@@ -1467,8 +1470,9 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
   }
 
   // Whether to apply text-wrap: balance behavior.
-  bool tryBalance = StyleText()->mTextWrap == StyleTextWrap::Balance &&
-                    !GetPrevContinuation();
+  bool tryBalance =
+      StyleText()->mTextWrapStyle == StyleTextWrapStyle::Balance &&
+      !GetPrevContinuation();
 
   // Struct used to hold the "target" number of lines or clamp position to
   // maintain when doing text-wrap: balance.
@@ -1554,8 +1558,9 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     // Do we need to start a `text-wrap: balance` iteration?
     if (tryBalance) {
       tryBalance = false;
-      // Don't try to balance an incomplete block.
-      if (!reflowStatus.IsFullyComplete()) {
+      // Don't try to balance an incomplete block, or if we had to use an
+      // overflow-wrap break position in the initial reflow.
+      if (!reflowStatus.IsFullyComplete() || trialState.mUsedOverflowWrap) {
         break;
       }
       balanceTarget.mOffset =
@@ -1592,7 +1597,7 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     // Helper to determine whether the current trial succeeded (i.e. was able
     // to fit the content into the expected number of lines).
     auto trialSucceeded = [&]() -> bool {
-      if (!reflowStatus.IsFullyComplete()) {
+      if (!reflowStatus.IsFullyComplete() || trialState.mUsedOverflowWrap) {
         return false;
       }
       if (balanceTarget.mContent) {
@@ -1622,7 +1627,7 @@ void nsBlockFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
     // If we were attempting to balance, check whether the final iteration was
     // successful, and if not, back up by one step.
     if (balanceTarget.mOffset >= 0) {
-      if (trialSucceeded()) {
+      if (!trialState.mInset || trialSucceeded()) {
         break;
       }
       trialState.ResetForBalance(-1);
@@ -1903,7 +1908,7 @@ nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
   }
 
   // Now reflow...
-  ReflowDirtyLines(state);
+  aTrialState.mUsedOverflowWrap = ReflowDirtyLines(state);
 
   // If we have a next-in-flow, and that next-in-flow has pushed floats from
   // this frame from a previous iteration of reflow, then we should not return
@@ -2828,11 +2833,12 @@ static bool LinesAreEmpty(const nsLineList& aList) {
   return true;
 }
 
-void nsBlockFrame::ReflowDirtyLines(BlockReflowState& aState) {
+bool nsBlockFrame::ReflowDirtyLines(BlockReflowState& aState) {
   bool keepGoing = true;
   bool repositionViews = false;  // should we really need this?
   bool foundAnyClears = aState.mTrailingClearFromPIF != StyleClear::None;
   bool willReflowAgain = false;
+  bool usedOverflowWrap = false;
 
 #ifdef DEBUG
   if (gNoisyReflow) {
@@ -3153,7 +3159,7 @@ void nsBlockFrame::ReflowDirtyLines(BlockReflowState& aState) {
       } else {
         // Reflow the dirty line. If it's an incremental reflow, then force
         // it to invalidate the dirty area if necessary
-        ReflowLine(aState, line, &keepGoing);
+        usedOverflowWrap |= ReflowLine(aState, line, &keepGoing);
       }
 
       if (aState.mReflowInput.WillReflowAgainForClearance()) {
@@ -3450,7 +3456,7 @@ void nsBlockFrame::ReflowDirtyLines(BlockReflowState& aState) {
         // line to be created; see SplitLine's callers for examples of
         // when this happens).
         while (line != LinesEnd()) {
-          ReflowLine(aState, line, &keepGoing);
+          usedOverflowWrap |= ReflowLine(aState, line, &keepGoing);
 
           if (aState.mReflowInput.WillReflowAgainForClearance()) {
             line->MarkDirty();
@@ -3554,6 +3560,8 @@ void nsBlockFrame::ReflowDirtyLines(BlockReflowState& aState) {
            ToString(aState.mReflowStatus).c_str());
   }
 #endif
+
+  return usedOverflowWrap;
 }
 
 void nsBlockFrame::MarkLineDirtyForInterrupt(nsLineBox* aLine) {
@@ -3614,8 +3622,9 @@ void nsBlockFrame::DeleteLine(BlockReflowState& aState,
  * Reflow a line. The line will either contain a single block frame
  * or contain 1 or more inline frames. aKeepReflowGoing indicates
  * whether or not the caller should continue to reflow more lines.
+ * Returns true if the reflow used an overflow-wrap breakpoint.
  */
-void nsBlockFrame::ReflowLine(BlockReflowState& aState, LineIterator aLine,
+bool nsBlockFrame::ReflowLine(BlockReflowState& aState, LineIterator aLine,
                               bool* aKeepReflowGoing) {
   MOZ_ASSERT(aLine->GetChildCount(), "reflowing empty line");
 
@@ -3635,15 +3644,16 @@ void nsBlockFrame::ReflowLine(BlockReflowState& aState, LineIterator aLine,
   nsIFrame* firstChild = aLine->mFirstChild;
   if (firstChild->IsHiddenByContentVisibilityOfInFlowParentForLayout() &&
       !HasAnyStateBits(NS_FRAME_OWNS_ANON_BOXES)) {
-    return;
+    return false;
   }
 
   // Now that we know what kind of line we have, reflow it
+  bool usedOverflowWrap = false;
   if (aLine->IsBlock()) {
     ReflowBlockFrame(aState, aLine, aKeepReflowGoing);
   } else {
     aLine->SetLineWrapped(false);
-    ReflowInlineFrames(aState, aLine, aKeepReflowGoing);
+    usedOverflowWrap = ReflowInlineFrames(aState, aLine, aKeepReflowGoing);
 
     // Store the line's float edges for overflow marker analysis if needed.
     aLine->ClearFloatEdges();
@@ -3666,6 +3676,8 @@ void nsBlockFrame::ReflowLine(BlockReflowState& aState, LineIterator aLine,
   }
 
   aLine->ClearMovedFragments();
+
+  return usedOverflowWrap;
 }
 
 nsIFrame* nsBlockFrame::PullFrame(BlockReflowState& aState,
@@ -4631,10 +4643,12 @@ void nsBlockFrame::ReflowBlockFrame(BlockReflowState& aState,
 #endif
 }
 
-void nsBlockFrame::ReflowInlineFrames(BlockReflowState& aState,
+// Returns true if an overflow-wrap break was used.
+bool nsBlockFrame::ReflowInlineFrames(BlockReflowState& aState,
                                       LineIterator aLine,
                                       bool* aKeepReflowGoing) {
   *aKeepReflowGoing = true;
+  bool usedOverflowWrap = false;
 
   aLine->SetLineIsImpactedByFloat(false);
 
@@ -4674,7 +4688,7 @@ void nsBlockFrame::ReflowInlineFrames(BlockReflowState& aState,
         DoReflowInlineFrames(aState, lineLayout, aLine, floatAvailableSpace,
                              availableSpaceBSize, &floatManagerState,
                              aKeepReflowGoing, &lineReflowStatus, allowPullUp);
-        lineLayout.EndLineReflow();
+        usedOverflowWrap = lineLayout.EndLineReflow();
 
         if (LineReflowStatus::RedoNoPull == lineReflowStatus ||
             LineReflowStatus::RedoMoreFloats == lineReflowStatus ||
@@ -4703,6 +4717,8 @@ void nsBlockFrame::ReflowInlineFrames(BlockReflowState& aState,
       } while (LineReflowStatus::RedoNoPull == lineReflowStatus);
     } while (LineReflowStatus::RedoMoreFloats == lineReflowStatus);
   } while (LineReflowStatus::RedoNextBand == lineReflowStatus);
+
+  return usedOverflowWrap;
 }
 
 void nsBlockFrame::SetBreakBeforeStatusBeforeLine(BlockReflowState& aState,
@@ -6409,6 +6425,44 @@ nsBlockInFlowLineIterator::nsBlockInFlowLineIterator(nsBlockFrame* aFrame,
   *aFoundValidLine = FindValidLine();
 }
 
+static bool StyleEstablishesBFC(const ComputedStyle* aStyle) {
+  // paint/layout containment boxes and multi-column containers establish an
+  // independent formatting context.
+  // https://drafts.csswg.org/css-contain/#containment-paint
+  // https://drafts.csswg.org/css-contain/#containment-layout
+  // https://drafts.csswg.org/css-multicol/#columns
+  return aStyle->StyleDisplay()->IsContainPaint() ||
+         aStyle->StyleDisplay()->IsContainLayout() ||
+         aStyle->GetPseudoType() == PseudoStyleType::columnContent;
+}
+
+void nsBlockFrame::DidSetComputedStyle(ComputedStyle* aOldStyle) {
+  nsContainerFrame::DidSetComputedStyle(aOldStyle);
+  if (!aOldStyle) {
+    return;
+  }
+
+  // If NS_BLOCK_STATIC_BFC flag was set when the frame was initialized, it
+  // remains set during the lifetime of the frame and always forces it to be
+  // treated as a BFC, independently of the value of NS_BLOCK_DYNAMIC_BFC.
+  // Consequently, we don't bother invalidating or updating that latter flag.
+  if (HasAnyStateBits(NS_BLOCK_STATIC_BFC)) {
+    return;
+  }
+
+  bool isBFC = StyleEstablishesBFC(Style());
+  if (StyleEstablishesBFC(aOldStyle) != isBFC) {
+    if (MaybeHasFloats()) {
+      // If the frame contains floats, this update may change their float
+      // manager. Be safe by dirtying all descendant lines of the nearest
+      // ancestor's float manager.
+      RemoveStateBits(NS_BLOCK_DYNAMIC_BFC);
+      MarkSameFloatManagerLinesDirty(this);
+    }
+    AddOrRemoveStateBits(NS_BLOCK_DYNAMIC_BFC, isBFC);
+  }
+}
+
 void nsBlockFrame::UpdateFirstLetterStyle(ServoRestyleState& aRestyleState) {
   nsIFrame* letterFrame = GetFirstLetter();
   if (!letterFrame) {
@@ -7708,6 +7762,26 @@ void nsBlockFrame::ChildIsDirty(nsIFrame* aChild) {
   nsContainerFrame::ChildIsDirty(aChild);
 }
 
+static bool AlwaysEstablishesBFC(const nsBlockFrame* aFrame) {
+  switch (aFrame->Type()) {
+    case LayoutFrameType::ColumnSetWrapper:
+      // CSS Multi-column level 1 section 2: A multi-column container
+      // establishes a new block formatting context, as per CSS 2.1 section
+      // 9.4.1.
+    case LayoutFrameType::ComboboxControl:
+      return true;
+    case LayoutFrameType::Block:
+      return static_cast<const nsFileControlFrame*>(do_QueryFrame(aFrame)) ||
+             // Ensure that the options inside the select aren't expanded by
+             // right floats outside the select.
+             static_cast<const nsSelectsAreaFrame*>(do_QueryFrame(aFrame)) ||
+             // See bug 1373767 and bug 353894.
+             static_cast<const nsMathMLmathBlockFrame*>(do_QueryFrame(aFrame));
+    default:
+      return false;
+  }
+}
+
 void nsBlockFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
                         nsIFrame* aPrevInFlow) {
   // These are all the block specific frame bits, they are copied from
@@ -7750,17 +7824,20 @@ void nsBlockFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
   // then it should also establish a formatting context.
   //
   // Per spec, a column-span always establishes a new block formatting context.
+  //
+  // Other more specific frame types also always establish a BFC.
+  //
   if (StyleDisplay()->mDisplay == mozilla::StyleDisplay::FlowRoot ||
       (GetParent() &&
        (GetWritingMode().GetBlockDir() !=
             GetParent()->GetWritingMode().GetBlockDir() ||
         GetWritingMode().IsVerticalSideways() !=
             GetParent()->GetWritingMode().IsVerticalSideways())) ||
-      IsColumnSpan()) {
+      IsColumnSpan() || AlwaysEstablishesBFC(this)) {
     AddStateBits(NS_BLOCK_STATIC_BFC);
   }
 
-  if (IsDynamicBFC()) {
+  if (StyleEstablishesBFC(Style())) {
     AddStateBits(NS_BLOCK_DYNAMIC_BFC);
   }
 

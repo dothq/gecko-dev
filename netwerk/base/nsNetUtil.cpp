@@ -610,7 +610,7 @@ nsresult NS_GetIsDocumentChannel(nsIChannel* aChannel, bool* aIsDocument) {
   if (NS_FAILED(rv)) {
     return rv;
   }
-  if (nsContentUtils::HtmlObjectContentTypeForMIMEType(mimeType, false) ==
+  if (nsContentUtils::HtmlObjectContentTypeForMIMEType(mimeType) ==
       nsIObjectLoadingContent::TYPE_DOCUMENT) {
     *aIsDocument = true;
     return NS_OK;
@@ -1862,18 +1862,10 @@ nsresult NS_NewURI(nsIURI** aURI, const nsACString& aSpec,
   }
 
   if (scheme.EqualsLiteral("file")) {
-    nsAutoCString buf(aSpec);
-#if defined(XP_WIN)
-    buf.Truncate();
-    if (!net_NormalizeFileURL(aSpec, buf)) {
-      buf = aSpec;
-    }
-#endif
-
     return NS_MutateURI(new nsStandardURL::Mutator())
         .Apply(&nsIFileURLMutator::MarkFileURL)
         .Apply(&nsIStandardURLMutator::Init,
-               nsIStandardURL::URLTYPE_NO_AUTHORITY, -1, buf, aCharset,
+               nsIStandardURL::URLTYPE_NO_AUTHORITY, -1, aSpec, aCharset,
                aBaseURI, nullptr)
         .Finalize(aURI);
   }
@@ -1884,7 +1876,7 @@ nsresult NS_NewURI(nsIURI** aURI, const nsACString& aSpec,
 
   if (scheme.EqualsLiteral("moz-safe-about") ||
       scheme.EqualsLiteral("page-icon") || scheme.EqualsLiteral("moz") ||
-      scheme.EqualsLiteral("moz-anno")) {
+      scheme.EqualsLiteral("cached-favicon")) {
     return NS_MutateURI(new nsSimpleURI::Mutator())
         .SetSpec(aSpec)
         .Finalize(aURI);

@@ -36,6 +36,7 @@
 #include "mozilla/intl/LocaleService.h"
 #include "mozilla/JSONWriter.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/glean/GleanPings.h"
 #include "mozilla/widget/TextRecognition.h"
 #include "BaseProfiler.h"
@@ -544,7 +545,6 @@ bool gFxREmbedded = false;
 
 enum E10sStatus {
   kE10sEnabledByDefault,
-  kE10sDisabledByUser,
   kE10sForceDisabled,
 };
 
@@ -566,43 +566,18 @@ bool BrowserTabsRemoteAutostart() {
     return gBrowserTabsRemoteAutostart;
   }
 
-#if defined(MOZILLA_OFFICIAL) && MOZ_BUILD_APP_IS_BROWSER
-  bool allowSingleProcessOutsideAutomation = false;
-#else
-  bool allowSingleProcessOutsideAutomation = true;
-#endif
-
+  gBrowserTabsRemoteAutostart = true;
   E10sStatus status = kE10sEnabledByDefault;
+
   // We use "are non-local connections disabled" as a proxy for
   // "are we running some kind of automated test". It would be nicer to use
   // xpc::IsInAutomation(), but that depends on some prefs being set, which
   // they are not in (at least) gtests (where we can't) and xpcshell.
-  // Long-term, hopefully we can make tests switch to environment variables
-  // to disable e10s and then we can get rid of this.
-  if (allowSingleProcessOutsideAutomation ||
-      xpc::AreNonLocalConnectionsDisabled()) {
-    bool optInPref =
-        Preferences::GetBool("browser.tabs.remote.autostart", true);
-
-    if (optInPref) {
-      gBrowserTabsRemoteAutostart = true;
-    } else {
-      status = kE10sDisabledByUser;
-    }
-  } else {
-    gBrowserTabsRemoteAutostart = true;
-  }
-
-  // Uber override pref for emergency blocking
-  if (gBrowserTabsRemoteAutostart) {
+  // Long-term, hopefully we can make all tests e10s-friendly,
+  // then we could remove this automation-only env variable.
+  if (gBrowserTabsRemoteAutostart && xpc::AreNonLocalConnectionsDisabled()) {
     const char* forceDisable = PR_GetEnv("MOZ_FORCE_DISABLE_E10S");
-#if defined(MOZ_WIDGET_ANDROID)
-    // We need this for xpcshell on Android
-    if (forceDisable && *forceDisable) {
-#else
-    // The environment variable must match the application version to apply.
-    if (forceDisable && gAppData && !strcmp(forceDisable, gAppData->version)) {
-#endif
+    if (forceDisable && *forceDisable == '1') {
       gBrowserTabsRemoteAutostart = false;
       status = kE10sForceDisabled;
     }
@@ -4579,7 +4554,7 @@ bool XREMain::CheckLastStartupWasCrash() {
   // the startup crash detection window.
   AutoFDClose fd;
   Unused << crashFile.inspect()->OpenNSPRFileDesc(
-      PR_WRONLY | PR_CREATE_FILE | PR_EXCL, 0666, &fd.rwget());
+      PR_WRONLY | PR_CREATE_FILE | PR_EXCL, 0666, getter_Transfers(fd));
   return !fd;
 }
 
@@ -5401,10 +5376,6 @@ nsresult XREMain::XRE_mainRun() {
       }
     }
 
-#ifdef XP_MACOSX
-    InitializeMacApp();
-#endif
-
     // We'd like to initialize the JSContext *after* reading the user prefs.
     // Unfortunately that's not possible if we have to do profile migration
     // because that requires us to execute JS before reading user prefs.
@@ -5431,6 +5402,10 @@ nsresult XREMain::XRE_mainRun() {
             aKey = MOZ_APP_NAME;
             gResetOldProfile->GetName(aName);
           }
+#ifdef XP_MACOSX
+          // Necessary for migration wizard to be accessible.
+          InitializeMacApp();
+#endif
           pm->Migrate(&mDirProvider, aKey, aName);
         }
       }
@@ -5616,6 +5591,8 @@ nsresult XREMain::XRE_mainRun() {
 #endif
 
 #ifdef XP_MACOSX
+      InitializeMacApp();
+
       // we re-initialize the command-line service and do appleevents munging
       // after we are sure that we're not restarting
       cmdLine = new nsCommandLine();
@@ -5680,10 +5657,8 @@ nsresult XREMain::XRE_mainRun() {
 #endif /* MOZ_INSTRUMENT_EVENT_LOOP */
 
     // Send Telemetry about Gecko version and buildid
-    Telemetry::ScalarSet(Telemetry::ScalarID::GECKO_VERSION,
-                         NS_ConvertASCIItoUTF16(gAppData->version));
-    Telemetry::ScalarSet(Telemetry::ScalarID::GECKO_BUILD_ID,
-                         NS_ConvertASCIItoUTF16(gAppData->buildID));
+    mozilla::glean::gecko::version.Set(nsDependentCString(gAppData->version));
+    mozilla::glean::gecko::build_id.Set(nsDependentCString(gAppData->buildID));
 
 #if defined(MOZ_SANDBOX) && defined(XP_LINUX)
     // If we're on Linux, we now have information about the OS capabilities
@@ -5840,7 +5815,10 @@ int XREMain::XRE_main(int argc, char* argv[], const BootstrapConfig& aConfig) {
     appini->GetParent(getter_AddRefs(mAppData->directory));
   }
 
-  if (!mAppData->remotingName) {
+  const char* appRemotingName = getenv("MOZ_APP_REMOTINGNAME");
+  if (appRemotingName) {
+    mAppData->remotingName = appRemotingName;
+  } else if (!mAppData->remotingName) {
     mAppData->remotingName = mAppData->name;
   }
   // used throughout this file

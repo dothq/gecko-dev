@@ -2152,8 +2152,9 @@ FaultingCodeOffset MacroAssemblerARMCompat::storePtr(Register src,
   return ma_str(src, address, scratch2);
 }
 
-void MacroAssemblerARMCompat::storePtr(Register src, const BaseIndex& address) {
-  store32(src, address);
+FaultingCodeOffset MacroAssemblerARMCompat::storePtr(Register src,
+                                                     const BaseIndex& address) {
+  return store32(src, address);
 }
 
 void MacroAssemblerARMCompat::storePtr(Register src, AbsoluteAddress dest) {
@@ -3439,11 +3440,17 @@ void MacroAssemblerARMCompat::handleFailureWithHandlerTail(
   }
   jump(r0);
 
-  // If we found a finally block, this must be a baseline frame. Push two
-  // values expected by the finally block: the exception and BooleanValue(true).
+  // If we found a finally block, this must be a baseline frame. Push three
+  // values expected by the finally block: the exception, the exception stack,
+  // and BooleanValue(true).
   bind(&finally);
   ValueOperand exception = ValueOperand(r1, r2);
   loadValue(Operand(sp, ResumeFromException::offsetOfException()), exception);
+
+  ValueOperand exceptionStack = ValueOperand(r3, r4);
+  loadValue(Operand(sp, ResumeFromException::offsetOfExceptionStack()),
+            exceptionStack);
+
   {
     ScratchRegisterScope scratch(asMasm());
     ma_ldr(Address(sp, ResumeFromException::offsetOfTarget()), r0, scratch);
@@ -3454,6 +3461,7 @@ void MacroAssemblerARMCompat::handleFailureWithHandlerTail(
   }
 
   pushValue(exception);
+  pushValue(exceptionStack);
   pushValue(BooleanValue(true));
   jump(r0);
 
@@ -5926,11 +5934,13 @@ inline void EmitRemainderOrQuotient(bool isRemainder, MacroAssembler& masm,
       masm.quotient32(rhs, lhsOutput, isUnsigned);
     }
   } else {
-    // Ensure that the output registers are saved and restored properly,
-    MOZ_ASSERT(volatileLiveRegs.has(ReturnRegVal0));
-    MOZ_ASSERT(volatileLiveRegs.has(ReturnRegVal1));
+    // Ensure that the output registers are saved and restored properly.
+    LiveRegisterSet liveRegs = volatileLiveRegs;
+    liveRegs.addUnchecked(ReturnRegVal0);
+    liveRegs.addUnchecked(ReturnRegVal1);
 
-    masm.PushRegsInMask(volatileLiveRegs);
+    masm.PushRegsInMask(liveRegs);
+
     using Fn = int64_t (*)(int, int);
     {
       ScratchRegisterScope scratch(masm);
@@ -5953,7 +5963,7 @@ inline void EmitRemainderOrQuotient(bool isRemainder, MacroAssembler& masm,
 
     LiveRegisterSet ignore;
     ignore.add(lhsOutput);
-    masm.PopRegsInMaskIgnore(volatileLiveRegs, ignore);
+    masm.PopRegsInMaskIgnore(liveRegs, ignore);
   }
 }
 
@@ -5982,10 +5992,12 @@ void MacroAssembler::flexibleDivMod32(Register rhs, Register lhsOutput,
     remainder32(rhs, remOutput, isUnsigned);
     quotient32(rhs, lhsOutput, isUnsigned);
   } else {
-    // Ensure that the output registers are saved and restored properly,
-    MOZ_ASSERT(volatileLiveRegs.has(ReturnRegVal0));
-    MOZ_ASSERT(volatileLiveRegs.has(ReturnRegVal1));
-    PushRegsInMask(volatileLiveRegs);
+    // Ensure that the output registers are saved and restored properly.
+    LiveRegisterSet liveRegs = volatileLiveRegs;
+    liveRegs.addUnchecked(ReturnRegVal0);
+    liveRegs.addUnchecked(ReturnRegVal1);
+
+    PushRegsInMask(liveRegs);
 
     using Fn = int64_t (*)(int, int);
     {
@@ -6006,7 +6018,7 @@ void MacroAssembler::flexibleDivMod32(Register rhs, Register lhsOutput,
     LiveRegisterSet ignore;
     ignore.add(remOutput);
     ignore.add(lhsOutput);
-    PopRegsInMaskIgnore(volatileLiveRegs, ignore);
+    PopRegsInMaskIgnore(liveRegs, ignore);
   }
 }
 

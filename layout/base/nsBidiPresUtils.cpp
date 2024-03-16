@@ -997,10 +997,12 @@ nsresult nsBidiPresUtils::ResolveParagraph(BidiParagraphData* aBpd) {
       if (++numRun >= runCount) {
         // We've run out of runs of text; but don't forget to store bidi data
         // to the frame before breaking out of the loop (bug 1426042).
-        storeBidiDataToFrame();
-        if (isTextFrame) {
-          frame->AdjustOffsetsForBidi(contentOffset,
-                                      contentOffset + fragmentLength);
+        if (frame != NS_BIDI_CONTROL_FRAME) {
+          storeBidiDataToFrame();
+          if (isTextFrame) {
+            frame->AdjustOffsetsForBidi(contentOffset,
+                                        contentOffset + fragmentLength);
+          }
         }
         break;
       }
@@ -2361,6 +2363,12 @@ void nsBidiPresUtils::ProcessSimpleRun(const char16_t* aText, size_t aLength,
                                        nsBidiPositionResolve* aPosResolve,
                                        int32_t aPosResolveCount,
                                        nscoord* aWidth) {
+  if (!aLength) {
+    if (aWidth) {
+      *aWidth = 0;
+    }
+    return;
+  }
   // Get bidi class from the first (or only) character.
   uint32_t ch = aText[0];
   if (aLength > 1 && NS_IS_HIGH_SURROGATE(ch) &&

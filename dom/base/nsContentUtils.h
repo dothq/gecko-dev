@@ -230,6 +230,8 @@ enum EventNameType {
   EventNameType_All = 0xFFFF
 };
 
+enum class TreeKind : uint8_t { DOM, Flat };
+
 struct EventNameMapping {
   // This holds pointers to nsGkAtoms members, and is therefore safe as a
   // non-owning reference.
@@ -3175,10 +3177,8 @@ class nsContentUtils {
    * take that into account.
    *
    * @param aMIMEType  The MIME type of the document being loaded.
-   * @param aNoFakePlugin  If false then this method should consider JS plugins.
    */
-  static uint32_t HtmlObjectContentTypeForMIMEType(const nsCString& aMIMEType,
-                                                   bool aNoFakePlugin);
+  static uint32_t HtmlObjectContentTypeForMIMEType(const nsCString& aMIMEType);
 
   /**
    * Detect whether a string is a local-url.
@@ -3383,19 +3383,6 @@ class nsContentUtils {
                               OriginFormat aFormat = OriginFormat::Base64);
 
   /**
-   * Return true if we should hide the synthetic browsing context for <object>
-   * or <embed> images in synthetic documents.
-   */
-  static bool ShouldHideObjectOrEmbedImageDocument();
-
-  /**
-   * Returns the object type that the object loading content will actually use
-   * to load the resource. Used for ORB and loading images into synthetic
-   * documents.
-   */
-  static uint32_t ResolveObjectType(uint32_t aType);
-
-  /**
    * Create and load the string bundle for the 'aFile'.
    * This API is used to preload the string bundle on the main thread so later
    * other thread could access it.
@@ -3433,31 +3420,21 @@ class nsContentUtils {
   static bool IsExternalProtocol(nsIURI* aURI);
 
   /**
-   * Add an element to a list, keeping the list sorted by tree order.
-   * Can take a potential ancestor of the elements in order to speed up
-   * tree-order comparisons, if such an ancestor exists.
-   * Returns true if the element is appended to the end of the list.
-   */
-  template <typename ElementType, typename ElementPtr>
-  static bool AddElementToListByTreeOrder(nsTArray<ElementType>& aList,
-                                          ElementPtr aChild,
-                                          nsIContent* aCommonAncestor);
-
-  /**
-   * Compares the position of aContent1 and aContent2 in the document
-   * @param aContent1 First content to compare.
-   * @param aContent2 Second content to compare.
+   * Compares the position of aNode1 and aNode2 in the document
+   * @param aNode1 First content to compare.
+   * @param aNode2 Second content to compare.
    * @param aCommonAncestor Potential ancestor of the contents, if one exists.
    *                        This is only a hint; if it's not an ancestor of
-   *                        aContent1 or aContent2, this function will still
-   *                        work, but it will be slower than normal.
-   * @return < 0 if aContent1 is before aContent2,
-   *         > 0 if aContent1 is after aContent2,
+   *                        aNode1 or aNode2, this function will still
+   *                        work, but it will be slower.
+   * @return < 0 if aNode1 is before aNode2,
+   *         > 0 if aNode1 is after aNode2,
    *         0 otherwise
    */
-  static int32_t CompareTreePosition(nsIContent* aContent1,
-                                     nsIContent* aContent2,
-                                     const nsIContent* aCommonAncestor);
+  template <TreeKind>
+  static int32_t CompareTreePosition(const nsINode* aNode1,
+                                     const nsINode* aNode2,
+                                     const nsINode* aCommonAncestor);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   static nsIContent* AttachDeclarativeShadowRoot(

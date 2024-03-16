@@ -1071,26 +1071,13 @@ void LIRGenerator::visitTest(MTest* test) {
   if (opd->isWasmRefIsSubtypeOfAbstract() && opd->isEmittedAtUses()) {
     MWasmRefIsSubtypeOfAbstract* isSubTypeOf =
         opd->toWasmRefIsSubtypeOfAbstract();
-    LAllocation ref = useRegister(isSubTypeOf->ref());
-    LDefinition scratch1 = LDefinition();
-    if (isSubTypeOf->destType().isAnyHierarchy()) {
-      // As in visitWasmRefIsSubtypeOfAbstract, we know we do not need
-      // scratch2 and superSTV because we know this is not a
-      // concrete type.
-      scratch1 = MacroAssembler::needScratch1ForBranchWasmRefIsSubtypeAny(
-                     isSubTypeOf->destType())
-                     ? temp()
-                     : LDefinition();
-    } else if (isSubTypeOf->destType().isFuncHierarchy() ||
-               isSubTypeOf->destType().isExternHierarchy()) {
-      // scratch1 is not necessary for abstract casts in other hierarchies
-    } else {
-      MOZ_CRASH("unknown type hierarchy when folding abstract casts");
-    }
 
+    LAllocation ref = useRegister(isSubTypeOf->ref());
+    WasmRefIsSubtypeDefs regs =
+        useWasmRefIsSubtype(isSubTypeOf->destType(), /*superSTV=*/nullptr);
     add(new (alloc()) LWasmRefIsSubtypeOfAbstractAndBranch(
             ifTrue, ifFalse, isSubTypeOf->sourceType(), isSubTypeOf->destType(),
-            ref, scratch1),
+            ref, regs.scratch1),
         test);
     return;
   }
@@ -1098,34 +1085,13 @@ void LIRGenerator::visitTest(MTest* test) {
   if (opd->isWasmRefIsSubtypeOfConcrete() && opd->isEmittedAtUses()) {
     MWasmRefIsSubtypeOfConcrete* isSubTypeOf =
         opd->toWasmRefIsSubtypeOfConcrete();
-    LAllocation ref = useRegister(isSubTypeOf->ref());
-    LAllocation superSTV = useRegister(isSubTypeOf->superSTV());
-    LDefinition scratch1 = LDefinition();
-    LDefinition scratch2 = LDefinition();
-    if (isSubTypeOf->destType().isAnyHierarchy()) {
-      // As in visitWasmRefIsSubtypeOfConcrete, we know we need scratch1 because
-      // we know this is a concrete type.
-      scratch1 = temp();
-      scratch2 = MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeAny(
-                     isSubTypeOf->destType())
-                     ? temp()
-                     : LDefinition();
-    } else if (isSubTypeOf->destType().isFuncHierarchy()) {
-      // As in visitWasmRefIsSubtypeOfConcrete again...
-      scratch1 = temp();
-      scratch2 = MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeFunc(
-                     isSubTypeOf->destType())
-                     ? temp()
-                     : LDefinition();
-    } else if (isSubTypeOf->destType().isExternHierarchy()) {
-      MOZ_CRASH("concrete casts are not possible in the extern hierarchy");
-    } else {
-      MOZ_CRASH("unknown type hierarchy when folding abstract casts");
-    }
 
+    LAllocation ref = useRegister(isSubTypeOf->ref());
+    WasmRefIsSubtypeDefs regs =
+        useWasmRefIsSubtype(isSubTypeOf->destType(), isSubTypeOf->superSTV());
     add(new (alloc()) LWasmRefIsSubtypeOfConcreteAndBranch(
             ifTrue, ifFalse, isSubTypeOf->sourceType(), isSubTypeOf->destType(),
-            ref, superSTV, scratch1, scratch2),
+            ref, regs.superSTV, regs.scratch1, regs.scratch2),
         test);
     return;
   }
@@ -2478,6 +2444,32 @@ void LIRGenerator::visitLinearizeForCharAccess(MLinearizeForCharAccess* ins) {
   assignSafepoint(lir, ins);
 }
 
+void LIRGenerator::visitLinearizeForCodePointAccess(
+    MLinearizeForCodePointAccess* ins) {
+  MDefinition* str = ins->string();
+  MDefinition* idx = ins->index();
+
+  MOZ_ASSERT(str->type() == MIRType::String);
+  MOZ_ASSERT(idx->type() == MIRType::Int32);
+
+  auto* lir = new (alloc())
+      LLinearizeForCodePointAccess(useRegister(str), useRegister(idx), temp());
+  define(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitToRelativeStringIndex(MToRelativeStringIndex* ins) {
+  MDefinition* index = ins->index();
+  MDefinition* length = ins->length();
+
+  MOZ_ASSERT(index->type() == MIRType::Int32);
+  MOZ_ASSERT(length->type() == MIRType::Int32);
+
+  auto* lir = new (alloc())
+      LToRelativeStringIndex(useRegister(index), useRegister(length));
+  define(lir, ins);
+}
+
 void LIRGenerator::visitCharCodeAt(MCharCodeAt* ins) {
   MDefinition* str = ins->string();
   MDefinition* idx = ins->index();
@@ -2504,10 +2496,43 @@ void LIRGenerator::visitCharCodeAtOrNegative(MCharCodeAtOrNegative* ins) {
   assignSafepoint(lir, ins);
 }
 
+void LIRGenerator::visitCodePointAt(MCodePointAt* ins) {
+  MDefinition* str = ins->string();
+  MDefinition* idx = ins->index();
+
+  MOZ_ASSERT(str->type() == MIRType::String);
+  MOZ_ASSERT(idx->type() == MIRType::Int32);
+
+  auto* lir = new (alloc())
+      LCodePointAt(useRegister(str), useRegister(idx), temp(), temp());
+  define(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitCodePointAtOrNegative(MCodePointAtOrNegative* ins) {
+  MDefinition* str = ins->string();
+  MDefinition* idx = ins->index();
+
+  MOZ_ASSERT(str->type() == MIRType::String);
+  MOZ_ASSERT(idx->type() == MIRType::Int32);
+
+  auto* lir = new (alloc()) LCodePointAtOrNegative(
+      useRegister(str), useRegister(idx), temp(), temp());
+  define(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
 void LIRGenerator::visitNegativeToNaN(MNegativeToNaN* ins) {
   MOZ_ASSERT(ins->input()->type() == MIRType::Int32);
 
   auto* lir = new (alloc()) LNegativeToNaN(useRegister(ins->input()));
+  defineBox(lir, ins);
+}
+
+void LIRGenerator::visitNegativeToUndefined(MNegativeToUndefined* ins) {
+  MOZ_ASSERT(ins->input()->type() == MIRType::Int32);
+
+  auto* lir = new (alloc()) LNegativeToUndefined(useRegister(ins->input()));
   defineBox(lir, ins);
 }
 
@@ -2529,6 +2554,17 @@ void LIRGenerator::visitFromCharCodeEmptyIfNegative(
 
   auto* lir = new (alloc()) LFromCharCodeEmptyIfNegative(useRegister(code));
   define(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitFromCharCodeUndefinedIfNegative(
+    MFromCharCodeUndefinedIfNegative* ins) {
+  MDefinition* code = ins->code();
+
+  MOZ_ASSERT(code->type() == MIRType::Int32);
+
+  auto* lir = new (alloc()) LFromCharCodeUndefinedIfNegative(useRegister(code));
+  defineBox(lir, ins);
   assignSafepoint(lir, ins);
 }
 
@@ -5077,6 +5113,15 @@ void LIRGenerator::visitMegamorphicHasProp(MMegamorphicHasProp* ins) {
   defineReturn(lir, ins);
 }
 
+void LIRGenerator::visitSmallObjectVariableKeyHasProp(
+    MSmallObjectVariableKeyHasProp* ins) {
+  MOZ_ASSERT(ins->idStr()->type() == MIRType::String);
+  auto* lir = new (alloc())
+      LSmallObjectVariableKeyHasProp(useRegisterAtStart(ins->idStr()));
+  define(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
 void LIRGenerator::visitGuardIsNotArrayBufferMaybeShared(
     MGuardIsNotArrayBufferMaybeShared* ins) {
   MOZ_ASSERT(ins->object()->type() == MIRType::Object);
@@ -5093,6 +5138,17 @@ void LIRGenerator::visitGuardIsTypedArray(MGuardIsTypedArray* ins) {
 
   auto* lir =
       new (alloc()) LGuardIsTypedArray(useRegister(ins->object()), temp());
+  assignSnapshot(lir, ins->bailoutKind());
+  add(lir, ins);
+  redefine(ins, ins->object());
+}
+
+void LIRGenerator::visitGuardIsFixedLengthTypedArray(
+    MGuardIsFixedLengthTypedArray* ins) {
+  MOZ_ASSERT(ins->object()->type() == MIRType::Object);
+
+  auto* lir = new (alloc())
+      LGuardIsFixedLengthTypedArray(useRegister(ins->object()), temp());
   assignSnapshot(lir, ins->bailoutKind());
   add(lir, ins);
   redefine(ins, ins->object());
@@ -5405,18 +5461,32 @@ void LIRGenerator::visitNewTarget(MNewTarget* ins) {
 void LIRGenerator::visitRest(MRest* ins) {
   MOZ_ASSERT(ins->numActuals()->type() == MIRType::Int32);
 
-  LRest* lir = new (alloc())
-      LRest(useRegisterAtStart(ins->numActuals()), tempFixed(CallTempReg0),
-            tempFixed(CallTempReg1), tempFixed(CallTempReg2));
+  LRest* lir =
+      new (alloc()) LRest(useRegisterAtStart(ins->numActuals()),
+                          tempFixed(CallTempReg0), tempFixed(CallTempReg1),
+                          tempFixed(CallTempReg2), tempFixed(CallTempReg3));
   defineReturn(lir, ins);
   assignSafepoint(lir, ins);
 }
 
 void LIRGenerator::visitThrow(MThrow* ins) {
-  MDefinition* value = ins->getOperand(0);
+  MDefinition* value = ins->value();
   MOZ_ASSERT(value->type() == MIRType::Value);
 
   LThrow* lir = new (alloc()) LThrow(useBoxAtStart(value));
+  add(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitThrowWithStack(MThrowWithStack* ins) {
+  MDefinition* value = ins->value();
+  MOZ_ASSERT(value->type() == MIRType::Value);
+
+  MDefinition* stack = ins->stack();
+  MOZ_ASSERT(stack->type() == MIRType::Value);
+
+  auto* lir =
+      new (alloc()) LThrowWithStack(useBoxAtStart(value), useBoxAtStart(stack));
   add(lir, ins);
   assignSafepoint(lir, ins);
 }
@@ -5909,11 +5979,23 @@ void LIRGenerator::visitWasmStoreRef(MWasmStoreRef* ins) {
       ins);
 }
 
-void LIRGenerator::visitWasmPostWriteBarrier(MWasmPostWriteBarrier* ins) {
-  LWasmPostWriteBarrier* lir = new (alloc()) LWasmPostWriteBarrier(
+void LIRGenerator::visitWasmPostWriteBarrierImmediate(
+    MWasmPostWriteBarrierImmediate* ins) {
+  LWasmPostWriteBarrierImmediate* lir =
+      new (alloc()) LWasmPostWriteBarrierImmediate(
+          useFixed(ins->instance(), InstanceReg), useRegister(ins->object()),
+          useRegister(ins->valueBase()), useRegister(ins->value()), temp(),
+          ins->valueOffset());
+  add(lir, ins);
+  assignWasmSafepoint(lir);
+}
+
+void LIRGenerator::visitWasmPostWriteBarrierIndex(
+    MWasmPostWriteBarrierIndex* ins) {
+  LWasmPostWriteBarrierIndex* lir = new (alloc()) LWasmPostWriteBarrierIndex(
       useFixed(ins->instance(), InstanceReg), useRegister(ins->object()),
-      useRegister(ins->valueBase()), useRegister(ins->value()), temp(),
-      ins->valueOffset());
+      useRegister(ins->valueBase()), useRegister(ins->index()),
+      useRegister(ins->value()), temp(), ins->elemSize());
   add(lir, ins);
   assignWasmSafepoint(lir);
 }
@@ -6405,7 +6487,15 @@ void LIRGenerator::visitGenerator(MGenerator* ins) {
 
 void LIRGenerator::visitAsyncResolve(MAsyncResolve* ins) {
   auto* lir = new (alloc()) LAsyncResolve(useRegisterAtStart(ins->generator()),
-                                          useBoxAtStart(ins->valueOrReason()));
+                                          useBoxAtStart(ins->value()));
+  defineReturn(lir, ins);
+  assignSafepoint(lir, ins);
+}
+
+void LIRGenerator::visitAsyncReject(MAsyncReject* ins) {
+  auto* lir = new (alloc())
+      LAsyncReject(useRegisterAtStart(ins->generator()),
+                   useBoxAtStart(ins->reason()), useBoxAtStart(ins->stack()));
   defineReturn(lir, ins);
   assignSafepoint(lir, ins);
 }
@@ -7359,6 +7449,25 @@ void LIRGenerator::visitWasmLoadFieldKA(MWasmLoadFieldKA* ins) {
   add(new (alloc()) LKeepAliveObject(useKeepalive(ins->ka())), ins);
 }
 
+void LIRGenerator::visitWasmLoadElementKA(MWasmLoadElementKA* ins) {
+  LAllocation base = useRegister(ins->base());
+  LAllocation index = useRegister(ins->index());
+  MWideningOp wideningOp = ins->wideningOp();
+  Scale scale = ins->scale();
+  if (ins->type() == MIRType::Int64) {
+    MOZ_RELEASE_ASSERT(wideningOp == MWideningOp::None);
+    defineInt64(
+        new (alloc()) LWasmLoadElementI64(base, index, ins->maybeTrap()), ins);
+  } else {
+    LDefinition tmp =
+        ins->type() == MIRType::Simd128 ? temp() : LDefinition::BogusTemp();
+    define(new (alloc()) LWasmLoadElement(base, index, tmp, ins->type(),
+                                          wideningOp, scale, ins->maybeTrap()),
+           ins);
+  }
+  add(new (alloc()) LKeepAliveObject(useKeepalive(ins->ka())), ins);
+}
+
 void LIRGenerator::visitWasmStoreFieldKA(MWasmStoreFieldKA* ins) {
   MDefinition* value = ins->value();
   uint32_t offs = ins->offset();
@@ -7389,6 +7498,54 @@ void LIRGenerator::visitWasmStoreFieldRefKA(MWasmStoreFieldRefKA* ins) {
   add(new (alloc()) LKeepAliveObject(useKeepalive(ins->ka())), ins);
 }
 
+void LIRGenerator::visitWasmStoreElementKA(MWasmStoreElementKA* ins) {
+  LAllocation base = useRegister(ins->base());
+  LAllocation index = useRegister(ins->index());
+  MDefinition* value = ins->value();
+  MNarrowingOp narrowingOp = ins->narrowingOp();
+  Scale scale = ins->scale();
+  LInstruction* lir;
+  if (value->type() == MIRType::Int64) {
+    MOZ_RELEASE_ASSERT(narrowingOp == MNarrowingOp::None);
+    lir = new (alloc()) LWasmStoreElementI64(
+        base, index, useInt64Register(value), ins->maybeTrap());
+  } else {
+    LDefinition tmp =
+        value->type() == MIRType::Simd128 ? temp() : LDefinition::BogusTemp();
+    lir = new (alloc())
+        LWasmStoreElement(base, index, useRegister(value), tmp, value->type(),
+                          narrowingOp, scale, ins->maybeTrap());
+  }
+  add(lir, ins);
+  add(new (alloc()) LKeepAliveObject(useKeepalive(ins->ka())), ins);
+}
+
+void LIRGenerator::visitWasmStoreElementRefKA(MWasmStoreElementRefKA* ins) {
+  LAllocation instance = useRegister(ins->instance());
+  LAllocation base = useFixed(ins->base(), PreBarrierReg);
+  LAllocation index = useRegister(ins->index());
+  LAllocation value = useRegister(ins->value());
+  bool needTemps = ins->preBarrierKind() == WasmPreBarrierKind::Normal;
+  LDefinition temp0 = needTemps ? temp() : LDefinition::BogusTemp();
+  LDefinition temp1 = needTemps ? temp() : LDefinition::BogusTemp();
+  add(new (alloc())
+          LWasmStoreElementRef(instance, base, index, value, temp0, temp1,
+                               ins->maybeTrap(), ins->preBarrierKind()),
+      ins);
+  add(new (alloc()) LKeepAliveObject(useKeepalive(ins->ka())), ins);
+}
+
+WasmRefIsSubtypeDefs LIRGenerator::useWasmRefIsSubtype(wasm::RefType destType,
+                                                       MDefinition* superSTV) {
+  BranchWasmRefIsSubtypeRegisters needs =
+      MacroAssembler::regsForBranchWasmRefIsSubtype(destType);
+  return WasmRefIsSubtypeDefs{
+      .superSTV = needs.needSuperSTV ? useRegister(superSTV) : LAllocation(),
+      .scratch1 = needs.needScratch1 ? temp() : LDefinition(),
+      .scratch2 = needs.needScratch2 ? temp() : LDefinition(),
+  };
+}
+
 void LIRGenerator::visitWasmRefIsSubtypeOfAbstract(
     MWasmRefIsSubtypeOfAbstract* ins) {
   if (CanEmitAtUseForSingleTest(ins)) {
@@ -7397,36 +7554,9 @@ void LIRGenerator::visitWasmRefIsSubtypeOfAbstract(
   }
 
   LAllocation ref = useRegister(ins->ref());
-  LDefinition scratch1 = LDefinition();
-  if (ins->destType().isAnyHierarchy()) {
-    // See comment on MacroAssembler::branchWasmRefIsSubtypeAny.
-    // We know we do not need scratch2 and superSTV because we know
-    // this is not a concrete type.
-    MOZ_ASSERT(!MacroAssembler::needSuperSTVForBranchWasmRefIsSubtypeAny(
-        ins->destType()));
-    MOZ_ASSERT(!MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeAny(
-        ins->destType()));
-
-    scratch1 = MacroAssembler::needScratch1ForBranchWasmRefIsSubtypeAny(
-                   ins->destType())
-                   ? temp()
-                   : LDefinition();
-  } else if (ins->destType().isFuncHierarchy()) {
-    // See comment on MacroAssembler::branchWasmRefIsSubtypeFunc.
-    // We know we do not need any supertype vectors or scratch registers because
-    // this is not a concrete cast.
-    MOZ_ASSERT(
-        !MacroAssembler::needSuperSTVAndScratch1ForBranchWasmRefIsSubtypeFunc(
-            ins->destType()));
-    MOZ_ASSERT(!MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeFunc(
-        ins->destType()));
-  } else if (ins->destType().isExternHierarchy()) {
-    // no scratch registers needed for casts in the extern hierarchy
-  } else {
-    MOZ_CRASH("unknown type hierarchy for abstract cast");
-  }
-
-  define(new (alloc()) LWasmRefIsSubtypeOfAbstract(ref, scratch1), ins);
+  WasmRefIsSubtypeDefs regs =
+      useWasmRefIsSubtype(ins->destType(), /*superSTV=*/nullptr);
+  define(new (alloc()) LWasmRefIsSubtypeOfAbstract(ref, regs.scratch1), ins);
 }
 
 void LIRGenerator::visitWasmRefIsSubtypeOfConcrete(
@@ -7436,45 +7566,11 @@ void LIRGenerator::visitWasmRefIsSubtypeOfConcrete(
     return;
   }
 
-  // This gets a bit wild because it needs to handle concrete casts in all
-  // hierarchies. Supertype vectors are always required (that's what concrete
-  // means) but the scratch registers can vary.
-
   LAllocation ref = useRegister(ins->ref());
-  LAllocation superSTV = useRegister(ins->superSTV());
-  LDefinition scratch1 = LDefinition();
-  LDefinition scratch2 = LDefinition();
-  if (ins->destType().isAnyHierarchy()) {
-    // See comment on MacroAssembler::branchWasmRefIsSubtypeAny.
-    // We know we need scratch1 because we know this is a concrete type.
-    MOZ_ASSERT(MacroAssembler::needSuperSTVForBranchWasmRefIsSubtypeAny(
-        ins->destType()));
-    MOZ_ASSERT(MacroAssembler::needScratch1ForBranchWasmRefIsSubtypeAny(
-        ins->destType()));
-    scratch1 = temp();
-    scratch2 = MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeAny(
-                   ins->destType())
-                   ? temp()
-                   : LDefinition();
-  } else if (ins->destType().isFuncHierarchy()) {
-    // See comment on MacroAssembler::branchWasmRefIsSubtypeFunc.
-    // We know we need scratch1 because we know this is a concrete type.
-    MOZ_ASSERT(
-        MacroAssembler::needSuperSTVAndScratch1ForBranchWasmRefIsSubtypeFunc(
-            ins->destType()));
-    scratch1 = temp();
-    scratch2 = MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeFunc(
-                   ins->destType())
-                   ? temp()
-                   : LDefinition();
-  } else if (ins->destType().isExternHierarchy()) {
-    MOZ_CRASH("concrete casts are impossible in the extern hierarchy");
-  } else {
-    MOZ_CRASH("unknown type hierarchy for concrete cast");
-  }
-
-  define(new (alloc())
-             LWasmRefIsSubtypeOfConcrete(ref, superSTV, scratch1, scratch2),
+  WasmRefIsSubtypeDefs regs =
+      useWasmRefIsSubtype(ins->destType(), ins->superSTV());
+  define(new (alloc()) LWasmRefIsSubtypeOfConcrete(
+             ref, regs.superSTV, regs.scratch1, regs.scratch2),
          ins);
 }
 
@@ -7482,6 +7578,15 @@ void LIRGenerator::visitWasmNewStructObject(MWasmNewStructObject* ins) {
   LWasmNewStructObject* lir = new (alloc())
       LWasmNewStructObject(useFixed(ins->instance(), InstanceReg),
                            useRegister(ins->typeDefData()), temp(), temp());
+  define(lir, ins);
+  assignWasmSafepoint(lir);
+}
+
+void LIRGenerator::visitWasmNewArrayObject(MWasmNewArrayObject* ins) {
+  LWasmNewArrayObject* lir = new (alloc())
+      LWasmNewArrayObject(useFixed(ins->instance(), InstanceReg),
+                          useRegisterOrConstant(ins->numElements()),
+                          useRegister(ins->typeDefData()), temp(), temp());
   define(lir, ins);
   assignWasmSafepoint(lir);
 }

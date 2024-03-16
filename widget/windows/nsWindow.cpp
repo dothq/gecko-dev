@@ -162,6 +162,7 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/StaticPrefs_widget.h"
 #include "nsNativeAppSupportWin.h"
 #include "mozilla/browser/NimbusFeatures.h"
@@ -682,7 +683,9 @@ nsWindow::nsWindow(bool aIsChildWindow)
     if (!WinUtils::HasPackageIdentity()) {
       mozilla::widget::WinTaskbar::RegisterAppUserModelID();
     }
-    KeyboardLayout::GetInstance()->OnLayoutChange(::GetKeyboardLayout(0));
+    if (!StaticPrefs::ui_key_layout_load_when_first_needed()) {
+      KeyboardLayout::GetInstance()->OnLayoutChange(::GetKeyboardLayout(0));
+    }
 #if defined(ACCESSIBILITY)
     mozilla::TIPMessageHandler::Initialize();
 #endif  // defined(ACCESSIBILITY)
@@ -865,9 +868,9 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
   }
 
   mIsRTL = aInitData->mRTL;
-  mForMenupopupFrame = aInitData->mForMenupopupFrame;
   mOpeningAnimationSuppressed = aInitData->mIsAnimationSuppressed;
   mAlwaysOnTop = aInitData->mAlwaysOnTop;
+  mIsAlert = aInitData->mIsAlert;
   mResizable = aInitData->mResizable;
 
   DWORD style = WindowStyle();
@@ -892,7 +895,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, nsNativeWidget aNativeParent,
     }
   }
 
-  const wchar_t* className = ChooseWindowClass(mWindowType, mForMenupopupFrame);
+  const wchar_t* className = ChooseWindowClass(mWindowType);
 
   // Take specific actions when creating the first top-level window
   static bool sFirstTopLevelWindowCreated = false;
@@ -1217,20 +1220,15 @@ const wchar_t* nsWindow::RegisterWindowClass(const wchar_t* aClassName,
 static LPWSTR const gStockApplicationIcon = MAKEINTRESOURCEW(32512);
 
 /* static */
-const wchar_t* nsWindow::ChooseWindowClass(WindowType aWindowType,
-                                           bool aForMenupopupFrame) {
-  MOZ_ASSERT_IF(aForMenupopupFrame, aWindowType == WindowType::Popup);
+const wchar_t* nsWindow::ChooseWindowClass(WindowType aWindowType) {
   switch (aWindowType) {
     case WindowType::Invisible:
       return RegisterWindowClass(kClassNameHidden, 0, gStockApplicationIcon);
     case WindowType::Dialog:
-      return RegisterWindowClass(kClassNameDialog, 0, 0);
+      return RegisterWindowClass(kClassNameDialog, 0, nullptr);
     case WindowType::Popup:
-      if (aForMenupopupFrame) {
-        return RegisterWindowClass(kClassNameDropShadow, CS_DROPSHADOW,
-                                   gStockApplicationIcon);
-      }
-      [[fallthrough]];
+      return RegisterWindowClass(kClassNameDropShadow, 0,
+                                 gStockApplicationIcon);
     default:
       return RegisterWindowClass(GetMainWindowClass(), 0,
                                  gStockApplicationIcon);
@@ -1334,26 +1332,30 @@ DWORD nsWindow::WindowStyle() {
 
 // Return nsWindow extended styles
 DWORD nsWindow::WindowExStyle() {
+  MOZ_ASSERT_IF(mIsAlert, mWindowType == WindowType::Dialog);
   switch (mWindowType) {
     case WindowType::Child:
       return 0;
-
-    case WindowType::Dialog:
-      return WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME;
-
     case WindowType::Popup: {
       DWORD extendedStyle = WS_EX_TOOLWINDOW;
-      if (mPopupLevel == PopupLevel::Top) extendedStyle |= WS_EX_TOPMOST;
+      if (mPopupLevel == PopupLevel::Top) {
+        extendedStyle |= WS_EX_TOPMOST;
+      }
       return extendedStyle;
     }
-    default:
-      NS_ERROR("unknown border style");
-      [[fallthrough]];
-
+    case WindowType::Dialog: {
+      if (mIsAlert) {
+        return WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+      }
+      return WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME;
+    }
+    case WindowType::Sheet:
+      MOZ_FALLTHROUGH_ASSERT("Sheets are macOS specific");
     case WindowType::TopLevel:
     case WindowType::Invisible:
-      return WS_EX_WINDOWEDGE;
+      break;
   }
+  return WS_EX_WINDOWEDGE;
 }
 
 /**************************************************************
@@ -1572,18 +1574,8 @@ void nsWindow::Show(bool bState) {
 #endif  // defined(ACCESSIBILITY)
   }
 
-  if (mForMenupopupFrame) {
-    MOZ_ASSERT(ChooseWindowClass(mWindowType, mForMenupopupFrame) ==
-               kClassNameDropShadow);
-    const bool shouldUseDropShadow =
-        mTransparencyMode != TransparencyMode::Transparent;
-
-    static bool sShadowEnabled = true;
-    if (sShadowEnabled != shouldUseDropShadow) {
-      ::SetClassLongA(mWnd, GCL_STYLE, shouldUseDropShadow ? CS_DROPSHADOW : 0);
-      sShadowEnabled = shouldUseDropShadow;
-    }
-
+  if (mWindowType == WindowType::Popup) {
+    MOZ_ASSERT(ChooseWindowClass(mWindowType) == kClassNameDropShadow);
     // WS_EX_COMPOSITED conflicts with the WS_EX_LAYERED style and causes
     // some popup menus to become invisible.
     LONG_PTR exStyle = ::GetWindowLongPtrW(mWnd, GWL_EXSTYLE);
@@ -1641,8 +1633,12 @@ void nsWindow::Show(bool bState) {
         }
       } else {
         DWORD flags = SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW;
-        if (wasVisible) flags |= SWP_NOZORDER;
-        if (mAlwaysOnTop) flags |= SWP_NOACTIVATE;
+        if (wasVisible) {
+          flags |= SWP_NOZORDER;
+        }
+        if (mAlwaysOnTop || mIsAlert) {
+          flags |= SWP_NOACTIVATE;
+        }
 
         if (mWindowType == WindowType::Popup) {
           // ensure popups are the topmost of the TOPMOST
@@ -1714,26 +1710,6 @@ void nsWindow::Show(bool bState) {
 //
 // This does not take cloaking into account.
 bool nsWindow::IsVisible() const { return mIsVisible; }
-
-/**************************************************************
- *
- * SECTION: Window clipping utilities
- *
- * Used in Size and Move operations for setting the proper
- * window clipping regions for window transparency.
- *
- **************************************************************/
-
-// XP and Vista visual styles sometimes require window clipping regions to be
-// applied for proper transparency. These routines are called on size and move
-// operations.
-// XXX this is apparently still needed in Windows 7 and later
-void nsWindow::ClearThemeRegion() {
-  if (mWindowType == WindowType::Popup && !IsPopupWithTitleBar() &&
-      (mPopupType == PopupType::Tooltip || mPopupType == PopupType::Panel)) {
-    SetWindowRgn(mWnd, nullptr, false);
-  }
-}
 
 /**************************************************************
  *
@@ -1909,8 +1885,6 @@ void nsWindow::Move(double aX, double aY) {
       pl.rcNormalPosition.bottom += deltaY;
       VERIFY(::SetWindowPlacement(mWnd, &pl));
     } else {
-      ClearThemeRegion();
-
       UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE;
       double oldScale = mDefaultScale;
       mResizeState = IN_SIZEMOVE;
@@ -1975,7 +1949,6 @@ void nsWindow::Resize(double aWidth, double aHeight, bool aRepaint) {
         flags |= SWP_NOREDRAW;
       }
 
-      ClearThemeRegion();
       double oldScale = mDefaultScale;
       mResizeState = RESIZING;
       VERIFY(
@@ -2053,8 +2026,6 @@ void nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
       if (!aRepaint) {
         flags |= SWP_NOREDRAW;
       }
-
-      ClearThemeRegion();
 
       double oldScale = mDefaultScale;
       mResizeState = RESIZING;
@@ -5738,7 +5709,7 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
             sJustGotDeactivate = true;
           }
           if (mIsTopWidgetWindow) {
-            mLastKeyboardLayout = KeyboardLayout::GetInstance()->GetLayout();
+            mLastKeyboardLayout = KeyboardLayout::GetLayout();
           }
         } else {
           StopFlashing();
@@ -7855,7 +7826,7 @@ bool nsWindow::DealWithPopups(HWND aWnd, UINT aMessage, WPARAM aWParam,
       // because we cannot distinguish it's caused by mouse or not.
       if (LOWORD(aWParam) == WA_ACTIVE && aLParam) {
         nsWindow* window = WinUtils::GetNSWindowPtr(aWnd);
-        if (window && window->IsPopup()) {
+        if (window && (window->IsPopup() || window->mIsAlert)) {
           // Cancel notifying widget listeners of deactivating the previous
           // active window (see WM_KILLFOCUS case in ProcessMessage()).
           sJustGotDeactivate = false;
@@ -8197,12 +8168,29 @@ WPARAM nsWindow::wParamFromGlobalMouseState() {
   return result;
 }
 
-void nsWindow::PickerOpen() { mPickerDisplayCount++; }
+void nsWindow::PickerOpen() {
+  AssertIsOnMainThread();
+  mPickerDisplayCount++;
+}
 
 void nsWindow::PickerClosed() {
+  AssertIsOnMainThread();
   NS_ASSERTION(mPickerDisplayCount > 0, "mPickerDisplayCount out of sync!");
   if (!mPickerDisplayCount) return;
   mPickerDisplayCount--;
+
+  // WORKAROUND FOR UNDOCUMENTED BEHAVIOR: `IFileDialog::Show` disables the
+  // top-level ancestor of its provided owner-window. If the modal window's
+  // container process crashes, it will never get a chance to undo that, so we
+  // do it manually here.
+  //
+  // Note that this may cause problems in the embedded case if you reparent a
+  // subtree of the native window hierarchy containing a Gecko window while that
+  // Gecko window has a file-dialog open.
+  if (!mPickerDisplayCount) {
+    ::EnableWindow(::GetAncestor(GetWindowHandle(), GA_ROOT), TRUE);
+  }
+
   if (!mPickerDisplayCount && mDestroyCalled) {
     Destroy();
   }

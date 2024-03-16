@@ -720,14 +720,14 @@ bool CharCodeAt(JSContext* cx, HandleString str, int32_t index,
   return true;
 }
 
-JSLinearString* StringFromCharCode(JSContext* cx, int32_t code) {
-  char16_t c = char16_t(code);
-
-  if (StaticStrings::hasUnit(c)) {
-    return cx->staticStrings().getUnit(c);
+bool CodePointAt(JSContext* cx, HandleString str, int32_t index,
+                 uint32_t* code) {
+  char32_t codePoint;
+  if (!str->getCodePoint(cx, size_t(index), &codePoint)) {
+    return false;
   }
-
-  return NewInlineString<CanGC>(cx, {c}, 1);
+  *code = codePoint;
+  return true;
 }
 
 JSLinearString* StringFromCharCodeNoGC(JSContext* cx, int32_t code) {
@@ -740,15 +740,6 @@ JSLinearString* StringFromCharCodeNoGC(JSContext* cx, int32_t code) {
   }
 
   return NewInlineString<NoGC>(cx, {c}, 1);
-}
-
-JSString* StringFromCodePoint(JSContext* cx, int32_t codePoint) {
-  RootedValue rval(cx, Int32Value(codePoint));
-  if (!str_fromCodePoint_one_arg(cx, rval, &rval)) {
-    return nullptr;
-  }
-
-  return rval.toString();
 }
 
 JSLinearString* LinearizeForCharAccessPure(JSString* str) {
@@ -1207,21 +1198,22 @@ ArrayObject* NewArrayObjectEnsureDenseInitLength(JSContext* cx, int32_t count) {
   return array;
 }
 
-JSObject* InitRestParameter(JSContext* cx, uint32_t length, Value* rest,
-                            HandleObject objRes) {
-  if (objRes) {
-    Handle<ArrayObject*> arrRes = objRes.as<ArrayObject>();
+ArrayObject* InitRestParameter(JSContext* cx, uint32_t length, Value* rest,
+                               Handle<ArrayObject*> arrRes) {
+  if (arrRes) {
+    // Fast path: we managed to allocate the array inline; initialize the
+    // elements.
     MOZ_ASSERT(arrRes->getDenseInitializedLength() == 0);
 
-    // Fast path: we managed to allocate the array inline; initialize the
-    // slots.
-    if (length > 0) {
-      if (!arrRes->ensureElements(cx, length)) {
-        return nullptr;
-      }
-      arrRes->initDenseElements(rest, length);
-      arrRes->setLength(length);
+    // We don't call this function if we can initialize the elements in JIT
+    // code.
+    MOZ_ASSERT(length > arrRes->getDenseCapacity());
+
+    if (!arrRes->growElements(cx, length)) {
+      return nullptr;
     }
+    arrRes->initDenseElements(rest, length);
+    arrRes->setLength(length);
     return arrRes;
   }
 
@@ -1302,23 +1294,21 @@ bool DebugLeaveThenPopLexicalEnv(JSContext* cx, BaselineFrame* frame,
 }
 
 bool FreshenLexicalEnv(JSContext* cx, BaselineFrame* frame) {
-  return frame->freshenLexicalEnvironment(cx);
+  return frame->freshenLexicalEnvironment<false>(cx);
 }
 
-bool DebugLeaveThenFreshenLexicalEnv(JSContext* cx, BaselineFrame* frame,
-                                     const jsbytecode* pc) {
-  MOZ_ALWAYS_TRUE(DebugLeaveLexicalEnv(cx, frame, pc));
-  return frame->freshenLexicalEnvironment(cx);
+bool DebuggeeFreshenLexicalEnv(JSContext* cx, BaselineFrame* frame,
+                               const jsbytecode* pc) {
+  return frame->freshenLexicalEnvironment<true>(cx, pc);
 }
 
 bool RecreateLexicalEnv(JSContext* cx, BaselineFrame* frame) {
-  return frame->recreateLexicalEnvironment(cx);
+  return frame->recreateLexicalEnvironment<false>(cx);
 }
 
-bool DebugLeaveThenRecreateLexicalEnv(JSContext* cx, BaselineFrame* frame,
-                                      const jsbytecode* pc) {
-  MOZ_ALWAYS_TRUE(DebugLeaveLexicalEnv(cx, frame, pc));
-  return frame->recreateLexicalEnvironment(cx);
+bool DebuggeeRecreateLexicalEnv(JSContext* cx, BaselineFrame* frame,
+                                const jsbytecode* pc) {
+  return frame->recreateLexicalEnvironment<true>(cx, pc);
 }
 
 bool DebugLeaveLexicalEnv(JSContext* cx, BaselineFrame* frame,
@@ -2031,7 +2021,7 @@ bool HasNativeElementPure(JSContext* cx, NativeObject* obj, int32_t index,
   }
   // TypedArrayObject are also native and contain indexed properties.
   if (MOZ_UNLIKELY(obj->is<TypedArrayObject>())) {
-    size_t length = obj->as<TypedArrayObject>().length();
+    size_t length = obj->as<TypedArrayObject>().length().valueOr(0);
     vp[0].setBoolean(uint32_t(index) < length);
     return true;
   }
@@ -2362,8 +2352,8 @@ void AllocateAndInitTypedArrayBuffer(JSContext* cx, TypedArrayObject* obj,
   // Negative numbers or zero will bail out to the slow path, which in turn will
   // raise an invalid argument exception or create a correct object with zero
   // elements.
-  constexpr size_t maxByteLength = TypedArrayObject::MaxByteLength;
-  if (count <= 0 || size_t(count) > maxByteLength / obj->bytesPerElement()) {
+  constexpr size_t byteLengthLimit = TypedArrayObject::ByteLengthLimit;
+  if (count <= 0 || size_t(count) > byteLengthLimit / obj->bytesPerElement()) {
     obj->setFixedSlot(TypedArrayObject::LENGTH_SLOT, PrivateValue(size_t(0)));
     return;
   }
@@ -2371,7 +2361,7 @@ void AllocateAndInitTypedArrayBuffer(JSContext* cx, TypedArrayObject* obj,
   obj->setFixedSlot(TypedArrayObject::LENGTH_SLOT, PrivateValue(count));
 
   size_t nbytes = size_t(count) * obj->bytesPerElement();
-  MOZ_ASSERT(nbytes <= maxByteLength);
+  MOZ_ASSERT(nbytes <= byteLengthLimit);
   nbytes = RoundUp(nbytes, sizeof(Value));
 
   MOZ_ASSERT(!obj->isTenured());
@@ -2567,7 +2557,7 @@ BigInt* BigIntAsUintN(JSContext* cx, HandleBigInt x, int32_t bits) {
 }
 
 template <typename T>
-static int32_t AtomicsCompareExchange(TypedArrayObject* typedArray,
+static int32_t AtomicsCompareExchange(FixedLengthTypedArrayObject* typedArray,
                                       size_t index, int32_t expected,
                                       int32_t replacement) {
   AutoUnsafeCallWithABI unsafe;
@@ -2600,8 +2590,8 @@ AtomicsCompareExchangeFn AtomicsCompareExchange(Scalar::Type elementType) {
 }
 
 template <typename T>
-static int32_t AtomicsExchange(TypedArrayObject* typedArray, size_t index,
-                               int32_t value) {
+static int32_t AtomicsExchange(FixedLengthTypedArrayObject* typedArray,
+                               size_t index, int32_t value) {
   AutoUnsafeCallWithABI unsafe;
 
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
@@ -2631,7 +2621,7 @@ AtomicsReadWriteModifyFn AtomicsExchange(Scalar::Type elementType) {
 }
 
 template <typename T>
-static int32_t AtomicsAdd(TypedArrayObject* typedArray, size_t index,
+static int32_t AtomicsAdd(FixedLengthTypedArrayObject* typedArray, size_t index,
                           int32_t value) {
   AutoUnsafeCallWithABI unsafe;
 
@@ -2662,7 +2652,7 @@ AtomicsReadWriteModifyFn AtomicsAdd(Scalar::Type elementType) {
 }
 
 template <typename T>
-static int32_t AtomicsSub(TypedArrayObject* typedArray, size_t index,
+static int32_t AtomicsSub(FixedLengthTypedArrayObject* typedArray, size_t index,
                           int32_t value) {
   AutoUnsafeCallWithABI unsafe;
 
@@ -2693,7 +2683,7 @@ AtomicsReadWriteModifyFn AtomicsSub(Scalar::Type elementType) {
 }
 
 template <typename T>
-static int32_t AtomicsAnd(TypedArrayObject* typedArray, size_t index,
+static int32_t AtomicsAnd(FixedLengthTypedArrayObject* typedArray, size_t index,
                           int32_t value) {
   AutoUnsafeCallWithABI unsafe;
 
@@ -2724,7 +2714,7 @@ AtomicsReadWriteModifyFn AtomicsAnd(Scalar::Type elementType) {
 }
 
 template <typename T>
-static int32_t AtomicsOr(TypedArrayObject* typedArray, size_t index,
+static int32_t AtomicsOr(FixedLengthTypedArrayObject* typedArray, size_t index,
                          int32_t value) {
   AutoUnsafeCallWithABI unsafe;
 
@@ -2755,7 +2745,7 @@ AtomicsReadWriteModifyFn AtomicsOr(Scalar::Type elementType) {
 }
 
 template <typename T>
-static int32_t AtomicsXor(TypedArrayObject* typedArray, size_t index,
+static int32_t AtomicsXor(FixedLengthTypedArrayObject* typedArray, size_t index,
                           int32_t value) {
   AutoUnsafeCallWithABI unsafe;
 
@@ -2786,7 +2776,8 @@ AtomicsReadWriteModifyFn AtomicsXor(Scalar::Type elementType) {
 }
 
 template <typename AtomicOp, typename... Args>
-static BigInt* AtomicAccess64(JSContext* cx, TypedArrayObject* typedArray,
+static BigInt* AtomicAccess64(JSContext* cx,
+                              FixedLengthTypedArrayObject* typedArray,
                               size_t index, AtomicOp op, Args... args) {
   MOZ_ASSERT(Scalar::isBigIntType(typedArray->type()));
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
@@ -2804,8 +2795,8 @@ static BigInt* AtomicAccess64(JSContext* cx, TypedArrayObject* typedArray,
 }
 
 template <typename AtomicOp, typename... Args>
-static auto AtomicAccess64(TypedArrayObject* typedArray, size_t index,
-                           AtomicOp op, Args... args) {
+static auto AtomicAccess64(FixedLengthTypedArrayObject* typedArray,
+                           size_t index, AtomicOp op, Args... args) {
   MOZ_ASSERT(Scalar::isBigIntType(typedArray->type()));
   MOZ_ASSERT(!typedArray->hasDetachedBuffer());
   MOZ_ASSERT(index < typedArray->length());
@@ -2819,14 +2810,14 @@ static auto AtomicAccess64(TypedArrayObject* typedArray, size_t index,
   return op(addr + index, BigInt::toUint64(args)...);
 }
 
-BigInt* AtomicsLoad64(JSContext* cx, TypedArrayObject* typedArray,
+BigInt* AtomicsLoad64(JSContext* cx, FixedLengthTypedArrayObject* typedArray,
                       size_t index) {
   return AtomicAccess64(cx, typedArray, index, [](auto addr) {
     return jit::AtomicOperations::loadSeqCst(addr);
   });
 }
 
-void AtomicsStore64(TypedArrayObject* typedArray, size_t index,
+void AtomicsStore64(FixedLengthTypedArrayObject* typedArray, size_t index,
                     const BigInt* value) {
   AutoUnsafeCallWithABI unsafe;
 
@@ -2838,7 +2829,8 @@ void AtomicsStore64(TypedArrayObject* typedArray, size_t index,
       value);
 }
 
-BigInt* AtomicsCompareExchange64(JSContext* cx, TypedArrayObject* typedArray,
+BigInt* AtomicsCompareExchange64(JSContext* cx,
+                                 FixedLengthTypedArrayObject* typedArray,
                                  size_t index, const BigInt* expected,
                                  const BigInt* replacement) {
   return AtomicAccess64(
@@ -2850,8 +2842,9 @@ BigInt* AtomicsCompareExchange64(JSContext* cx, TypedArrayObject* typedArray,
       expected, replacement);
 }
 
-BigInt* AtomicsExchange64(JSContext* cx, TypedArrayObject* typedArray,
-                          size_t index, const BigInt* value) {
+BigInt* AtomicsExchange64(JSContext* cx,
+                          FixedLengthTypedArrayObject* typedArray, size_t index,
+                          const BigInt* value) {
   return AtomicAccess64(
       cx, typedArray, index,
       [](auto addr, auto val) {
@@ -2860,8 +2853,8 @@ BigInt* AtomicsExchange64(JSContext* cx, TypedArrayObject* typedArray,
       value);
 }
 
-BigInt* AtomicsAdd64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
-                     const BigInt* value) {
+BigInt* AtomicsAdd64(JSContext* cx, FixedLengthTypedArrayObject* typedArray,
+                     size_t index, const BigInt* value) {
   return AtomicAccess64(
       cx, typedArray, index,
       [](auto addr, auto val) {
@@ -2870,8 +2863,8 @@ BigInt* AtomicsAdd64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
       value);
 }
 
-BigInt* AtomicsAnd64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
-                     const BigInt* value) {
+BigInt* AtomicsAnd64(JSContext* cx, FixedLengthTypedArrayObject* typedArray,
+                     size_t index, const BigInt* value) {
   return AtomicAccess64(
       cx, typedArray, index,
       [](auto addr, auto val) {
@@ -2880,8 +2873,8 @@ BigInt* AtomicsAnd64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
       value);
 }
 
-BigInt* AtomicsOr64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
-                    const BigInt* value) {
+BigInt* AtomicsOr64(JSContext* cx, FixedLengthTypedArrayObject* typedArray,
+                    size_t index, const BigInt* value) {
   return AtomicAccess64(
       cx, typedArray, index,
       [](auto addr, auto val) {
@@ -2890,8 +2883,8 @@ BigInt* AtomicsOr64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
       value);
 }
 
-BigInt* AtomicsSub64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
-                     const BigInt* value) {
+BigInt* AtomicsSub64(JSContext* cx, FixedLengthTypedArrayObject* typedArray,
+                     size_t index, const BigInt* value) {
   return AtomicAccess64(
       cx, typedArray, index,
       [](auto addr, auto val) {
@@ -2900,8 +2893,8 @@ BigInt* AtomicsSub64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
       value);
 }
 
-BigInt* AtomicsXor64(JSContext* cx, TypedArrayObject* typedArray, size_t index,
-                     const BigInt* value) {
+BigInt* AtomicsXor64(JSContext* cx, FixedLengthTypedArrayObject* typedArray,
+                     size_t index, const BigInt* value) {
   return AtomicAccess64(
       cx, typedArray, index,
       [](auto addr, auto val) {

@@ -465,6 +465,13 @@
   args:
     obj: ObjId
 
+- name: GuardIsFixedLengthTypedArray
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    obj: ObjId
+
 - name: GuardHasProxyHandler
   shared: false
   transpile: true
@@ -570,6 +577,14 @@
   args:
     str: StringId
     result: NumberId
+
+- name: StringToAtom
+  shared: true
+  transpile: true
+  custom_writer: true
+  cost_estimate: 4
+  args:
+    str: StringId
 
 - name: BooleanToNumber
   shared: true
@@ -841,6 +856,14 @@
     input: NumberId
     result: Int32Id
 
+- name: DoubleToUint8Clamped
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    input: NumberId
+    result: Int32Id
+
 - name: MegamorphicLoadSlotResult
   shared: true
   transpile: true
@@ -885,6 +908,23 @@
     obj: ObjId
     id: ValId
     hasOwn: BoolImm
+
+# For the case where we have an object with a small number of properties,
+# we can do better than a megamorphic hasprop if we just run through those
+# IDs and check for atom pointer equality.
+- name: SmallObjectVariableKeyHasOwnResult
+  shared: true
+  transpile: true
+  cost_estimate: 4
+  args:
+    # We don't actually need the object, because we only care about the shape,
+    # which was guarded before this
+    id: StringId
+    # We include the prop names to speed up and simplify the Baseline case,
+    # but only the shape is used from Ion to achieve an unrolled loop with
+    # comparisons to known atoms
+    propNames: ObjectField
+    shape: ShapeField
 
 - name: ObjectToIteratorResult
   shared: true
@@ -2181,6 +2221,24 @@
     index: Int32Id
     result: StringId
 
+- name: LinearizeForCodePointAccess
+  shared: true
+  transpile: true
+  cost_estimate: 4
+  args:
+    str: StringId
+    index: Int32Id
+    result: StringId
+
+- name: ToRelativeStringIndex
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    index: Int32Id
+    str: StringId
+    result: Int32Id
+
 - name: LoadStringCharResult
   shared: false
   transpile: true
@@ -2190,7 +2248,25 @@
     index: Int32Id
     handleOOB: BoolImm
 
+- name: LoadStringAtResult
+  shared: false
+  transpile: true
+  cost_estimate: 5
+  args:
+    str: StringId
+    index: Int32Id
+    handleOOB: BoolImm
+
 - name: LoadStringCharCodeResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    str: StringId
+    index: Int32Id
+    handleOOB: BoolImm
+
+- name: LoadStringCodePointResult
   shared: true
   transpile: true
   cost_estimate: 3

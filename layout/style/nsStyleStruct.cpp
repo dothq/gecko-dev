@@ -2276,8 +2276,8 @@ nsChangeHint nsStyleDisplay::CalcDifference(
     }
     if (containmentDiff & (StyleContain::PAINT | StyleContain::LAYOUT)) {
       // Paint and layout containment boxes are absolutely/fixed positioning
-      // containers and establishes an independent formatting context.
-      hint |= nsChangeHint_UpdateContainingBlock | nsChangeHint_UpdateBFC;
+      // containers.
+      hint |= nsChangeHint_UpdateContainingBlock;
     }
     // The other container types only need a reflow.
     hint |= nsChangeHint_AllReflowHints | nsChangeHint_RepaintFrame;
@@ -2791,7 +2791,6 @@ nsStyleText::nsStyleText(const Document& aDocument)
       mTextAlign(StyleTextAlign::Start),
       mTextAlignLast(StyleTextAlignLast::Auto),
       mTextJustify(StyleTextJustify::Auto),
-      mWhiteSpace(StyleWhiteSpace::Normal),
       mHyphens(StyleHyphens::Manual),
       mRubyAlign(StyleRubyAlign::SpaceAround),
       mRubyPosition(StyleRubyPosition::AlternateOver),
@@ -2828,7 +2827,8 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
       mTextAlign(aSource.mTextAlign),
       mTextAlignLast(aSource.mTextAlignLast),
       mTextJustify(aSource.mTextJustify),
-      mWhiteSpace(aSource.mWhiteSpace),
+      mWhiteSpaceCollapse(aSource.mWhiteSpaceCollapse),
+      mTextWrapMode(aSource.mTextWrapMode),
       mLineBreak(aSource.mLineBreak),
       mWordBreak(aSource.mWordBreak),
       mOverflowWrap(aSource.mOverflowWrap),
@@ -2855,7 +2855,7 @@ nsStyleText::nsStyleText(const nsStyleText& aSource)
       mTextEmphasisStyle(aSource.mTextEmphasisStyle),
       mHyphenateCharacter(aSource.mHyphenateCharacter),
       mWebkitTextSecurity(aSource.mWebkitTextSecurity),
-      mTextWrap(aSource.mTextWrap) {
+      mTextWrapStyle(aSource.mTextWrapStyle) {
   MOZ_COUNT_CTOR(nsStyleText);
 }
 
@@ -2875,7 +2875,8 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aNewData) const {
   if ((mTextAlign != aNewData.mTextAlign) ||
       (mTextAlignLast != aNewData.mTextAlignLast) ||
       (mTextTransform != aNewData.mTextTransform) ||
-      (mWhiteSpace != aNewData.mWhiteSpace) ||
+      (mWhiteSpaceCollapse != aNewData.mWhiteSpaceCollapse) ||
+      (mTextWrapMode != aNewData.mTextWrapMode) ||
       (mLineBreak != aNewData.mLineBreak) ||
       (mWordBreak != aNewData.mWordBreak) ||
       (mOverflowWrap != aNewData.mOverflowWrap) ||
@@ -2889,7 +2890,7 @@ nsChangeHint nsStyleText::CalcDifference(const nsStyleText& aNewData) const {
       (mTabSize != aNewData.mTabSize) ||
       (mHyphenateCharacter != aNewData.mHyphenateCharacter) ||
       (mWebkitTextSecurity != aNewData.mWebkitTextSecurity) ||
-      (mTextWrap != aNewData.mTextWrap)) {
+      (mTextWrapStyle != aNewData.mTextWrapStyle)) {
     return NS_STYLE_HINT_REFLOW;
   }
 

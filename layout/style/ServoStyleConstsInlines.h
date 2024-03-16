@@ -279,10 +279,7 @@ inline bool StyleAtom::IsStatic() const { return !!(_0 & 1); }
 
 inline nsAtom* StyleAtom::AsAtom() const {
   if (IsStatic()) {
-    auto* atom = reinterpret_cast<const nsStaticAtom*>(
-        reinterpret_cast<const uint8_t*>(&detail::gGkAtoms) + (_0 >> 1));
-    MOZ_ASSERT(atom->IsStatic());
-    return const_cast<nsStaticAtom*>(atom);
+    return const_cast<nsStaticAtom*>(&detail::gGkAtoms.mAtoms[_0 >> 1]);
   }
   return reinterpret_cast<nsAtom*>(_0);
 }
@@ -302,9 +299,8 @@ inline void StyleAtom::Release() {
 inline StyleAtom::StyleAtom(already_AddRefed<nsAtom> aAtom) {
   nsAtom* atom = aAtom.take();
   if (atom->IsStatic()) {
-    ptrdiff_t offset = reinterpret_cast<const uint8_t*>(atom->AsStatic()) -
-                       reinterpret_cast<const uint8_t*>(&detail::gGkAtoms);
-    _0 = (offset << 1) | 1;
+    size_t index = atom->AsStatic() - &detail::gGkAtoms.mAtoms[0];
+    _0 = (index << 1) | 1;
   } else {
     _0 = reinterpret_cast<uintptr_t>(atom);
   }
@@ -1141,6 +1137,64 @@ inline float StyleZoom::Unzoom(float aValue) const {
     return aValue;
   }
   return aValue / ToFloat();
+}
+
+inline nscoord StyleZoom::ZoomCoord(nscoord aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return NSToCoordRoundWithClamp(Zoom(float(aValue)));
+}
+
+inline nscoord StyleZoom::UnzoomCoord(nscoord aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return NSToCoordRoundWithClamp(Unzoom(float(aValue)));
+}
+
+inline nsSize StyleZoom::Zoom(const nsSize& aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return nsSize(ZoomCoord(aValue.Width()), ZoomCoord(aValue.Height()));
+}
+
+inline nsSize StyleZoom::Unzoom(const nsSize& aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return nsSize(UnzoomCoord(aValue.Width()), UnzoomCoord(aValue.Height()));
+}
+
+inline nsPoint StyleZoom::Zoom(const nsPoint& aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return nsPoint(ZoomCoord(aValue.X()), ZoomCoord(aValue.Y()));
+}
+
+inline nsPoint StyleZoom::Unzoom(const nsPoint& aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return nsPoint(UnzoomCoord(aValue.X()), UnzoomCoord(aValue.Y()));
+}
+
+inline nsRect StyleZoom::Zoom(const nsRect& aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return nsRect(ZoomCoord(aValue.X()), ZoomCoord(aValue.Y()),
+                ZoomCoord(aValue.Width()), ZoomCoord(aValue.Height()));
+}
+
+inline nsRect StyleZoom::Unzoom(const nsRect& aValue) const {
+  if (*this == ONE) {
+    return aValue;
+  }
+  return nsRect(UnzoomCoord(aValue.X()), UnzoomCoord(aValue.Y()),
+                UnzoomCoord(aValue.Width()), UnzoomCoord(aValue.Height()));
 }
 
 }  // namespace mozilla

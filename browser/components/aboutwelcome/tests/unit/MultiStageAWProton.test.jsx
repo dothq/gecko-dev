@@ -1,6 +1,6 @@
-import { AboutWelcomeDefaults } from "modules/AboutWelcomeDefaults.jsm";
+import { AboutWelcomeDefaults } from "modules/AboutWelcomeDefaults.sys.mjs";
 import { MultiStageProtonScreen } from "content-src/components/MultiStageProtonScreen";
-import { AWScreenUtils } from "modules/AWScreenUtils.jsm";
+import { AWScreenUtils } from "modules/AWScreenUtils.sys.mjs";
 import React from "react";
 import { mount } from "enzyme";
 
@@ -227,6 +227,21 @@ describe("MultiStageAboutWelcomeProton module", () => {
       const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
       assert.ok(wrapper.exists());
       assert.isTrue(wrapper.find("button.primary[disabled]").exists());
+    });
+
+    it("should render disabled secondary button if activeMultiSelect is in disabled property", () => {
+      const SCREEN_PROPS = {
+        content: {
+          title: "test title",
+          secondary_button: {
+            label: "test secondary button",
+            disabled: "activeMultiSelect",
+          },
+        },
+      };
+      const wrapper = mount(<MultiStageProtonScreen {...SCREEN_PROPS} />);
+      assert.ok(wrapper.exists());
+      assert.isTrue(wrapper.find("button.secondary[disabled]").exists());
     });
 
     it("should not render a progress bar if there is 1 step", () => {

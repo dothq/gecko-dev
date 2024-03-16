@@ -98,6 +98,7 @@ using mozilla::gfx::IntSize from "mozilla/gfx/2D.h";
 using mozilla::gfx::SurfaceFormat from "mozilla/gfx/Types.h";
 using mozilla::dom::TabId from "mozilla/dom/ipc/IdType.h";
 using mozilla::dom::ContentParentId from "mozilla/dom/ipc/IdType.h";
+using mozilla::EventMessage from "mozilla/EventForwards.h";
 using mozilla::LayoutDeviceIntPoint from "Units.h";
 using mozilla::ImagePoint from "Units.h";
 using mozilla::ImageIntSize from "Units.h";
@@ -823,6 +824,8 @@ child:
                             MaybeDiscardedWindowContext aSourceTopWindowContext,
                             IPCTransferableData[] transfers, uint32_t action);
 
+    async UpdateDragSession(IPCTransferableData[] transfers, EventMessage message);
+
     async EndDragSession(bool aDoneDrag, bool aUserCancelled,
                          LayoutDeviceIntPoint aDragEndPoint,
                          uint32_t aKeyModifiers,
@@ -1217,7 +1220,10 @@ parent:
 
     // Given a list of supported types, returns the clipboard data for the
     // first type that matches.
-    sync GetClipboard(nsCString[] aTypes, int32_t aWhichClipboard)
+    // aRequestingWindowContext is the window that is requesting the clipboard,
+    // which is used for content analysis.
+    sync GetClipboard(nsCString[] aTypes, int32_t aWhichClipboard,
+                      MaybeDiscardedWindowContext aRequestingWindowContext)
         returns (IPCTransferableData transferableData);
 
     // Returns a list of formats supported by the clipboard

@@ -149,6 +149,13 @@ android {
             }
         }
     }
+
+    buildFeatures {
+        buildConfig true
+        aidl = true
+    }
+
+    namespace 'org.mozilla.geckoview'
 }
 
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile) {
@@ -315,14 +322,14 @@ android.libraryVariants.all { variant ->
         source = variant.sourceSets.collect({ it.java.srcDirs })
         exclude '**/R.java', '**/BuildConfig.java'
         include 'org/mozilla/geckoview/**.java'
-        options.addPathOption('sourcepath', ':').setValue(
+        options.addPathOption('sourcepath').setValue(
              variant.sourceSets.collect({ it.java.srcDirs }).flatten() +
              variant.generateBuildConfigProvider.get().sourceOutputDir.asFile.get() +
              variant.aidlCompileProvider.get().sourceOutputDir.asFile.get()
         )
         options.addStringOption("Xmaxwarns", "1000")
 
-        classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
+        classpath += files(android.getBootClasspath())
         classpath += variant.javaCompileProvider.get().classpath
 
         options.memberLevel = JavadocMemberLevel.PROTECTED
@@ -352,7 +359,7 @@ android.libraryVariants.all { variant ->
     }
 
     def sourcesJar = task("sourcesJar${name.capitalize()}", type: Jar) {
-        classifier 'sources'
+        archiveClassifier = 'sources'
         description = "Generate Javadoc for build variant $name"
         destinationDirectory =
             file("${topobjdir}/mobile/android/geckoview/sources/${variant.baseName}")

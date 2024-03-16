@@ -47,6 +47,7 @@
 #include "nsPIWindowRoot.h"
 #include "nsLayoutUtils.h"
 #include "nsView.h"
+#include "nsViewManager.h"
 #include "nsBaseWidget.h"
 #include "nsQueryObject.h"
 #include "ReferrerInfo.h"
@@ -130,6 +131,7 @@
 
 #include "mozilla/ContentPrincipal.h"
 
+#include "nsSystemInfo.h"
 #include "nsXULPopupManager.h"
 
 #ifdef NS_PRINTING
@@ -992,19 +994,37 @@ bool nsFrameLoader::Show(nsSubDocumentFrame* frame) {
   ds->SetScrollbarPreference(GetScrollbarPreference(mOwnerContent));
   const bool marginsChanged =
       ds->UpdateFrameMargins(GetMarginAttributes(mOwnerContent));
+
+  nsView* view = frame->EnsureInnerView();
+  if (!view) {
+    return false;
+  }
+
+  // If we already have a pres shell (which can happen with <object> / <embed>)
+  // then hook it up in the view tree.
   if (PresShell* presShell = ds->GetPresShell()) {
-    // Ensure root scroll frame is reflowed in case margins have changed
+    // Ensure root scroll frame is reflowed in case margins have changed.
     if (marginsChanged) {
       if (nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame()) {
         presShell->FrameNeedsReflow(rootScrollFrame, IntrinsicDirty::None,
                                     NS_FRAME_IS_DIRTY);
       }
     }
-    return true;
-  }
+    nsView* childView = presShell->GetViewManager()->GetRootView();
+    MOZ_DIAGNOSTIC_ASSERT(childView);
+    if (childView->GetParent() == view) {
+      // We were probably doing a docshell swap and succeeded before getting
+      // here, hooray, nothing else to do.
+      return true;
+    }
 
-  nsView* view = frame->EnsureInnerView();
-  if (!view) return false;
+    // We did layout before due to <object> or <embed> and now we need to fix
+    // up our stuff and initialize our docshell below too.
+    MOZ_DIAGNOSTIC_ASSERT(!view->GetFirstChild());
+    MOZ_DIAGNOSTIC_ASSERT(!childView->GetParent(), "Stale view?");
+    nsSubDocumentFrame::InsertViewsInReverseOrder(childView, view);
+    nsSubDocumentFrame::EndSwapDocShellsForViews(view->GetFirstChild());
+  }
 
   RefPtr<nsDocShell> baseWindow = GetDocShell();
   baseWindow->InitWindow(nullptr, view->GetWidget(), 0, 0, size.width,
@@ -1012,10 +1032,13 @@ bool nsFrameLoader::Show(nsSubDocumentFrame* frame) {
   baseWindow->SetVisibility(true);
   NS_ENSURE_TRUE(GetDocShell(), false);
 
-  // Trigger editor re-initialization if midas is turned on in the
-  // sub-document. This shouldn't be necessary, but given the way our
-  // editor works, it is. See
-  // https://bugzilla.mozilla.org/show_bug.cgi?id=284245
+  // Trigger editor re-initialization if midas is turned on in the sub-document.
+  // This shouldn't be necessary, but given the way our editor works, it is.
+  //
+  // See https://bugzilla.mozilla.org/show_bug.cgi?id=284245
+  //
+  // FIXME(emilio): This is a massive hack, plus probably not the right place to
+  // do it. Should probably be done in Document::CreatePresShell?
   if (RefPtr<PresShell> presShell = GetDocShell()->GetPresShell()) {
     Document* doc = presShell->GetDocument();
     nsHTMLDocument* htmlDoc =
@@ -3716,9 +3739,31 @@ void nsFrameLoader::SetWillChangeProcess() {
   docshell->SetWillChangeProcess();
 }
 
-static mozilla::Result<bool, nsresult> DidBuildIDChange() {
+static mozilla::Result<bool, nsresult> BuildIDMismatchMemoryAndDisk() {
   nsresult rv;
   nsCOMPtr<nsIFile> file;
+
+#if defined(ANDROID)
+  // Android packages on installation will stop existing instance, so we
+  // cannot run into this problem.
+  return false;
+#endif  // defined(ANDROID)
+
+#if defined(XP_WIN)
+  {
+    // Windows Store packages cannot run into this problem.
+    nsCOMPtr<nsIPropertyBag2> infoService =
+        do_GetService("@mozilla.org/system-info;1");
+    MOZ_ASSERT(infoService, "Could not find a system info service");
+    bool isMSIX;
+    nsresult rv = infoService->GetPropertyAsBool(u"isPackagedApp"_ns, &isMSIX);
+    if (NS_SUCCEEDED(rv)) {
+      if (isMSIX) {
+        return false;
+      }
+    }
+  }
+#endif
 
   rv = NS_GetSpecialDirectory(NS_GRE_DIR, getter_AddRefs(file));
   MOZ_TRY(rv);
@@ -3780,7 +3825,7 @@ void nsFrameLoader::MaybeNotifyCrashed(BrowsingContext* aBrowsingContext,
   // Fire the actual crashed event.
   nsString eventName;
   if (aChannel && !aChannel->DoBuildIDsMatch()) {
-    auto changedOrError = DidBuildIDChange();
+    auto changedOrError = BuildIDMismatchMemoryAndDisk();
     if (changedOrError.isErr()) {
       NS_WARNING("Error while checking buildid mismatch");
       eventName = u"oop-browser-buildid-mismatch"_ns;

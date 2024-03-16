@@ -13,9 +13,6 @@ support-files = [
   "head-sap.js",
   "head-search_mode.js",
   "../../browser-tips/head.js",
-  "../../ext/browser/head.js",
-  "../../ext/api.js",
-  "../../ext/schema.json",
 ]
 prefs = ["browser.bookmarks.testing.skipDefaultBookmarksImport=true"]
 
@@ -64,6 +61,8 @@ skip-if = ["verify"] # Bug 1852375 - MerinoTestUtils.initWeather() doesn't play 
 ["browser_glean_telemetry_engagement_type.js"]
 
 ["browser_glean_telemetry_exposure.js"]
+
+["browser_glean_telemetry_exposure_edge_cases.js"]
 
 ["browser_glean_telemetry_impression_groups.js"]
 

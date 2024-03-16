@@ -53,7 +53,7 @@ unsafe extern "system" fn debug_utils_messenger_callback(
     // Silence Vulkan Validation error "VUID-VkRenderPassBeginInfo-framebuffer-04627"
     // if the OBS layer is enabled. This is a bug in the OBS layer. As the OBS layer
     // does not have a version number they increment, there is no way to qualify the
-    // supression of the error to a specific version of the OBS layer.
+    // suppression of the error to a specific version of the OBS layer.
     //
     // See https://github.com/obsproject/obs-studio/issues/9353
     const VUID_VKRENDERPASSBEGININFO_FRAMEBUFFER_04627: i32 = 0x45125641;
@@ -169,7 +169,7 @@ impl super::Swapchain {
     /// # Safety
     ///
     /// - The device must have been made idle before calling this function.
-    unsafe fn release_resources(self, device: &ash::Device) -> Self {
+    unsafe fn release_resources(mut self, device: &ash::Device) -> Self {
         profiling::scope!("Swapchain::release_resources");
         {
             profiling::scope!("vkDeviceWaitIdle");
@@ -177,7 +177,13 @@ impl super::Swapchain {
             // the presentation work is done, we are forced to wait until the device is idle.
             let _ = unsafe { device.device_wait_idle() };
         };
-        unsafe { device.destroy_fence(self.fence, None) };
+
+        for semaphore in self.surface_semaphores.drain(..) {
+            unsafe {
+                device.destroy_semaphore(semaphore, None);
+            }
+        }
+
         self
     }
 }
@@ -273,7 +279,7 @@ impl super::Instance {
         }
 
         // VK_EXT_swapchain_colorspace
-        // Provid wide color gamut
+        // Provides wide color gamut
         extensions.push(vk::ExtSwapchainColorspaceFn::name());
 
         // VK_KHR_get_physical_device_properties2
@@ -508,7 +514,7 @@ impl super::Instance {
         Ok(self.create_surface_from_vk_surface_khr(surface))
     }
 
-    #[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "metal"))]
+    #[cfg(metal)]
     fn create_surface_from_view(
         &self,
         view: *mut c_void,
@@ -934,10 +940,12 @@ impl crate::Surface<super::Api> for super::Surface {
             timeout_ns = u64::MAX;
         }
 
+        let wait_semaphore = sc.surface_semaphores[sc.next_surface_index];
+
         // will block if no image is available
         let (index, suboptimal) = match unsafe {
             sc.functor
-                .acquire_next_image(sc.raw, timeout_ns, vk::Semaphore::null(), sc.fence)
+                .acquire_next_image(sc.raw, timeout_ns, wait_semaphore, vk::Fence::null())
         } {
             // We treat `VK_SUBOPTIMAL_KHR` as `VK_SUCCESS` on Android.
             // See the comment in `Queue::present`.
@@ -957,16 +965,13 @@ impl crate::Surface<super::Api> for super::Surface {
             }
         };
 
-        // special case for Intel Vulkan returning bizzare values (ugh)
+        sc.next_surface_index += 1;
+        sc.next_surface_index %= sc.surface_semaphores.len();
+
+        // special case for Intel Vulkan returning bizarre values (ugh)
         if sc.device.vendor_id == crate::auxil::db::intel::VENDOR && index > 0x100 {
             return Err(crate::SurfaceError::Outdated);
         }
-
-        let fences = &[sc.fence];
-
-        unsafe { sc.device.raw.wait_for_fences(fences, true, !0) }
-            .map_err(crate::DeviceError::from)?;
-        unsafe { sc.device.raw.reset_fences(fences) }.map_err(crate::DeviceError::from)?;
 
         // https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkRenderPassBeginInfo.html#VUID-VkRenderPassBeginInfo-framebuffer-03209
         let raw_flags = if sc
@@ -994,6 +999,7 @@ impl crate::Surface<super::Api> for super::Surface {
                 },
                 view_formats: sc.view_formats.clone(),
             },
+            wait_semaphore,
         };
         Ok(Some(crate::AcquiredSurfaceTexture {
             texture,

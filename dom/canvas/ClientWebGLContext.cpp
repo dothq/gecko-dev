@@ -22,6 +22,7 @@
 #include "mozilla/gfx/CanvasManagerChild.h"
 #include "mozilla/ipc/Shmem.h"
 #include "mozilla/gfx/Swizzle.h"
+#include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layers/OOPCanvasRenderer.h"
@@ -52,7 +53,7 @@ webgl::NotLostData::NotLostData(ClientWebGLContext& _context)
 
 webgl::NotLostData::~NotLostData() {
   if (outOfProcess) {
-    Unused << dom::WebGLChild::Send__delete__(outOfProcess.get());
+    outOfProcess->Destroy();
   }
 }
 
@@ -405,78 +406,50 @@ void ClientWebGLContext::ThrowEvent_WebGLContextCreationError(
   target->DispatchEvent(*event);
 }
 
-// -
-
-// If we are running WebGL in this process then call the HostWebGLContext
-// method directly.  Otherwise, dispatch over IPC.
-template <typename MethodType, MethodType method, typename... Args>
-void ClientWebGLContext::Run(Args&&... args) const {
-  const auto notLost =
-      mNotLost;  // Hold a strong-ref to prevent LoseContext=>UAF.
-  if (IsContextLost()) return;
-
-  const auto& inProcess = notLost->inProcess;
-  if (inProcess) {
-    return (inProcess.get()->*method)(std::forward<Args>(args)...);
-  }
-
-  const auto& child = notLost->outOfProcess;
-
-  const auto id = IdByMethod<MethodType, method>();
-
-  const auto info = webgl::SerializationInfo(id, args...);
-  const auto maybeDest = child->AllocPendingCmdBytes(info.requiredByteCount,
-                                                     info.alignmentOverhead);
-  if (!maybeDest) {
-    JsWarning("Failed to allocate internal command buffer.");
-    OnContextLoss(webgl::ContextLossReason::None);
-    return;
-  }
-  const auto& destBytes = *maybeDest;
-  webgl::Serialize(destBytes, id, args...);
-}
-
-template <typename MethodType, MethodType method, typename... Args>
-void ClientWebGLContext::RunWithGCData(JS::AutoCheckCannotGC&& aNoGC,
-                                       Args&&... args) const {
-  // Hold a strong-ref to prevent LoseContext=>UAF.
-  //
-  // Note that `aNoGC` must be reset after the GC data is done being used and
-  // before the `notLost` destructor runs, since it could GC.
-  const auto notLost = mNotLost;
-  if (IsContextLost()) {
-    aNoGC.reset();  // GC data will not be used.
-    return;
-  }
-
-  const auto& inProcess = notLost->inProcess;
-  if (inProcess) {
-    (inProcess.get()->*method)(std::forward<Args>(args)...);
-    aNoGC.reset();  // Done with any GC data
-    return;
-  }
-
-  const auto& child = notLost->outOfProcess;
-
-  const auto id = IdByMethod<MethodType, method>();
-
-  const auto info = webgl::SerializationInfo(id, args...);
-  const auto maybeDest = child->AllocPendingCmdBytes(info.requiredByteCount,
-                                                     info.alignmentOverhead);
-  if (!maybeDest) {
-    aNoGC.reset();  // GC data will not be used.
-    JsWarning("Failed to allocate internal command buffer.");
-    OnContextLoss(webgl::ContextLossReason::None);
-    return;
-  }
-  const auto& destBytes = *maybeDest;
-  webgl::Serialize(destBytes, id, args...);
-  aNoGC.reset();  // Done with any GC data
-}
-
 // -------------------------------------------------------------------------
 // Client-side helper methods.  Dispatch to a Host method.
 // -------------------------------------------------------------------------
+
+// If we are running WebGL in this process then call the HostWebGLContext
+// method directly.  Otherwise, dispatch over IPC.
+template <typename MethodT, typename... Args>
+void ClientWebGLContext::Run_WithDestArgTypes(
+    std::optional<JS::AutoCheckCannotGC>&& noGc, const MethodT method,
+    const size_t id, const Args&... args) const {
+  const auto notLost =
+      mNotLost;  // Hold a strong-ref to prevent LoseContext=>UAF.
+
+  // `AutoCheckCannotGC` must be reset after the GC data is done being used but
+  // *before* the `notLost` destructor runs, since the latter can GC.
+  const auto cleanup = MakeScopeExit([&]() { noGc.reset(); });
+
+  if (IsContextLost()) {
+    return;
+  }
+
+  const auto& inProcess = notLost->inProcess;
+  if (inProcess) {
+    (inProcess.get()->*method)(args...);
+    return;
+  }
+
+  const auto& child = notLost->outOfProcess;
+
+  const auto info = webgl::SerializationInfo(id, args...);
+  const auto maybeDest = child->AllocPendingCmdBytes(info.requiredByteCount,
+                                                     info.alignmentOverhead);
+  if (!maybeDest) {
+    noGc.reset();  // Reset early, as GC data will not be used, but JsWarning
+                   // can GC.
+    JsWarning("Failed to allocate internal command buffer.");
+    OnContextLoss(webgl::ContextLossReason::None);
+    return;
+  }
+  const auto& destBytes = *maybeDest;
+  webgl::Serialize(destBytes, id, args...);
+}
+
+// -
 
 #define RPROC(_METHOD) \
   decltype(&HostWebGLContext::_METHOD), &HostWebGLContext::_METHOD
@@ -512,24 +485,25 @@ webgl::SwapChainOptions ClientWebGLContext::PrepareAsyncSwapChainOptions(
   // Currently remote texture ids should only be set internally.
   MOZ_ASSERT(!options.remoteTextureOwnerId.IsValid() &&
              !options.remoteTextureId.IsValid());
-  auto& ownerId = fb ? fb->mRemoteTextureOwnerId : mRemoteTextureOwnerId;
-  auto& textureId = fb ? fb->mLastRemoteTextureId : mLastRemoteTextureId;
   // Async present only works when out-of-process. It is not supported in WebVR.
   // Allow it if it is either forced or if the pref is set.
-  if (!IsContextLost() && !mNotLost->inProcess && !webvr &&
+  if (fb || webvr) {
+    return options;
+  }
+  if (!IsContextLost() && !mNotLost->inProcess &&
       (options.forceAsyncPresent ||
        StaticPrefs::webgl_out_of_process_async_present())) {
-    if (!ownerId) {
-      ownerId = Some(layers::RemoteTextureOwnerId::GetNext());
+    if (!mRemoteTextureOwnerId) {
+      mRemoteTextureOwnerId = Some(layers::RemoteTextureOwnerId::GetNext());
     }
-    textureId = Some(layers::RemoteTextureId::GetNext());
+    mLastRemoteTextureId = Some(layers::RemoteTextureId::GetNext());
     webgl::SwapChainOptions asyncOptions = options;
-    asyncOptions.remoteTextureOwnerId = *ownerId;
-    asyncOptions.remoteTextureId = *textureId;
+    asyncOptions.remoteTextureOwnerId = *mRemoteTextureOwnerId;
+    asyncOptions.remoteTextureId = *mLastRemoteTextureId;
     return asyncOptions;
   }
   // Clear the current remote texture id so that we disable async.
-  textureId = Nothing();
+  mRemoteTextureOwnerId = Nothing();
   return options;
 }
 
@@ -578,19 +552,13 @@ Maybe<layers::SurfaceDescriptor> ClientWebGLContext::GetFrontBuffer(
   auto& info = child->GetFlushedCmdInfo();
 
   // If valid remote texture data was set for async present, then use it.
-  const auto& ownerId = fb ? fb->mRemoteTextureOwnerId : mRemoteTextureOwnerId;
-  const auto& textureId = fb ? fb->mLastRemoteTextureId : mLastRemoteTextureId;
-  auto& needsSync = fb ? fb->mNeedsRemoteTextureSync : mNeedsRemoteTextureSync;
-  if (ownerId && textureId) {
+  if (!fb && !vr && mRemoteTextureOwnerId && mLastRemoteTextureId) {
     const auto tooManyFlushes = 10;
     // If there are many flushed cmds, force synchronous IPC to avoid too many
     // pending ipc messages.
-    if (info.flushesSinceLastCongestionCheck > tooManyFlushes) {
-      needsSync = true;
-    }
     if (XRE_IsParentProcess() ||
-        gfx::gfxVars::WebglOopAsyncPresentForceSync() || needsSync) {
-      needsSync = false;
+        gfx::gfxVars::WebglOopAsyncPresentForceSync() ||
+        info.flushesSinceLastCongestionCheck > tooManyFlushes) {
       // Request the front buffer from IPDL to cause a sync, even though we
       // will continue to use the remote texture descriptor after.
       (void)child->SendGetFrontBuffer(fb ? fb->mId : 0, vr, &ret);
@@ -599,7 +567,8 @@ Maybe<layers::SurfaceDescriptor> ClientWebGLContext::GetFrontBuffer(
     info.flushesSinceLastCongestionCheck = 0;
     info.congestionCheckGeneration++;
 
-    return Some(layers::SurfaceDescriptorRemoteTexture(*textureId, *ownerId));
+    return Some(layers::SurfaceDescriptorRemoteTexture(*mLastRemoteTextureId,
+                                                       *mRemoteTextureOwnerId));
   }
 
   if (!child->SendGetFrontBuffer(fb ? fb->mId : 0, vr, &ret)) return {};
@@ -615,6 +584,27 @@ Maybe<layers::SurfaceDescriptor> ClientWebGLContext::PresentFrontBuffer(
     WebGLFramebufferJS* const fb, const layers::TextureType type, bool webvr) {
   Present(fb, type, webvr);
   return GetFrontBuffer(fb, webvr);
+}
+
+already_AddRefed<layers::FwdTransactionTracker>
+ClientWebGLContext::UseCompositableForwarder(
+    layers::CompositableForwarder* aForwarder) {
+  if (mRemoteTextureOwnerId) {
+    return layers::FwdTransactionTracker::GetOrCreate(mFwdTransactionTracker);
+  }
+  return nullptr;
+}
+
+void ClientWebGLContext::OnDestroyChild(dom::WebGLChild* aChild) {
+  // Since NotLostData may be destructing at this point, the RefPtr to
+  // WebGLChild may be unreliable. Instead, it must be explicitly passed in.
+  if (mRemoteTextureOwnerId && mFwdTransactionTracker &&
+      mFwdTransactionTracker->IsUsed()) {
+    (void)aChild->SendWaitForTxn(
+        *mRemoteTextureOwnerId,
+        layers::ToRemoteTextureTxnType(mFwdTransactionTracker),
+        layers::ToRemoteTextureTxnId(mFwdTransactionTracker));
+  }
 }
 
 void ClientWebGLContext::ClearVRSwapChain() { Run<RPROC(ClearVRSwapChain)>(); }
@@ -650,7 +640,6 @@ bool ClientWebGLContext::UpdateWebRenderCanvasData(
 
   MOZ_ASSERT(renderer);
   mResetLayer = false;
-  mNeedsRemoteTextureSync = true;
 
   return true;
 }
@@ -893,6 +882,7 @@ bool ClientWebGLContext::CreateHostContext(const uvec2& requestedSize) {
     // WebGLParent.
     if (mRemoteTextureOwnerId.isSome()) {
       mRemoteTextureOwnerId = Nothing();
+      mFwdTransactionTracker = nullptr;
     }
 
     if (!outOfProcess->SendInitialize(initDesc, &notLost.info)) {
@@ -2415,12 +2405,15 @@ void ClientWebGLContext::GetParameter(JSContext* cx, GLenum pname,
   if (asString) {
     const auto maybe = GetString(pname);
     if (maybe) {
-      auto str = *maybe;
+      auto str = std::string{};
       if (pname == dom::MOZ_debug_Binding::WSI_INFO) {
-        nsPrintfCString more("\nIsWebglOutOfProcessEnabled: %i",
-                             int(IsWebglOutOfProcessEnabled()));
-        str += more.BeginReading();
+        const auto& outOfProcess = mNotLost->outOfProcess;
+        const auto& inProcess = mNotLost->inProcess;
+        str += PrintfStdString("outOfProcess: %s\ninProcess: %s\n",
+                               ToChars(bool(outOfProcess)),
+                               ToChars(bool(inProcess)));
       }
+      str += *maybe;
       retval.set(StringValue(cx, str.c_str(), rv));
     }
   } else {

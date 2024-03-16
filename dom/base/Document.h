@@ -200,7 +200,6 @@ class FullscreenExit;
 class FullscreenRequest;
 class HTMLEditor;
 struct LangGroupFontPrefs;
-class PendingAnimationTracker;
 class PermissionDelegateHandler;
 class PresShell;
 class ScrollTimelineAnimationTracker;
@@ -1191,11 +1190,6 @@ class Document : public nsINode,
   const SVGContextPaint* GetCurrentContextPaint() const {
     return mCurrentContextPaint;
   }
-
-  /**
-   * Are plugins allowed in this document ?
-   */
-  bool GetAllowPlugins();
 
   /**
    * Set the sub document for aContent to aSubDoc.
@@ -2695,19 +2689,6 @@ class Document : public nsINode,
   // If HasAnimationController is true, this is guaranteed to return non-null.
   SMILAnimationController* GetAnimationController();
 
-  // Gets the tracker for animations that are waiting to start.
-  // Returns nullptr if there is no pending animation tracker for this document
-  // which will be the case if there have never been any CSS animations or
-  // transitions on elements in the document.
-  PendingAnimationTracker* GetPendingAnimationTracker() {
-    return mPendingAnimationTracker;
-  }
-
-  // Gets the tracker for animations that are waiting to start and
-  // creates it if it doesn't already exist. As a result, the return value
-  // will never be nullptr.
-  PendingAnimationTracker* GetOrCreatePendingAnimationTracker();
-
   // Gets the tracker for scroll-driven animations that are waiting to start.
   // Returns nullptr if there is no scroll-driven animation tracker for this
   // document which will be the case if there have never been any scroll-driven
@@ -3442,8 +3423,6 @@ class Document : public nsINode,
   mozilla::dom::HTMLAllCollection* All();
 
   static bool DocumentSupportsL10n(JSContext* aCx, JSObject* aObject);
-  static bool IsWebAnimationsGetAnimationsEnabled(JSContext* aCx,
-                                                  JSObject* aObject);
   static bool AreWebAnimationsTimelinesEnabled(JSContext* aCx,
                                                JSObject* aObject);
   // Checks that the caller is either chrome or some addon.
@@ -5206,10 +5185,6 @@ class Document : public nsINode,
 
   RefPtr<dom::ScriptLoader> mScriptLoader;
 
-  // Tracker for animations that are waiting to start.
-  // nullptr until GetOrCreatePendingAnimationTracker is called.
-  RefPtr<PendingAnimationTracker> mPendingAnimationTracker;
-
   // Tracker for scroll-driven animations that are waiting to start.
   // nullptr until GetOrCreateScrollTimelineAnimationTracker is called.
   RefPtr<ScrollTimelineAnimationTracker> mScrollTimelineAnimationTracker;
@@ -5249,7 +5224,7 @@ class Document : public nsINode,
   // TODO(emilio): There are other meta tags in the spec that have a similar
   // processing model to color-scheme. We could store all in-document meta tags
   // here to get sane and fast <meta> element processing.
-  TreeOrderedArray<HTMLMetaElement> mColorSchemeMetaTags;
+  TreeOrderedArray<HTMLMetaElement*> mColorSchemeMetaTags;
 
   // These member variables cache information about the viewport so we don't
   // have to recalculate it each time.

@@ -1,5 +1,6 @@
 [DEFAULT]
 skip-if = ["os == 'android'"]
+prefs = ["dom.domrequest.enabled=true"]
 support-files = [
   "file_empty.html",
   "file_blocking_image.html",
@@ -25,17 +26,17 @@ support-files = [
 
 ["test_blocking_image.html"]
 
-["test_bug1008126.html"]
-
-["test_bug1016960.html"]
-
-["test_bug1120222.html"]
-
 ["test_bug419527.xhtml"]
 
 ["test_bug564863-2.xhtml"]
 
 ["test_bug945152.html"]
+
+["test_bug1008126.html"]
+
+["test_bug1016960.html"]
+
+["test_bug1120222.html"]
 
 ["test_domrequesthelper.xhtml"]
 

@@ -4788,7 +4788,6 @@ class CGWrapGlobalMethod(CGAbstractMethod):
             Argument("nsWrapperCache*", "aCache"),
             Argument("JS::RealmOptions&", "aOptions"),
             Argument("JSPrincipals*", "aPrincipal"),
-            Argument("bool", "aInitStandardClasses"),
             Argument("JS::MutableHandle<JSObject*>", "aReflector"),
         ]
         CGAbstractMethod.__init__(self, descriptor, "Wrap", "bool", args)
@@ -4836,7 +4835,6 @@ class CGWrapGlobalMethod(CGAbstractMethod):
                                              sClass.ToJSClass(),
                                              aOptions,
                                              aPrincipal,
-                                             aInitStandardClasses,
                                              aReflector)) {
               $*{failureCode}
             }
@@ -5718,6 +5716,12 @@ def getJSToNativeConversionInfo(
     def onFailureIsLarge():
         return CGGeneric(
             'cx.ThrowErrorMessage<MSG_TYPEDARRAY_IS_LARGE>("%s");\n'
+            "%s" % (firstCap(sourceDescription), exceptionCode)
+        )
+
+    def onFailureIsResizable():
+        return CGGeneric(
+            'cx.ThrowErrorMessage<MSG_TYPEDARRAY_IS_RESIZABLE>("%s");\n'
             "%s" % (firstCap(sourceDescription), exceptionCode)
         )
 
@@ -6757,10 +6761,12 @@ def getJSToNativeConversionInfo(
             if type.isArrayBuffer():
                 isSharedMethod = "JS::IsSharedArrayBufferObject"
                 isLargeMethod = "JS::IsLargeArrayBufferMaybeShared"
+                isResizableMethod = "JS::IsResizableArrayBufferMaybeShared"
             else:
                 assert type.isArrayBufferView() or type.isTypedArray()
                 isSharedMethod = "JS::IsArrayBufferViewShared"
                 isLargeMethod = "JS::IsLargeArrayBufferView"
+                isResizableMethod = "JS::IsResizableArrayBufferView"
             if not isAllowShared:
                 template += fill(
                     """
@@ -6784,6 +6790,19 @@ def getJSToNativeConversionInfo(
                 isLargeMethod=isLargeMethod,
                 objRef=objRef,
                 badType=onFailureIsLarge().define(),
+            )
+            # For now reject resizable ArrayBuffers and growable
+            # SharedArrayBuffers. Supporting this will require changing
+            # dom::TypedArray and consumers.
+            template += fill(
+                """
+                if (${isResizableMethod}(${objRef}.Obj())) {
+                  $*{badType}
+                }
+                """,
+                isResizableMethod=isResizableMethod,
+                objRef=objRef,
+                badType=onFailureIsResizable().define(),
             )
         template = wrapObjectTemplate(
             template, type, "${declName}.SetNull();\n", failureCode

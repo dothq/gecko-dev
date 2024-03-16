@@ -25,6 +25,7 @@
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/layers/HelpersD3D11.h"
 #include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/webrender/RenderD3D11TextureHost.h"
 #include "mozilla/webrender/RenderDcompSurfaceTextureHost.h"
 #include "mozilla/webrender/RenderTextureHost.h"
@@ -54,7 +55,7 @@ extern LazyLogModule gRenderThreadLog;
   MOZ_LOG(gDcompSurface, LogLevel::Debug, \
           ("DCSurfaceHandle=%p, " msg, this, ##__VA_ARGS__))
 
-UniquePtr<GpuOverlayInfo> DCLayerTree::sGpuOverlayInfo;
+StaticAutoPtr<GpuOverlayInfo> DCLayerTree::sGpuOverlayInfo;
 
 /* static */
 UniquePtr<DCLayerTree> DCLayerTree::Create(gl::GLContext* aGL,
@@ -157,7 +158,7 @@ bool DCLayerTree::Initialize(HWND aHwnd, nsACString& aError) {
   }
   if (!sGpuOverlayInfo) {
     // Set default if sGpuOverlayInfo was not set.
-    sGpuOverlayInfo = MakeUnique<GpuOverlayInfo>();
+    sGpuOverlayInfo = new GpuOverlayInfo();
   }
 
   // Initialize SwapChainInfo
@@ -291,7 +292,11 @@ bool DCLayerTree::InitializeVideoOverlaySupport() {
 
   info->mSupportsOverlays = info->mSupportsHardwareOverlays;
 
-  sGpuOverlayInfo = std::move(info);
+  // Note: "UniquePtr::release" here is saying "release your ownership stake
+  // on your pointer, so that our StaticAutoPtr can take over ownership".
+  // (StaticAutoPtr doesn't have a move constructor that could directly steal
+  // the contents of a UniquePtr via std::move().)
+  sGpuOverlayInfo = info.release();
 
   if (auto* gpuParent = gfx::GPUParent::GetSingleton()) {
     gpuParent->NotifyOverlayInfo(GetOverlayInfo());

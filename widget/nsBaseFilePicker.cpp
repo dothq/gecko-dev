@@ -17,10 +17,13 @@
 #include "mozilla/dom/Directory.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/Element.h"
 #include "mozilla/Components.h"
+#include "mozilla/StaticPrefs_widget.h"
 #include "WidgetUtils.h"
 #include "nsSimpleEnumerator.h"
 #include "nsThreadUtils.h"
+#include "nsContentUtils.h"
 
 #include "nsBaseFilePicker.h"
 
@@ -153,9 +156,10 @@ nsBaseFilePicker::nsBaseFilePicker()
 
 nsBaseFilePicker::~nsBaseFilePicker() = default;
 
-NS_IMETHODIMP nsBaseFilePicker::Init(mozIDOMWindowProxy* aParent,
-                                     const nsAString& aTitle,
-                                     nsIFilePicker::Mode aMode) {
+NS_IMETHODIMP nsBaseFilePicker::Init(
+    mozIDOMWindowProxy* aParent, const nsAString& aTitle,
+    nsIFilePicker::Mode aMode,
+    mozilla::dom::BrowsingContext* aBrowsingContext) {
   MOZ_ASSERT(aParent,
              "Null parent passed to filepicker, no file "
              "picker for you!");
@@ -165,6 +169,7 @@ NS_IMETHODIMP nsBaseFilePicker::Init(mozIDOMWindowProxy* aParent,
   nsCOMPtr<nsIWidget> widget = WidgetUtils::DOMWindowToWidget(mParent);
   NS_ENSURE_TRUE(widget, NS_ERROR_FAILURE);
 
+  mBrowsingContext = aBrowsingContext;
   mMode = aMode;
   InitNative(widget, aTitle);
 
@@ -197,6 +202,10 @@ nsBaseFilePicker::IsModeSupported(nsIFilePicker::Mode aMode, JSContext* aCx,
 #ifndef XP_WIN
 NS_IMETHODIMP
 nsBaseFilePicker::Open(nsIFilePickerShownCallback* aCallback) {
+  if (MaybeBlockFilePicker(aCallback)) {
+    return NS_OK;
+  }
+
   nsCOMPtr<nsIRunnable> filePickerEvent =
       new AsyncShowFilePicker(this, aCallback);
   return NS_DispatchToMainThread(filePickerEvent);
@@ -379,6 +388,29 @@ NS_IMETHODIMP nsBaseFilePicker::SetDisplaySpecialDirectory(
   }
 
   return ResolveSpecialDirectory(aDirectory);
+}
+
+bool nsBaseFilePicker::MaybeBlockFilePicker(
+    nsIFilePickerShownCallback* aCallback) {
+  if (!mozilla::StaticPrefs::widget_disable_file_pickers()) {
+    return false;
+  }
+
+  if (aCallback) {
+    // File pickers are disabled, so we answer the callback with returnCancel.
+    aCallback->Done(nsIFilePicker::returnCancel);
+  }
+  if (mBrowsingContext) {
+    RefPtr<Element> topFrameElement = mBrowsingContext->GetTopFrameElement();
+    if (topFrameElement) {
+      // Dispatch an event that the frontend may use.
+      nsContentUtils::DispatchEventOnlyToChrome(
+          topFrameElement->OwnerDoc(), topFrameElement, u"FilePickerBlocked"_ns,
+          mozilla::CanBubble::eYes, mozilla::Cancelable::eNo);
+    }
+  }
+
+  return true;
 }
 
 nsresult nsBaseFilePicker::ResolveSpecialDirectory(

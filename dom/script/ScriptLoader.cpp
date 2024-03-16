@@ -66,6 +66,7 @@
 #include "nsIPrincipal.h"
 #include "nsJSPrincipals.h"
 #include "nsContentPolicyUtils.h"
+#include "nsContentSecurityUtils.h"
 #include "nsIClassifiedChannel.h"
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
@@ -1115,12 +1116,8 @@ bool ScriptLoader::ProcessExternalScript(nsIScriptElement* aElement,
     return false;
   }
 
-  nsAutoString nonce;
-  if (nsString* cspNonce = static_cast<nsString*>(
-          aScriptContent->GetProperty(nsGkAtoms::nonce))) {
-    nonce = *cspNonce;
-  }
-
+  nsString nonce = nsContentSecurityUtils::GetIsElementNonceableNonce(
+      *aScriptContent->AsElement());
   SRIMetadata sriMetadata;
   {
     nsAutoString integrity;
@@ -1326,12 +1323,8 @@ bool ScriptLoader::ProcessInlineScript(nsIScriptElement* aElement,
     return false;
   }
 
-  nsCOMPtr<nsINode> node = do_QueryInterface(aElement);
-  nsAutoString nonce;
-  if (nsString* cspNonce =
-          static_cast<nsString*>(node->GetProperty(nsGkAtoms::nonce))) {
-    nonce = *cspNonce;
-  }
+  nsCOMPtr<Element> element = do_QueryInterface(aElement);
+  nsString nonce = nsContentSecurityUtils::GetIsElementNonceableNonce(*element);
 
   // Does CSP allow this inline script to run?
   if (!CSPAllowsInlineScript(aElement, nonce, mDocument)) {
@@ -1374,6 +1367,8 @@ bool ScriptLoader::ProcessInlineScript(nsIScriptElement* aElement,
   ReferrerPolicy referrerPolicy = GetReferrerPolicy(aElement);
   ParserMetadata parserMetadata = GetParserMetadata(aElement);
 
+  // NOTE: The `nonce` as specified here is significant, because it's inherited
+  // by other scripts (e.g. modules created via dynamic imports).
   RefPtr<ScriptLoadRequest> request =
       CreateLoadRequest(aScriptKind, mDocument->GetDocumentURI(), aElement,
                         mDocument->NodePrincipal(), corsMode, nonce,
@@ -2861,9 +2856,8 @@ void ScriptLoader::LoadEventFired() {
   MaybeTriggerBytecodeEncoding();
 
   if (!mMainThreadParseTime.IsZero()) {
-    Telemetry::Accumulate(
-        Telemetry::JS_PAGELOAD_PARSE_MS,
-        static_cast<uint32_t>(mMainThreadParseTime.ToMilliseconds()));
+    glean::javascript_pageload::parse_time.AccumulateRawDuration(
+        mMainThreadParseTime);
   }
 }
 
@@ -3680,11 +3674,6 @@ int32_t ScriptLoader::PhysicalSizeOfMemoryInGB() {
   return mPhysicalSizeOfMemory;
 }
 
-static bool IsInternalURIScheme(nsIURI* uri) {
-  return uri->SchemeIs("moz-extension") || uri->SchemeIs("resource") ||
-         uri->SchemeIs("chrome");
-}
-
 bool ScriptLoader::ShouldApplyDelazifyStrategy(ScriptLoadRequest* aRequest) {
   // Full parse everything if negative.
   if (StaticPrefs::dom_script_loader_delazification_max_size() < 0) {
@@ -3871,13 +3860,7 @@ nsresult ScriptLoader::PrepareLoadedRequest(ScriptLoadRequest* aRequest,
   rv = channel->GetOriginalURI(getter_AddRefs(uri));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  // Fixup moz-extension: and resource: URIs, because the channel URI will
-  // point to file:, which won't be allowed to load.
-  if (uri && IsInternalURIScheme(uri)) {
-    aRequest->mBaseURL = uri;
-  } else {
-    channel->GetURI(getter_AddRefs(aRequest->mBaseURL));
-  }
+  aRequest->SetBaseURLFromChannelAndOriginalURI(channel, uri);
 
   if (aRequest->IsModuleRequest()) {
     ModuleLoadRequest* request = aRequest->AsModuleRequest();

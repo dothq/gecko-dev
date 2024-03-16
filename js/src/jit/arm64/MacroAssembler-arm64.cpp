@@ -272,12 +272,19 @@ void MacroAssemblerCompat::handleFailureWithHandlerTail(Label* profilerExitTail,
   syncStackPtr();
   Br(x0);
 
-  // If we found a finally block, this must be a baseline frame. Push two
-  // values expected by the finally block: the exception and BooleanValue(true).
+  // If we found a finally block, this must be a baseline frame. Push three
+  // values expected by the finally block: the exception, the exception stack,
+  // and BooleanValue(true).
   bind(&finally);
   ARMRegister exception = x1;
   Ldr(exception, MemOperand(PseudoStackPointer64,
                             ResumeFromException::offsetOfException()));
+
+  ARMRegister exceptionStack = x2;
+  Ldr(exceptionStack,
+      MemOperand(PseudoStackPointer64,
+                 ResumeFromException::offsetOfExceptionStack()));
+
   Ldr(x0,
       MemOperand(PseudoStackPointer64, ResumeFromException::offsetOfTarget()));
   Ldr(ARMRegister(FramePointer, 64),
@@ -288,6 +295,7 @@ void MacroAssemblerCompat::handleFailureWithHandlerTail(Label* profilerExitTail,
                  ResumeFromException::offsetOfStackPointer()));
   syncStackPtr();
   push(exception);
+  push(exceptionStack);
   pushValue(BooleanValue(true));
   Br(x0);
 
@@ -429,7 +437,7 @@ Assembler::Condition MacroAssemblerCompat::testBigIntTruthy(
 void MacroAssemblerCompat::breakpoint() {
   // Note, other payloads are possible, but GDB is known to misinterpret them
   // sometimes and iloop on the breakpoint instead of stopping properly.
-  Brk(0);
+  Brk(0xf000);
 }
 
 // Either `any` is valid or `sixtyfour` is valid.  Return a 32-bit ARMRegister
@@ -1505,12 +1513,6 @@ void MacroAssembler::callWithABIPre(uint32_t* stackAdjust, bool callFromWasm) {
     emitter.emit(moveResolver_);
     emitter.finish();
   }
-
-  // Call boundaries communicate stack via SP.
-  // (jseward, 2021Mar03) This sync may well be redundant, given that all of
-  // the MacroAssembler::call methods generate a sync before the call.
-  // Removing it does not cause any failures for all of jit-tests.
-  syncStackPtr();
 
   assertStackAlignment(ABIStackAlignment);
 }

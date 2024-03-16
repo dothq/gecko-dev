@@ -10,18 +10,13 @@
 #include "mozilla/AsyncEventDispatcher.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/dom/AnchorAreaFormRelValues.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/RadioGroupContainer.h"
-#include "nsCOMPtr.h"
 #include "nsIFormControl.h"
 #include "nsGenericHTMLElement.h"
-#include "nsIWeakReferenceUtils.h"
 #include "nsThreadUtils.h"
 #include "nsInterfaceHashtable.h"
-#include "nsRefPtrHashtable.h"
-#include "nsTHashMap.h"
 #include "js/friend/DOMProxy.h"  // JS::ExpandoAndGeneration
 
 class nsIMutableArray;
@@ -37,8 +32,7 @@ class HTMLFormSubmission;
 class HTMLImageElement;
 class FormData;
 
-class HTMLFormElement final : public nsGenericHTMLElement,
-                              public AnchorAreaFormRelValues {
+class HTMLFormElement final : public nsGenericHTMLElement {
   friend class HTMLFormControlsCollection;
 
  public:
@@ -526,7 +520,8 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   // This is needed to properly clean up the bi-directional references
   // (both weak and strong) between the form and its HTMLImageElements.
 
-  nsTArray<HTMLImageElement*> mImageElements;  // Holds WEAK references
+  // Holds WEAK references
+  TreeOrderedArray<HTMLImageElement*> mImageElements;
 
   // A map from an ID or NAME attribute to the HTMLImageElement(s), this
   // hash holds strong references either to the named HTMLImageElement, or

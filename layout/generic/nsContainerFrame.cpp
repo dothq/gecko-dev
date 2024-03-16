@@ -270,8 +270,7 @@ void nsContainerFrame::Destroy(DestroyContext& aContext) {
     });
 
     // Destroy frames on the auxiliary frame lists and delete the lists.
-    nsPresContext* pc = PresContext();
-    mozilla::PresShell* presShell = pc->PresShell();
+    mozilla::PresShell* presShell = PresShell();
     if (hasO) {
       SafelyDestroyFrameListProp(aContext, presShell, OverflowProperty());
     }
@@ -1912,8 +1911,8 @@ void nsContainerFrame::MergeSortedFrameLists(nsFrameList& aDest,
     }
     nsIContent* srcContent = FrameForDOMPositionComparison(src)->GetContent();
     nsIContent* destContent = FrameForDOMPositionComparison(dest)->GetContent();
-    int32_t result = nsLayoutUtils::CompareTreePosition(srcContent, destContent,
-                                                        aCommonAncestor);
+    int32_t result = nsContentUtils::CompareTreePosition<TreeKind::Flat>(
+        srcContent, destContent, aCommonAncestor);
     if (MOZ_UNLIKELY(result == 0)) {
       // NOTE: we get here when comparing ::before/::after for the same element.
       if (MOZ_UNLIKELY(srcContent->IsGeneratedContentContainerForBefore())) {

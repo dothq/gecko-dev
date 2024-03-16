@@ -290,14 +290,17 @@ async function blankSlate() {
  *        The browser window that the dialog is expected to open in. If not
  *        supplied, the initial browser window of the test run is used.
  * @param mode (optional)
- *        Open in the clear on shutdown settings context or
- *        Open in the clear site data settings context
- *        null by default
+ *        One of
+ *          clear on shutdown settings context ("clearOnShutdown"),
+ *          clear site data settings context ("clearSiteData"),
+ *          clear history context ("clearHistory"),
+ *          browser context ("browser")
+ *        "browser" by default
  */
-function DialogHelper(browserWin = window, mode = null) {
-  this._browserWin = browserWin;
+function DialogHelper(openContext = "browser") {
+  this._browserWin = window;
   this.win = null;
-  this._mode = mode;
+  this._mode = openContext;
   this.promiseClosed = new Promise(resolve => {
     this._resolveClosed = resolve;
   });
@@ -365,7 +368,7 @@ DialogHelper.prototype = {
    * Makes sure all the checkboxes are checked.
    */
   _checkAllCheckboxesCustom(check) {
-    var cb = this.win.document.querySelectorAll("checkbox[id]");
+    var cb = this.win.document.querySelectorAll(".clearingItemCheckbox");
     ok(cb.length, "found checkboxes for ids");
     for (var i = 0; i < cb.length; ++i) {
       if (cb[i].checked != check) {
@@ -380,10 +383,6 @@ DialogHelper.prototype = {
 
   uncheckAllCheckboxes() {
     this._checkAllCheckboxesCustom(false);
-  },
-
-  setMode(value) {
-    this._mode = value;
   },
 
   /**
@@ -425,9 +424,33 @@ DialogHelper.prototype = {
       }
     );
 
-    executeSoon(() => {
-      Sanitizer.showUI(this._browserWin, this._mode);
-    });
+    // We want to simulate opening the dialog inside preferences for clear history
+    // and clear site data
+    if (this._mode != "browser") {
+      await openPreferencesViaOpenPreferencesAPI("privacy", {
+        leaveOpen: true,
+      });
+      let tabWindow = gBrowser.selectedBrowser.contentWindow;
+      let clearDialogOpenButtonId = this._mode + "Button";
+      // the id for clear on shutdown is of a different format
+      if (this._mode == "clearOnShutdown") {
+        // set always clear to true to enable the clear on shutdown dialog
+        let enableSettingsCheckbox =
+          tabWindow.document.getElementById("alwaysClear");
+        if (!enableSettingsCheckbox.checked) {
+          enableSettingsCheckbox.click();
+        }
+        clearDialogOpenButtonId = "clearDataSettings";
+      }
+      // open dialog
+      tabWindow.document.getElementById(clearDialogOpenButtonId).click();
+    }
+    // We open the dialog in the chrome context in other cases
+    else {
+      executeSoon(() => {
+        Sanitizer.showUI(this._browserWin, this._mode);
+      });
+    }
 
     this.win = await dialogPromise;
     this.win.addEventListener(
@@ -441,7 +464,6 @@ DialogHelper.prototype = {
       },
       { once: true }
     );
-
     this.win.addEventListener(
       "unload",
       () => {
@@ -450,6 +472,9 @@ DialogHelper.prototype = {
         (async () => {
           if (this.onunload) {
             await this.onunload();
+          }
+          if (this._mode != "browser") {
+            BrowserTestUtils.removeTab(gBrowser.selectedTab);
           }
           await PlacesTestUtils.promiseAsyncUpdates();
           this._resolveClosed();
@@ -558,6 +583,39 @@ async function validateDataSizes(dialogHelper) {
       `Should show the quota usage as ${convertedQuotaUsage}`
     );
   }
+}
+
+/**
+ *
+ * Opens dialog in the provided context and selects the checkboxes
+ * as sent in the parameters
+ *
+ * @param {Object} context the dialog is opened in, timespan to select,
+ *  if historyFormDataAndDownloads, cookiesAndStorage, cache or siteSettings
+ *  are checked
+ */
+async function performActionsOnDialog({
+  context = "browser",
+  timespan = Sanitizer.TIMESPAN_HOUR,
+  historyFormDataAndDownloads = true,
+  cookiesAndStorage = true,
+  cache = false,
+  siteSettings = false,
+}) {
+  let dh = new DialogHelper(context);
+  dh.onload = function () {
+    this.selectDuration(timespan);
+    this.checkPrefCheckbox(
+      "historyFormDataAndDownloads",
+      historyFormDataAndDownloads
+    );
+    this.checkPrefCheckbox("cookiesAndStorage", cookiesAndStorage);
+    this.checkPrefCheckbox("cache", cache);
+    this.checkPrefCheckbox("siteSettings", siteSettings);
+    this.acceptDialog();
+  };
+  dh.open();
+  await dh.promiseClosed;
 }
 
 /**
@@ -693,6 +751,67 @@ add_task(async function test_everything_warning() {
     await promiseSanitized;
 
     await promiseHistoryClearedState(uris, true);
+  };
+  dh.open();
+  await dh.promiseClosed;
+});
+
+/**
+ * Tests that the clearing button gets disabled if no checkboxes are checked
+ * and enabled when at least one checkbox is checked
+ */
+add_task(async function testAcceptButtonDisabled() {
+  let dh = new DialogHelper();
+  dh.onload = async function () {
+    let clearButton = this.win.document
+      .querySelector("dialog")
+      .getButton("accept");
+    this.uncheckAllCheckboxes();
+    await new Promise(resolve => SimpleTest.executeSoon(resolve));
+    is(clearButton.disabled, true, "Clear button should be disabled");
+    // await BrowserTestUtils.waitForMutationCondition(
+    //   clearButton,
+    //   { attributes: true },
+    //   () => clearButton.disabled,
+    //   "Clear button should be disabled"
+    // );
+
+    this.checkPrefCheckbox("cache", true);
+    await new Promise(resolve => SimpleTest.executeSoon(resolve));
+    is(clearButton.disabled, false, "Clear button should not be disabled");
+
+    this.cancelDialog();
+  };
+  dh.open();
+  await dh.promiseClosed;
+});
+
+/**
+ * Tests to see if the warning box is hidden when opened in the clear on shutdown context
+ */
+add_task(async function testWarningBoxInClearOnShutdown() {
+  let dh = new DialogHelper("clearSiteData");
+  dh.onload = function () {
+    this.selectDuration(Sanitizer.TIMESPAN_EVERYTHING);
+    is(
+      BrowserTestUtils.isVisible(this.getWarningPanel()),
+      true,
+      `warning panel should be visible`
+    );
+    this.acceptDialog();
+  };
+  dh.open();
+  await dh.promiseClosed;
+
+  dh = new DialogHelper("clearOnShutdown");
+  dh.onload = function () {
+    is(
+      BrowserTestUtils.isVisible(this.getWarningPanel()),
+      false,
+      `warning panel should not be visible`
+    );
+
+    this.cancelDialog();
   };
   dh.open();
   await dh.promiseClosed;
@@ -942,14 +1061,11 @@ add_task(async function test_all_data_sizes() {
 
 // test the case when we open the dialog through the clear on shutdown settings
 add_task(async function test_clear_on_shutdown() {
-  await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
-
   await SpecialPowers.pushPrefEnv({
     set: [["privacy.sanitize.sanitizeOnShutdown", true]],
   });
 
-  let dh = new DialogHelper();
-  dh.setMode("clearOnShutdown");
+  let dh = new DialogHelper("clearOnShutdown");
   dh.onload = async function () {
     this.uncheckAllCheckboxes();
     this.checkPrefCheckbox("historyFormDataAndDownloads", false);
@@ -1018,8 +1134,7 @@ add_task(async function test_clear_on_shutdown() {
   await ensureDownloadsClearedState(downloadIDs, false);
   await ensureDownloadsClearedState(olderDownloadIDs, false);
 
-  dh = new DialogHelper();
-  dh.setMode("clearOnShutdown");
+  dh = new DialogHelper("clearOnShutdown");
   dh.onload = async function () {
     this.uncheckAllCheckboxes();
     this.checkPrefCheckbox("historyFormDataAndDownloads", true);
@@ -1075,14 +1190,11 @@ add_task(async function test_clear_on_shutdown() {
 
   // Clean up
   await SiteDataTestUtils.clear();
-  BrowserTestUtils.removeTab(gBrowser.selectedTab);
 });
 
 // test default prefs for entry points
 add_task(async function test_defaults_prefs() {
-  let dh = new DialogHelper();
-  dh.setMode("clearSiteData");
-
+  let dh = new DialogHelper("clearSiteData");
   dh.onload = function () {
     this.validateCheckbox("historyFormDataAndDownloads", false);
     this.validateCheckbox("cache", true);
@@ -1162,3 +1274,156 @@ async function clearAndValidateDataSizes({
   await SiteDataTestUtils.clear();
   BrowserTestUtils.removeTab(gBrowser.selectedTab);
 }
+
+add_task(async function testEntryPointTelemetry() {
+  Services.fog.testResetFOG();
+
+  // Telemetry count we expect for each context
+  const EXPECTED_CONTEXT_COUNTS = {
+    browser: 3,
+    clearHistory: 2,
+    clearSiteData: 1,
+  };
+
+  for (let key in EXPECTED_CONTEXT_COUNTS) {
+    let count = 0;
+
+    for (let i = 0; i < EXPECTED_CONTEXT_COUNTS[key]; i++) {
+      await performActionsOnDialog({ context: key });
+    }
+
+    let contextTelemetry = Glean.privacySanitize.dialogOpen.testGetValue();
+    for (let object of contextTelemetry) {
+      if (object.extra.context == key) {
+        count += 1;
+      }
+    }
+
+    is(
+      count,
+      EXPECTED_CONTEXT_COUNTS[key],
+      `There should be ${EXPECTED_CONTEXT_COUNTS[key]} opens from ${key} context`
+    );
+  }
+});
+
+add_task(async function testTimespanTelemetry() {
+  Services.fog.testResetFOG();
+
+  // Expected timespan selections from telemetry
+  const EXPECTED_TIMESPANS = [
+    Sanitizer.TIMESPAN_HOUR,
+    Sanitizer.TIMESPAN_2HOURS,
+    Sanitizer.TIMESPAN_4HOURS,
+    Sanitizer.TIMESPAN_EVERYTHING,
+  ];
+
+  for (let timespan of EXPECTED_TIMESPANS) {
+    await performActionsOnDialog({ timespan });
+  }
+
+  for (let index in EXPECTED_TIMESPANS) {
+    is(
+      Glean.privacySanitize.clearingTimeSpanSelected.testGetValue()[index].extra
+        .time_span,
+      EXPECTED_TIMESPANS[index].toString(),
+      `Selected timespan should be ${EXPECTED_TIMESPANS[index]}`
+    );
+  }
+});
+
+add_task(async function testLoadtimeTelemetry() {
+  Services.fog.testResetFOG();
+
+  // loadtime metric is collected everytime that the dialog is opened
+  // expected number of times dialog will be opened for the test for each context
+  let EXPECTED_CONTEXT_COUNTS = {
+    browser: 2,
+    clearHistory: 3,
+    clearSiteData: 2,
+  };
+
+  // open dialog based on expected_context_counts
+  for (let context in EXPECTED_CONTEXT_COUNTS) {
+    for (let i = 0; i < EXPECTED_CONTEXT_COUNTS[context]; i++) {
+      await performActionsOnDialog({ context });
+    }
+  }
+
+  let loadTimeDistribution = Glean.privacySanitize.loadTime.testGetValue();
+
+  let expectedNumberOfCounts = Object.entries(EXPECTED_CONTEXT_COUNTS).reduce(
+    (acc, [key, value]) => acc + value,
+    0
+  );
+  // No guarantees from timers means no guarantees on buckets.
+  // But we can guarantee it's only two samples.
+  is(
+    Object.entries(loadTimeDistribution.values).reduce(
+      (acc, [bucket, count]) => acc + count,
+      0
+    ),
+    expectedNumberOfCounts,
+    `Only ${expectedNumberOfCounts} buckets with samples`
+  );
+});
+
+add_task(async function testClearingOptionsTelemetry() {
+  Services.fog.testResetFOG();
+
+  let expectedObject = {
+    context: "clearSiteData",
+    history_form_data_downloads: "true",
+    cookies_and_storage: "false",
+    cache: "true",
+    site_settings: "true",
+  };
+
+  await performActionsOnDialog({
+    context: "clearSiteData",
+    historyFormDataAndDownloads: true,
+    cookiesAndStorage: false,
+    cache: true,
+    siteSettings: true,
+  });
+
+  let telemetryObject = Glean.privacySanitize.clear.testGetValue();
+  Assert.equal(
+    telemetryObject.length,
+    1,
+    "There should be only 1 telemetry object recorded"
+  );
+
+  Assert.deepEqual(
+    expectedObject,
+    telemetryObject[0].extra,
+    `Expected ${telemetryObject} to be the same as ${expectedObject}`
+  );
+});
+
+add_task(async function testCheckboxStatesAfterMigration() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["privacy.clearOnShutdown.history", false],
+      ["privacy.clearOnShutdown.formdata", true],
+      ["privacy.clearOnShutdown.cookies", true],
+      ["privacy.clearOnShutdown.offlineApps", false],
+      ["privacy.clearOnShutdown.sessions", false],
+      ["privacy.clearOnShutdown.siteSettings", false],
+      ["privacy.clearOnShutdown.cache", true],
+      ["privacy.clearOnShutdown_v2.cookiesAndStorage", false],
+      ["privacy.sanitize.sanitizeOnShutdown.hasMigratedToNewPrefs", false],
+    ],
+  });
+
+  let dh = new DialogHelper("clearOnShutdown");
+  dh.onload = function () {
+    this.validateCheckbox("cookiesAndStorage", true);
+    this.validateCheckbox("historyFormDataAndDownloads", false);
+    this.validateCheckbox("cache", true);
+    this.validateCheckbox("siteSettings", false);
+    this.cancelDialog();
+  };
+  dh.open();
+  await dh.promiseClosed;
+});

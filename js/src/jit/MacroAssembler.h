@@ -231,7 +231,7 @@ struct ExpandoAndGeneration;
 namespace js {
 
 class StaticStrings;
-class TypedArrayObject;
+class FixedLengthTypedArrayObject;
 
 enum class NativeIteratorIndices : uint32_t;
 
@@ -311,6 +311,12 @@ struct ReturnCallAdjustmentInfo {
         oldSlotsAndStackArgBytes(oldSlotsAndStackArgBytes) {}
 };
 #endif  // ENABLE_WASM_TAIL_CALLS
+
+struct BranchWasmRefIsSubtypeRegisters {
+  bool needSuperSTV;
+  bool needScratch1;
+  bool needScratch2;
+};
 
 // [SMDOC] Code generation invariants (incomplete)
 //
@@ -1094,6 +1100,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   inline void add32(Register src, Register dest) PER_SHARED_ARCH;
   inline void add32(Imm32 imm, Register dest) PER_SHARED_ARCH;
+  inline void add32(Imm32 imm, Register src, Register dest) PER_SHARED_ARCH;
   inline void add32(Imm32 imm, const Address& dest) PER_SHARED_ARCH;
   inline void add32(Imm32 imm, const AbsoluteAddress& dest)
       DEFINED_ON(x86_shared);
@@ -2140,6 +2147,10 @@ class MacroAssembler : public MacroAssemblerSpecific {
   inline void cmp32Load32(Condition cond, Register lhs, Register rhs,
                           const Address& src, Register dest)
       DEFINED_ON(arm, arm64, loong64, riscv64, mips_shared, x86_shared);
+
+  inline void cmp32Load32(Condition cond, Register lhs, Imm32 rhs,
+                          const Address& src, Register dest)
+      DEFINED_ON(arm, arm64, loong64, riscv64, wasm32, mips_shared, x86_shared);
 
   inline void cmp32LoadPtr(Condition cond, const Address& lhs, Imm32 rhs,
                            const Address& src, Register dest)
@@ -3947,13 +3958,30 @@ class MacroAssembler : public MacroAssemblerSpecific {
                               Register tmp,
                               wasm::BytecodeOffset bytecodeOffset);
 
+  // Returns information about which registers are necessary for a
+  // branchWasmRefIsSubtype call.
+  static BranchWasmRefIsSubtypeRegisters regsForBranchWasmRefIsSubtype(
+      wasm::RefType type);
+
+  // Perform a subtype check that `ref` is a subtype of `type`, branching to
+  // `label` depending on `onSuccess`.
+  //
+  // Will select one of the other branchWasmRefIsSubtype* functions depending on
+  // destType. See each function for the register allocation requirements, as
+  // well as which registers will be preserved.
+  void branchWasmRefIsSubtype(Register ref, wasm::RefType sourceType,
+                              wasm::RefType destType, Label* label,
+                              bool onSuccess, Register superSTV,
+                              Register scratch1, Register scratch2);
+
   // Perform a subtype check that `ref` is a subtype of `type`, branching to
   // `label` depending on `onSuccess`. `type` must be in the `any` hierarchy.
   //
   // `superSTV` is required iff the destination type is a concrete
   // type. `scratch1` is required iff the destination type is eq or lower and
   // not none. `scratch2` is required iff the destination type is a concrete
-  // type and its `subTypingDepth` is >= wasm::MinSuperTypeVectorLength.
+  // type and its `subTypingDepth` is >= wasm::MinSuperTypeVectorLength. See
+  // regsForBranchWasmRefIsSubtype.
   //
   // `ref` and `superSTV` are preserved. Scratch registers are
   // clobbered.
@@ -3961,9 +3989,6 @@ class MacroAssembler : public MacroAssemblerSpecific {
                                  wasm::RefType destType, Label* label,
                                  bool onSuccess, Register superSTV,
                                  Register scratch1, Register scratch2);
-  static bool needScratch1ForBranchWasmRefIsSubtypeAny(wasm::RefType type);
-  static bool needScratch2ForBranchWasmRefIsSubtypeAny(wasm::RefType type);
-  static bool needSuperSTVForBranchWasmRefIsSubtypeAny(wasm::RefType type);
 
   // Perform a subtype check that `ref` is a subtype of `type`, branching to
   // `label` depending on `onSuccess`. `type` must be in the `func` hierarchy.
@@ -3971,7 +3996,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
   // `superSTV` and `scratch1` are required iff the destination type
   // is a concrete type (not func and not nofunc). `scratch2` is required iff
   // the destination type is a concrete type and its `subTypingDepth` is >=
-  // wasm::MinSuperTypeVectorLength.
+  // wasm::MinSuperTypeVectorLength. See regsForBranchWasmRefIsSubtype.
   //
   // `ref` and `superSTV` are preserved. Scratch registers are
   // clobbered.
@@ -3979,15 +4004,18 @@ class MacroAssembler : public MacroAssemblerSpecific {
                                   wasm::RefType destType, Label* label,
                                   bool onSuccess, Register superSTV,
                                   Register scratch1, Register scratch2);
-  static bool needSuperSTVAndScratch1ForBranchWasmRefIsSubtypeFunc(
-      wasm::RefType type);
-  static bool needScratch2ForBranchWasmRefIsSubtypeFunc(wasm::RefType type);
 
-  // Perform a subtype check that `ref` is a subtype of `type`, branching to
+  // Perform a subtype check that `ref` is a subtype of `destType`, branching to
   // `label` depending on `onSuccess`. `type` must be in the `extern` hierarchy.
   void branchWasmRefIsSubtypeExtern(Register ref, wasm::RefType sourceType,
                                     wasm::RefType destType, Label* label,
                                     bool onSuccess);
+
+  // Perform a subtype check that `ref` is a subtype of `destType`, branching to
+  // `label` depending on `onSuccess`. `type` must be in the `exn` hierarchy.
+  void branchWasmRefIsSubtypeExn(Register ref, wasm::RefType sourceType,
+                                 wasm::RefType destType, Label* label,
+                                 bool onSuccess);
 
   // Perform a subtype check that `subSTV` is a subtype of `superSTV`, branching
   // to `label` depending on `onSuccess`. This method is a specialization of the
@@ -4064,11 +4092,43 @@ class MacroAssembler : public MacroAssemblerSpecific {
                            Register typeDefData, Register temp1, Register temp2,
                            Label* fail, gc::AllocKind allocKind,
                            bool zeroFields);
+  // Allocates a wasm array with a dynamic number of elements.
+  //
+  // `numElements` and `typeDefData` will be preserved. `instance` and `result`
+  // may be the same register, in which case `instance` will be clobbered.
+  void wasmNewArrayObject(Register instance, Register result,
+                          Register numElements, Register typeDefData,
+                          Register temp, Label* fail, uint32_t elemSize,
+                          bool zeroFields);
+  // Allocates a wasm array with a fixed number of elements.
+  //
   // `typeDefData` will be preserved. `instance` and `result` may be the same
   // register, in which case `instance` will be clobbered.
+  void wasmNewArrayObjectFixed(Register instance, Register result,
+                               Register typeDefData, Register temp1,
+                               Register temp2, Label* fail,
+                               uint32_t numElements, uint32_t storageBytes,
+                               bool zeroFields);
+
+  // This function handles nursery allocations for wasm. For JS, see
+  // MacroAssembler::bumpPointerAllocate.
+  //
+  // `typeDefData` will be preserved. `instance` and `result` may be the same
+  // register, in which case `instance` will be clobbered.
+  //
+  // See also the dynamically-sized version,
+  // MacroAssembler::wasmBumpPointerAllocateDynamic.
   void wasmBumpPointerAllocate(Register instance, Register result,
                                Register typeDefData, Register temp1,
                                Register temp2, Label* fail, uint32_t size);
+  // This function handles nursery allocations for wasm of dynamic size. For
+  // fixed-size allocations, see MacroAssembler::wasmBumpPointerAllocate.
+  //
+  // `typeDefData` and `size` will be preserved. `instance` and `result` may be
+  // the same register, in which case `instance` will be clobbered.
+  void wasmBumpPointerAllocateDynamic(Register instance, Register result,
+                                      Register typeDefData, Register size,
+                                      Register temp1, Label* fail);
 
   // Compute ptr += (indexTemp32 << shift) where shift can be any value < 32.
   // May destroy indexTemp32.  The value of indexTemp32 must be positive, and it
@@ -4699,20 +4759,66 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void loadInlineStringCharsForStore(Register str, Register dest);
 
  private:
-  void loadRopeChild(Register str, Register index, Register output,
-                     Label* isLinear);
+  enum class CharKind { CharCode, CodePoint };
+
+  void branchIfMaybeSplitSurrogatePair(Register leftChild, Register index,
+                                       Register scratch, Label* maybeSplit,
+                                       Label* notSplit);
+
+  void loadRopeChild(CharKind kind, Register str, Register index,
+                     Register output, Register maybeScratch, Label* isLinear,
+                     Label* splitSurrogate);
+
+  void branchIfCanLoadStringChar(CharKind kind, Register str, Register index,
+                                 Register scratch, Register maybeScratch,
+                                 Label* label);
+  void branchIfNotCanLoadStringChar(CharKind kind, Register str, Register index,
+                                    Register scratch, Register maybeScratch,
+                                    Label* label);
+
+  void loadStringChar(CharKind kind, Register str, Register index,
+                      Register output, Register scratch1, Register scratch2,
+                      Label* fail);
 
  public:
   void branchIfCanLoadStringChar(Register str, Register index, Register scratch,
-                                 Label* label);
+                                 Label* label) {
+    branchIfCanLoadStringChar(CharKind::CharCode, str, index, scratch,
+                              InvalidReg, label);
+  }
   void branchIfNotCanLoadStringChar(Register str, Register index,
-                                    Register scratch, Label* label);
+                                    Register scratch, Label* label) {
+    branchIfNotCanLoadStringChar(CharKind::CharCode, str, index, scratch,
+                                 InvalidReg, label);
+  }
+
+  void branchIfCanLoadStringCodePoint(Register str, Register index,
+                                      Register scratch1, Register scratch2,
+                                      Label* label) {
+    branchIfCanLoadStringChar(CharKind::CodePoint, str, index, scratch1,
+                              scratch2, label);
+  }
+  void branchIfNotCanLoadStringCodePoint(Register str, Register index,
+                                         Register scratch1, Register scratch2,
+                                         Label* label) {
+    branchIfNotCanLoadStringChar(CharKind::CodePoint, str, index, scratch1,
+                                 scratch2, label);
+  }
 
   void loadStringChar(Register str, Register index, Register output,
-                      Register scratch1, Register scratch2, Label* fail);
+                      Register scratch1, Register scratch2, Label* fail) {
+    loadStringChar(CharKind::CharCode, str, index, output, scratch1, scratch2,
+                   fail);
+  }
 
   void loadStringChar(Register str, int32_t index, Register output,
                       Register scratch1, Register scratch2, Label* fail);
+
+  void loadStringCodePoint(Register str, Register index, Register output,
+                           Register scratch1, Register scratch2, Label* fail) {
+    loadStringChar(CharKind::CodePoint, str, index, output, scratch1, scratch2,
+                   fail);
+  }
 
   void loadRopeLeftChild(Register str, Register dest);
   void loadRopeRightChild(Register str, Register dest);
@@ -4758,6 +4864,41 @@ class MacroAssembler : public MacroAssemblerSpecific {
    * Add |index| to |chars| so that |chars| now points at |chars[index]|.
    */
   void addToCharPtr(Register chars, Register index, CharEncoding encoding);
+
+  /**
+   * Branch if |src| is not a lead surrogate character.
+   */
+  void branchIfNotLeadSurrogate(Register src, Label* label);
+
+ private:
+  enum class SurrogateChar { Lead, Trail };
+  void branchSurrogate(Assembler::Condition cond, Register src,
+                       Register scratch, Label* label,
+                       SurrogateChar surrogateChar);
+
+ public:
+  /**
+   * Branch if |src| is a lead surrogate character.
+   */
+  void branchIfLeadSurrogate(Register src, Register scratch, Label* label) {
+    branchSurrogate(Assembler::Equal, src, scratch, label, SurrogateChar::Lead);
+  }
+
+  /**
+   * Branch if |src| is not a lead surrogate character.
+   */
+  void branchIfNotLeadSurrogate(Register src, Register scratch, Label* label) {
+    branchSurrogate(Assembler::NotEqual, src, scratch, label,
+                    SurrogateChar::Lead);
+  }
+
+  /**
+   * Branch if |src| is not a trail surrogate character.
+   */
+  void branchIfNotTrailSurrogate(Register src, Register scratch, Label* label) {
+    branchSurrogate(Assembler::NotEqual, src, scratch, label,
+                    SurrogateChar::Trail);
+  }
 
  private:
   void loadStringFromUnit(Register unit, Register dest,
@@ -5144,6 +5285,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void typedArrayElementSize(Register obj, Register output);
   void branchIfClassIsNotTypedArray(Register clasp, Label* notTypedArray);
+  void branchIfClassIsNotFixedLengthTypedArray(Register clasp,
+                                               Label* notTypedArray);
 
   void branchIfHasDetachedArrayBuffer(Register obj, Register temp,
                                       Label* label);
@@ -5364,7 +5507,7 @@ class MacroAssembler : public MacroAssemblerSpecific {
 
   void initTypedArraySlots(Register obj, Register temp, Register lengthReg,
                            LiveRegisterSet liveRegs, Label* fail,
-                           TypedArrayObject* templateObj,
+                           FixedLengthTypedArrayObject* templateObj,
                            TypedArrayLength lengthKind);
 
   void newGCString(Register result, Register temp, gc::Heap initialHeap,
@@ -5416,7 +5559,8 @@ class MacroAssembler : public MacroAssemblerSpecific {
   void setIsDefinitelyTypedArrayConstructor(Register obj, Register output);
 
   void loadMegamorphicCache(Register dest);
-  void loadStringToAtomCacheLastLookups(Register dest);
+  void lookupStringInAtomCacheLastLookups(Register str, Register scratch,
+                                          Label* fail);
   void loadMegamorphicSetPropCache(Register dest);
 
   void loadAtomOrSymbolAndHash(ValueOperand value, Register outId,

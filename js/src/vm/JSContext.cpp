@@ -42,6 +42,7 @@
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/friend/StackLimits.h"    // js::ReportOverRecursed
 #include "js/MemoryCallbacks.h"
+#include "js/Prefs.h"
 #include "js/Printf.h"
 #include "js/PropertyAndElement.h"  // JS_GetProperty
 #include "js/Stack.h"  // JS::NativeStackSize, JS::NativeStackLimit, JS::NativeStackLimitMin
@@ -608,7 +609,7 @@ void js::ReportIsNullOrUndefinedForPropertyAccess(JSContext* cx, HandleValue v,
                                                   int vIndex, HandleId key) {
   MOZ_ASSERT(v.isNullOrUndefined());
 
-  if (!cx->realm()->creationOptions().getPropertyErrorMessageFixEnabled()) {
+  if (!JS::Prefs::property_error_message_fix()) {
     ReportIsNullOrUndefinedForPropertyAccess(cx, v, vIndex);
     return;
   }
@@ -1152,6 +1153,35 @@ bool JSContext::getPendingException(MutableHandleValue rval) {
   status = prevStatus;
 
   rval.set(exception);
+  return true;
+}
+
+bool JSContext::getPendingExceptionStack(MutableHandleValue rval) {
+  MOZ_ASSERT(isExceptionPending());
+
+  Rooted<SavedFrame*> exceptionStack(this, unwrappedExceptionStack());
+  if (!exceptionStack) {
+    rval.setNull();
+    return true;
+  }
+  if (zone()->isAtomsZone()) {
+    rval.setObject(*exceptionStack);
+    return true;
+  }
+
+  RootedValue stack(this, ObjectValue(*exceptionStack));
+  RootedValue exception(this, unwrappedException());
+  JS::ExceptionStatus prevStatus = status;
+  clearPendingException();
+  if (!compartment()->wrap(this, &exception) ||
+      !compartment()->wrap(this, &stack)) {
+    return false;
+  }
+  this->check(stack);
+  setPendingException(exception, exceptionStack);
+  status = prevStatus;
+
+  rval.set(stack);
   return true;
 }
 

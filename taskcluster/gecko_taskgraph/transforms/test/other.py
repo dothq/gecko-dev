@@ -17,6 +17,7 @@ from voluptuous import Any, Optional, Required
 
 from gecko_taskgraph.transforms.test.variant import TEST_VARIANTS
 from gecko_taskgraph.util.platforms import platform_family
+from gecko_taskgraph.util.templates import merge
 
 transforms = TransformSequence()
 
@@ -65,6 +66,14 @@ def handle_suite_category(config, tasks):
 
         # From here on out we only use the suite name.
         task["suite"] = suite
+
+        # in the future we might need to refactor new-test-config to be suite specific
+        if "mochitest" in task["suite"] and config.params["try_task_config"].get(
+            "new-test-config", False
+        ):
+            task = merge(
+                task, {"mozharness": {"extra-options": ["--restartAfterFailure"]}}
+            )
         yield task
 
 
@@ -137,8 +146,8 @@ def set_treeherder_machine_platform(config, tasks):
         # treeherder.
         "macosx1100-64/opt": "osx-1100/opt",
         "macosx1100-64-shippable/opt": "osx-1100-shippable/opt",
-        "macosx1300-64/opt": "osx-1300/opt",
-        "macosx1300-64-shippable/opt": "osx-1300-shippable/opt",
+        "macosx1400-64/opt": "osx-1300/opt",
+        "macosx1400-64-shippable/opt": "osx-1400-shippable/opt",
         "win64-asan/opt": "windows10-64/asan",
         "win64-aarch64/opt": "windows10-aarch64/opt",
     }
@@ -166,6 +175,10 @@ def set_treeherder_machine_platform(config, tasks):
                 ".", "-"
             )
         elif "android-em-7.0-x86_64-shippable-lite-qr" in task["test-platform"]:
+            task["treeherder-machine-platform"] = task["test-platform"].replace(
+                ".", "-"
+            )
+        elif "android-em-7.0-x86-qr" in task["test-platform"]:
             task["treeherder-machine-platform"] = task["test-platform"].replace(
                 ".", "-"
             )
@@ -302,7 +315,7 @@ def setup_browsertime(config, tasks):
                     "macosx64-geckodriver",
                     "macosx64-node-16",
                 ],
-                "macosx1300.*": [
+                "macosx1400.*": [
                     "browsertime",
                     "macosx64-aarch64-geckodriver",
                     "macosx64-aarch64-node-16",
@@ -326,7 +339,7 @@ def setup_browsertime(config, tasks):
                 "android.*": ["linux64-ffmpeg-4.4.1"],
                 "linux.*": ["linux64-ffmpeg-4.4.1"],
                 "macosx1015.*": ["mac64-ffmpeg-4.4.1"],
-                "macosx1300.*": ["mac64-ffmpeg-4.4.1"],
+                "macosx1400.*": ["mac64-ffmpeg-4.4.1"],
                 "windows.*aarch64.*": ["win64-ffmpeg-4.4.1"],
                 "windows.*-32.*": ["win64-ffmpeg-4.4.1"],
                 "windows.*-64.*": ["win64-ffmpeg-4.4.1"],
@@ -335,46 +348,46 @@ def setup_browsertime(config, tasks):
 
         cd_fetches = {
             "android.*": [
-                "linux64-chromedriver-119",
                 "linux64-chromedriver-120",
                 "linux64-chromedriver-121",
+                "linux64-chromedriver-122",
             ],
             "linux.*": [
-                "linux64-chromedriver-119",
                 "linux64-chromedriver-120",
                 "linux64-chromedriver-121",
+                "linux64-chromedriver-122",
             ],
             "macosx1015.*": [
-                "mac64-chromedriver-119",
                 "mac64-chromedriver-120",
                 "mac64-chromedriver-121",
+                "mac64-chromedriver-122",
             ],
-            "macosx1300.*": [
-                "mac-arm-chromedriver-119",
+            "macosx1400.*": [
                 "mac-arm-chromedriver-120",
                 "mac-arm-chromedriver-121",
+                "mac-arm-chromedriver-122",
             ],
             "windows.*aarch64.*": [
-                "win32-chromedriver-119",
                 "win32-chromedriver-120",
                 "win32-chromedriver-121",
+                "win32-chromedriver-122",
             ],
             "windows.*-32.*": [
-                "win32-chromedriver-119",
                 "win32-chromedriver-120",
                 "win32-chromedriver-121",
+                "win32-chromedriver-122",
             ],
             "windows.*-64.*": [
-                "win32-chromedriver-119",
                 "win32-chromedriver-120",
                 "win32-chromedriver-121",
+                "win32-chromedriver-122",
             ],
         }
 
         chromium_fetches = {
             "linux.*": ["linux64-chromium"],
             "macosx1015.*": ["mac-chromium"],
-            "macosx1300.*": ["mac-chromium-arm"],
+            "macosx1400.*": ["mac-chromium-arm"],
             "windows.*aarch64.*": ["win32-chromium"],
             "windows.*-32.*": ["win32-chromium"],
             "windows.*-64.*": ["win64-chromium"],
@@ -674,8 +687,8 @@ def handle_tier(config, tasks):
                 "macosx1015-64-qr/debug",
                 "macosx1100-64-shippable-qr/opt",
                 "macosx1100-64-qr/debug",
-                "macosx1300-64-shippable-qr/opt",
-                "macosx1300-64-qr/debug",
+                "macosx1400-64-shippable-qr/opt",
+                "macosx1400-64-qr/debug",
                 "android-em-7.0-x86_64-shippable/opt",
                 "android-em-7.0-x86_64-shippable-lite/opt",
                 "android-em-7.0-x86_64/debug",
@@ -755,7 +768,7 @@ test_setting_description_schema = Schema(
     {
         Required("_hash"): str,
         "platform": {
-            Required("arch"): Any("32", "64", "aarch64", "arm7", "x86_64"),
+            Required("arch"): Any("32", "64", "aarch64", "arm7", "x86", "x86_64"),
             Required("os"): {
                 Required("name"): Any("android", "linux", "macosx", "windows"),
                 Required("version"): str,

@@ -12,10 +12,6 @@
 let ignoreList = [
   // CodeMirror is imported as-is, see bug 1004423.
   { sourceName: /codemirror\.css$/i, isFromDevTools: true },
-  {
-    sourceName: /devtools\/content\/debugger\/src\/components\/([A-z\/]+).css/i,
-    isFromDevTools: true,
-  },
   // UA-only media features.
   {
     sourceName: /\b(autocomplete-item)\.css$/,
@@ -335,7 +331,7 @@ function processCSSRules(container) {
     let urls = cssText.match(/url\("[^"]*"\)/g);
     // Extract props by searching all "--" preceded by "var(" or a non-word
     // character.
-    let props = cssText.match(/(var\(|\W|^)(--[\w\-]+)/g);
+    let props = cssText.match(/(var\(\s*|\W|^)(--[\w\-]+)/g);
     if (!urls && !props) {
       continue;
     }
@@ -362,7 +358,7 @@ function processCSSRules(container) {
 
     for (let prop of props || []) {
       if (prop.startsWith("var(")) {
-        prop = prop.substring(4);
+        prop = prop.substring(4).trim();
         let prevValue = customPropsToReferencesMap.get(prop) || 0;
         customPropsToReferencesMap.set(prop, prevValue + 1);
       } else {

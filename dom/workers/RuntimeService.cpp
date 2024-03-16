@@ -602,7 +602,8 @@ class JSDispatchableRunnable final : public WorkerRunnable {
  public:
   JSDispatchableRunnable(WorkerPrivate* aWorkerPrivate,
                          JS::Dispatchable* aDispatchable)
-      : WorkerRunnable(aWorkerPrivate, WorkerRunnable::WorkerThread),
+      : WorkerRunnable(aWorkerPrivate, "JSDispatchableRunnable",
+                       WorkerRunnable::WorkerThread),
         mDispatchable(aDispatchable) {
     MOZ_ASSERT(mDispatchable);
   }
@@ -1022,7 +1023,7 @@ void PlatformOverrideChanged(const char* /* aPrefName */,
 } /* anonymous namespace */
 
 // This is only touched on the main thread. Initialized in Init() below.
-UniquePtr<JSSettings> RuntimeService::sDefaultJSSettings;
+StaticAutoPtr<JSSettings> RuntimeService::sDefaultJSSettings;
 
 RuntimeService::RuntimeService()
     : mMutex("RuntimeService::mMutex"),
@@ -1338,7 +1339,7 @@ nsresult RuntimeService::Init() {
   nsLayoutStatics::AddRef();
 
   // Initialize JSSettings.
-  sDefaultJSSettings = MakeUnique<JSSettings>();
+  sDefaultJSSettings = new JSSettings();
   SetDefaultJSGCSettings(JSGC_MAX_BYTES, Some(WORKER_DEFAULT_RUNTIME_HEAPSIZE));
   SetDefaultJSGCSettings(JSGC_ALLOCATION_THRESHOLD,
                          Some(WORKER_DEFAULT_ALLOCATION_THRESHOLD));
@@ -1457,10 +1458,11 @@ void RuntimeService::Shutdown() {
 
 namespace {
 
-class DumpCrashInfoRunnable : public WorkerControlRunnable {
+class DumpCrashInfoRunnable final : public WorkerControlRunnable {
  public:
   explicit DumpCrashInfoRunnable(WorkerPrivate* aWorkerPrivate)
-      : WorkerControlRunnable(aWorkerPrivate, WorkerThread),
+      : WorkerControlRunnable(aWorkerPrivate, "DumpCrashInfoRunnable",
+                              WorkerThread),
         mMonitor("DumpCrashInfoRunnable::mMonitor") {}
 
   bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override {

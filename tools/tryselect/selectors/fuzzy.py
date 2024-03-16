@@ -114,7 +114,9 @@ class FuzzyParser(BaseTryParser):
         "chemspill-prio",
         "disable-pgo",
         "env",
+        "existing-tasks",
         "gecko-profile",
+        "new-test-config",
         "path",
         "pernosco",
         "rebuild",
@@ -127,9 +129,9 @@ def run(
     update=False,
     query=None,
     intersect_query=None,
-    try_config=None,
     full=False,
     parameters=None,
+    try_config_params=None,
     save_query=False,
     stage_changes=False,
     dry_run=False,
@@ -141,6 +143,7 @@ def run(
     disable_target_task_filter=False,
     push_to_lando=False,
     show_chunk_numbers=False,
+    new_test_config=False,
 ):
     fzf = fzf_bootstrap(update)
 
@@ -261,13 +264,6 @@ def run(
     if save_query:
         return queries
 
-    if not show_chunk_numbers:
-        selected = set(
-            task_name
-            for task_name, task in all_tasks.items()
-            if task.chunk_pattern in selected
-        )
-
     # build commit message
     msg = "Fuzzy"
     args = ["query={}".format(q) for q in queries]
@@ -278,7 +274,9 @@ def run(
     return push_to_try(
         "fuzzy",
         message.format(msg=msg),
-        try_task_config=generate_try_task_config("fuzzy", selected, try_config),
+        try_task_config=generate_try_task_config(
+            "fuzzy", selected, params=try_config_params
+        ),
         stage_changes=stage_changes,
         dry_run=dry_run,
         closed_tree=closed_tree,

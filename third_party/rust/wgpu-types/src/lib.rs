@@ -10,7 +10,9 @@
 #![warn(missing_docs, unsafe_op_in_unsafe_fn)]
 
 #[cfg(any(feature = "serde", test))]
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(any(feature = "serde", test))]
+use serde::Serialize;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::{num::NonZeroU32, ops::Range};
@@ -96,13 +98,13 @@ pub const QUERY_SIZE: u32 = 8;
 pub enum Backend {
     /// Dummy backend, used for testing.
     Empty = 0,
-    /// Vulkan API
+    /// Vulkan API (Windows, Linux, Android, MacOS via `vulkan-portability`/MoltenVK)
     Vulkan = 1,
     /// Metal API (Apple platforms)
     Metal = 2,
     /// Direct3D-12 (Windows)
     Dx12 = 3,
-    /// OpenGL ES-3 (Linux, Android)
+    /// OpenGL 3.3+ (Windows), OpenGL ES 3.0+ (Linux, Android, MacOS via Angle), and WebGL2
     Gl = 4,
     /// WebGPU in the browser
     BrowserWebGpu = 5,
@@ -110,7 +112,7 @@ pub enum Backend {
 
 impl Backend {
     /// Returns the string name of the backend.
-    pub fn to_str(self) -> &'static str {
+    pub const fn to_str(self) -> &'static str {
         match self {
             Backend::Empty => "empty",
             Backend::Vulkan => "vulkan",
@@ -122,14 +124,19 @@ impl Backend {
     }
 }
 
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.to_str())
+    }
+}
+
 /// Power Preference when choosing a physical adapter.
 ///
 /// Corresponds to [WebGPU `GPUPowerPreference`](
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpupowerpreference).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum PowerPreference {
     #[default]
@@ -153,13 +160,21 @@ bitflags::bitflags! {
         const GL = 1 << Backend::Gl as u32;
         /// Supported on macOS/iOS
         const METAL = 1 << Backend::Metal as u32;
-        /// Supported on Windows 10
+        /// Supported on Windows 10 and later
         const DX12 = 1 << Backend::Dx12 as u32;
-        /// Supported when targeting the web through webassembly
+        /// Supported when targeting the web through webassembly with the `webgpu` feature enabled.
+        ///
+        /// The WebGPU backend is special in several ways:
+        /// It is not not implemented by `wgpu_core` and instead by the higher level `wgpu` crate.
+        /// Whether WebGPU is targeted is decided upon the creation of the `wgpu::Instance`,
+        /// *not* upon adapter creation. See `wgpu::Instance::new`.
         const BROWSER_WEBGPU = 1 << Backend::BrowserWebGpu as u32;
         /// All the apis that wgpu offers first tier of support for.
         ///
-        /// Vulkan + Metal + DX12 + Browser WebGPU
+        /// * [`Backends::VULKAN`]
+        /// * [`Backends::METAL`]
+        /// * [`Backends::DX12`]
+        /// * [`Backends::BROWSER_WEBGPU`]
         const PRIMARY = Self::VULKAN.bits()
             | Self::METAL.bits()
             | Self::DX12.bits()
@@ -167,7 +182,7 @@ bitflags::bitflags! {
         /// All the apis that wgpu offers second tier of support for. These may
         /// be unsupported/still experimental.
         ///
-        /// OpenGL
+        /// * [`Backends::GL`]
         const SECONDARY = Self::GL.bits();
     }
 }
@@ -192,8 +207,7 @@ impl From<Backend> for Backends {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpurequestadapteroptions).
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RequestAdapterOptions<S> {
     /// Power preference for the adapter.
     pub power_preference: PowerPreference,
@@ -890,6 +904,14 @@ bitflags::bitflags! {
         /// This mainly applies to a Vulkan driver's compliance version. If the major compliance version
         /// is `0`, then the driver is ignored. This flag allows that driver to be enabled for testing.
         const ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER = 1 << 3;
+        /// Enable GPU-based validation. Currently, this only changes behavior on the DX12
+        /// backend.
+        ///
+        /// Supported platforms:
+        ///
+        /// - D3D12; called ["GPU-based validation", or
+        ///   "GBV"](https://web.archive.org/web/20230206120404/https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-d3d12-debug-layer-gpu-based-validation)
+        const GPU_BASED_VALIDATION = 1 << 4;
     }
 }
 
@@ -900,9 +922,9 @@ impl Default for InstanceFlags {
 }
 
 impl InstanceFlags {
-    /// Enable debugging and validation flags.
+    /// Enable recommended debugging and validation flags.
     pub fn debugging() -> Self {
-        InstanceFlags::DEBUG | InstanceFlags::VALIDATION
+        InstanceFlags::DEBUG | InstanceFlags::VALIDATION | InstanceFlags::GPU_BASED_VALIDATION
     }
 
     /// Infer good defaults from the build type
@@ -945,6 +967,9 @@ impl InstanceFlags {
         if let Some(bit) = env("WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER") {
             self.set(Self::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER, bit);
         }
+        if let Some(bit) = env("WGPU_GPU_BASED_VALIDATION") {
+            self.set(Self::GPU_BASED_VALIDATION, bit);
+        }
 
         self
     }
@@ -984,7 +1009,7 @@ impl InstanceFlags {
 /// [`downlevel_defaults()`]: Limits::downlevel_defaults
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
 pub struct Limits {
     /// Maximum allowed value for the `size.width` of a texture created with `TextureDimension::D1`.
@@ -1528,7 +1553,7 @@ bitflags::bitflags! {
         /// If this is false, calls to `CommandEncoder::resolve_query_set` will be performed on the device (i.e. cpu) timeline
         /// and will block that timeline until the query has data. You may work around this limitation by waiting until the submit
         /// whose queries you are resolving is fully finished (through use of `queue.on_submitted_work_done`) and only
-        /// then submitting the resolve_query_set command. The queries will be guarenteed finished, so will not block.
+        /// then submitting the resolve_query_set command. The queries will be guaranteed finished, so will not block.
         ///
         /// Supported by:
         /// - Vulkan,
@@ -1659,8 +1684,7 @@ pub struct AdapterInfo {
 /// https://gpuweb.github.io/gpuweb/#gpudevicedescriptor).
 #[repr(C)]
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DeviceDescriptor<L> {
     /// Debug label for the device.
     pub label: L,
@@ -1722,8 +1746,7 @@ impl_bitflags!(ShaderStages);
 /// https://gpuweb.github.io/gpuweb/#enumdef-gputextureviewdimension).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum TextureViewDimension {
     /// A one dimensional texture. `texture_1d` in WGSL and `texture1D` in GLSL.
     #[cfg_attr(feature = "serde", serde(rename = "1d"))]
@@ -1767,8 +1790,7 @@ impl TextureViewDimension {
 /// used with the first render target.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum BlendFactor {
     /// 0.0
@@ -1830,8 +1852,7 @@ impl BlendFactor {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpublendoperation).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum BlendOperation {
     /// Src + Dst
@@ -1853,8 +1874,7 @@ pub enum BlendOperation {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpublendcomponent).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct BlendComponent {
     /// Multiplier for the source, which is produced by the fragment shader.
@@ -1909,8 +1929,7 @@ impl Default for BlendComponent {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpublendstate).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct BlendState {
     /// Color equation.
@@ -1949,8 +1968,7 @@ impl BlendState {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpucolortargetstate).
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ColorTargetState {
     /// The [`TextureFormat`] of the image that this pipeline will render to. Must match the format
@@ -1982,8 +2000,7 @@ impl From<TextureFormat> for ColorTargetState {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpuprimitivetopology).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum PrimitiveTopology {
     /// Vertex data is a list of points. Each vertex is a new point.
@@ -2023,8 +2040,7 @@ impl PrimitiveTopology {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpufrontface).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum FrontFace {
     /// Triangles with vertices in counter clockwise order are considered the front face.
@@ -2045,8 +2061,7 @@ pub enum FrontFace {
 /// except that the `"none"` value is represented using `Option<Face>` instead.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum Face {
     /// Front face
@@ -2058,8 +2073,7 @@ pub enum Face {
 /// Type of drawing mode for polygons
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum PolygonMode {
     /// Polygons are filled
@@ -2077,8 +2091,7 @@ pub enum PolygonMode {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuprimitivestate).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct PrimitiveState {
     /// The primitive topology used to interpret vertices.
@@ -2118,8 +2131,7 @@ pub struct PrimitiveState {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpumultisamplestate).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct MultisampleState {
     /// The number of samples calculated per pixel (for MSAA). For non-multisampled textures,
@@ -2218,7 +2230,7 @@ pub struct TextureFormatFeatures {
 /// ASTC block dimensions
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AstcBlock {
     /// 4x4 block compressed texture. 16 bytes per block (8 bit/px).
     B4x4,
@@ -2253,7 +2265,7 @@ pub enum AstcBlock {
 /// ASTC RGBA channel
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AstcChannel {
     /// 8 bit integer RGBA, [0, 255] converted to/from linear-color float [0, 1] in shader.
     ///
@@ -4280,10 +4292,10 @@ impl Default for ColorWrites {
 /// Passed to `Device::poll` to control how and if it should block.
 #[derive(Clone)]
 pub enum Maintain<T> {
-    /// On native backends, block until the given submission has
+    /// On wgpu-core based backends, block until the given submission has
     /// completed execution, and any callbacks have been invoked.
     ///
-    /// On the web, this has no effect. Callbacks are invoked from the
+    /// On WebGPU, this has no effect. Callbacks are invoked from the
     /// window event loop.
     WaitForSubmissionIndex(T),
     /// Same as WaitForSubmissionIndex but waits for the most recent submission.
@@ -4293,6 +4305,22 @@ pub enum Maintain<T> {
 }
 
 impl<T> Maintain<T> {
+    /// Construct a wait variant
+    pub fn wait() -> Self {
+        // This function seems a little silly, but it is useful to allow
+        // <https://github.com/gfx-rs/wgpu/pull/5012> to be split up, as
+        // it has meaning in that PR.
+        Self::Wait
+    }
+
+    /// Construct a WaitForSubmissionIndex variant
+    pub fn wait_for(submission_index: T) -> Self {
+        // This function seems a little silly, but it is useful to allow
+        // <https://github.com/gfx-rs/wgpu/pull/5012> to be split up, as
+        // it has meaning in that PR.
+        Self::WaitForSubmissionIndex(submission_index)
+    }
+
     /// This maintain represents a wait of some kind.
     pub fn is_wait(&self) -> bool {
         match *self {
@@ -4314,6 +4342,29 @@ impl<T> Maintain<T> {
     }
 }
 
+/// Result of a maintain operation.
+pub enum MaintainResult {
+    /// There are no active submissions in flight as of the beginning of the poll call.
+    /// Other submissions may have been queued on other threads at the same time.
+    ///
+    /// This implies that the given poll is complete.
+    SubmissionQueueEmpty,
+    /// More information coming soon <https://github.com/gfx-rs/wgpu/pull/5012>
+    Ok,
+}
+
+impl MaintainResult {
+    /// Returns true if the result is [`Self::SubmissionQueueEmpty`]`.
+    pub fn is_queue_empty(&self) -> bool {
+        matches!(self, Self::SubmissionQueueEmpty)
+    }
+
+    /// Panics if the MaintainResult is not Ok.
+    pub fn panic_on_timeout(self) {
+        let _ = self;
+    }
+}
+
 /// State of the stencil operation (fixed-pipeline stage).
 ///
 /// For use in [`DepthStencilState`].
@@ -4322,8 +4373,7 @@ impl<T> Maintain<T> {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpudepthstencilstate).
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct StencilState {
     /// Front face mode.
     pub front: StencilFaceState,
@@ -4370,8 +4420,7 @@ impl StencilState {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpudepthstencilstate).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DepthBiasState {
     /// Constant depth biasing factor, in basic units of the depth format.
     pub constant: i32,
@@ -4412,8 +4461,7 @@ impl Eq for DepthBiasState {}
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpudepthstencilstate).
 #[repr(C)]
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DepthStencilState {
     /// Format of the depth/stencil buffer, must be special depth format. Must match the format
     /// of the depth/stencil attachment in [`CommandEncoder::begin_render_pass`][CEbrp].
@@ -4425,10 +4473,10 @@ pub struct DepthStencilState {
     /// Comparison function used to compare depth values in the depth test.
     pub depth_compare: CompareFunction,
     /// Stencil state.
-    #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub stencil: StencilState,
     /// Depth bias state.
-    #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub bias: DepthBiasState,
 }
 
@@ -4460,7 +4508,7 @@ impl DepthStencilState {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpuindexformat).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum IndexFormat {
     /// Indices are 16 bit unsigned integers.
@@ -4476,8 +4524,7 @@ pub enum IndexFormat {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpustenciloperation).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum StencilOperation {
     /// Keep stencil value unchanged.
@@ -4510,8 +4557,7 @@ pub enum StencilOperation {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpustencilfacestate).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct StencilFaceState {
     /// Comparison function that determines if the fail_op or pass_op is used on the stencil buffer.
@@ -4561,8 +4607,7 @@ impl Default for StencilFaceState {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpucomparefunction).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum CompareFunction {
     /// Function never passes
@@ -4656,8 +4701,7 @@ impl CompareFunction {
 /// [`Instance`]: VertexStepMode::Instance
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum VertexStepMode {
     /// Vertex data is advanced every vertex.
@@ -4678,8 +4722,7 @@ pub enum VertexStepMode {
 /// [`vertex_attr_array`]: ../wgpu/macro.vertex_attr_array.html
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct VertexAttribute {
     /// Format of the input
@@ -4696,8 +4739,7 @@ pub struct VertexAttribute {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpuvertexformat).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum VertexFormat {
     /// Two unsigned bytes (u8). `vec2<u32>` in shaders.
@@ -4856,8 +4898,7 @@ impl_bitflags!(BufferUsages);
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpubufferdescriptor).
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct BufferDescriptor<L> {
     /// Debug label of a buffer. This will show up in graphics debuggers for easy identification.
     pub label: L,
@@ -4891,8 +4932,7 @@ impl<L> BufferDescriptor<L> {
 /// Corresponds to [WebGPU `GPUCommandEncoderDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpucommandencoderdescriptor).
 #[repr(C)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CommandEncoderDescriptor<L> {
     /// Debug label for the command encoder. This will show up in graphics debuggers for easy identification.
@@ -4917,8 +4957,7 @@ impl<T> Default for CommandEncoderDescriptor<Option<T>> {
 /// Behavior of the presentation engine based on frame rate.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum PresentMode {
     /// Chooses FifoRelaxed -> Fifo based on availability.
     ///
@@ -4990,8 +5029,7 @@ pub enum PresentMode {
 /// compositing.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum CompositeAlphaMode {
     /// Chooses either `Opaque` or `Inherit` automatically，depending on the
@@ -5090,8 +5128,7 @@ impl Default for SurfaceCapabilities {
 /// [`Surface`]: ../wgpu/struct.Surface.html
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SurfaceConfiguration<V> {
     /// The usage of the swap chain. The only supported usage is `RENDER_ATTACHMENT`.
     pub usage: TextureUsages,
@@ -5107,6 +5144,26 @@ pub struct SurfaceConfiguration<V> {
     /// AutoNoVsync will gracefully do a designed sets of fallbacks if their primary modes are
     /// unsupported.
     pub present_mode: PresentMode,
+    /// Desired maximum number of frames that the presentation engine should queue in advance.
+    ///
+    /// This is a hint to the backend implementation and will always be clamped to the supported range.
+    /// As a consequence, either the maximum frame latency is set directly on the swap chain,
+    /// or waits on present are scheduled to avoid exceeding the maximum frame latency if supported,
+    /// or the swap chain size is set to (max-latency + 1).
+    ///
+    /// Defaults to 2 when created via `wgpu::Surface::get_default_config`.
+    ///
+    /// Typical values range from 3 to 1, but higher values are possible:
+    /// * Choose 2 or higher for potentially smoother frame display, as it allows to be at least one frame
+    /// to be queued up. This typically avoids starving the GPU's work queue.
+    /// Higher values are useful for achieving a constant flow of frames to the display under varying load.
+    /// * Choose 1 for low latency from frame recording to frame display.
+    /// ⚠️ If the backend does not support waiting on present, this will cause the CPU to wait for the GPU
+    /// to finish all work related to the previous frame when calling `wgpu::Surface::get_current_texture`,
+    /// causing CPU-GPU serialization (i.e. when `wgpu::Surface::get_current_texture` returns, the GPU might be idle).
+    /// It is currently not possible to query this. See <https://github.com/gfx-rs/wgpu/issues/2869>.
+    /// * A value of 0 is generally not supported and always clamped to a higher value.
+    pub desired_maximum_frame_latency: u32,
     /// Specifies how the alpha channel of the textures should be handled during compositing.
     pub alpha_mode: CompositeAlphaMode,
     /// Specifies what view formats will be allowed when calling create_view() on texture returned by get_current_texture().
@@ -5126,6 +5183,7 @@ impl<V: Clone> SurfaceConfiguration<V> {
             width: self.width,
             height: self.height,
             present_mode: self.present_mode,
+            desired_maximum_frame_latency: self.desired_maximum_frame_latency,
             alpha_mode: self.alpha_mode,
             view_formats: fun(self.view_formats.clone()),
         }
@@ -5196,7 +5254,7 @@ impl PresentationTimestamp {
 /// This is not to be used as a generic color type, only for specific wgpu interfaces.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Color {
     /// Red component of the color
@@ -5255,8 +5313,7 @@ impl Color {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gputexturedimension).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum TextureDimension {
     /// 1D texture
     #[cfg_attr(feature = "serde", serde(rename = "1d"))]
@@ -5275,8 +5332,7 @@ pub enum TextureDimension {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuorigin2ddict).
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Origin2d {
     ///
@@ -5311,8 +5367,7 @@ impl std::fmt::Debug for Origin2d {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuorigin3ddict).
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Origin3d {
     /// X position of the origin
@@ -5354,8 +5409,7 @@ impl std::fmt::Debug for Origin3d {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuextent3ddict).
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct Extent3d {
     /// Width of the extent
@@ -5554,8 +5608,7 @@ fn test_max_mips() {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gputexturedescriptor).
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TextureDescriptor<L, V> {
     /// Debug label of the texture. This will show up in graphics debuggers for easy identification.
     pub label: L,
@@ -5686,8 +5739,7 @@ impl<L, V> TextureDescriptor<L, V> {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gputextureaspect).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum TextureAspect {
     /// Depth, Stencil, and Color.
@@ -5711,8 +5763,7 @@ pub enum TextureAspect {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpuaddressmode).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum AddressMode {
     /// Clamp the value to the edge of the texture
@@ -5745,8 +5796,7 @@ pub enum AddressMode {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpufiltermode).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Hash, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum FilterMode {
     /// Nearest neighbor sampling.
@@ -5762,8 +5812,7 @@ pub enum FilterMode {
 
 /// A range of push constant memory to pass to a shader stage.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PushConstantRange {
     /// Stage push constant range is visible from. Each stage can only be served by at most one range.
     /// One range can serve multiple stages however.
@@ -5779,8 +5828,7 @@ pub struct PushConstantRange {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpucommandbufferdescriptor).
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct CommandBufferDescriptor<L> {
     /// Debug label of this command buffer.
     pub label: L,
@@ -5801,8 +5849,7 @@ impl<L> CommandBufferDescriptor<L> {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpurenderbundleencoderdescriptor).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RenderBundleDepthStencil {
     /// Format of the attachment.
     pub format: TextureFormat,
@@ -5829,8 +5876,7 @@ pub struct RenderBundleDepthStencil {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpurenderbundledescriptor).
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RenderBundleDescriptor<L> {
     /// Debug label of the render bundle encoder. This will show up in graphics debuggers for easy identification.
     pub label: L,
@@ -5866,8 +5912,7 @@ impl<T> Default for RenderBundleDescriptor<Option<T>> {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagedatalayout).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageDataLayout {
     /// Offset into the buffer that is the start of the texture. Must be a multiple of texture block size.
     /// For non-compressed textures, this is 1.
@@ -5907,8 +5952,7 @@ pub struct ImageDataLayout {
 /// Corresponds to [WebGPU `GPUBufferBindingType`](
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpubufferbindingtype).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum BufferBindingType {
     /// A buffer for uniform values.
     ///
@@ -5973,8 +6017,7 @@ pub enum BufferBindingType {
 /// Corresponds to [WebGPU `GPUTextureSampleType`](
 /// https://gpuweb.github.io/gpuweb/#enumdef-gputexturesampletype).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum TextureSampleType {
     /// Sampling returns floats.
     ///
@@ -6056,8 +6099,7 @@ impl Default for TextureSampleType {
 /// Corresponds to [WebGPU `GPUStorageTextureAccess`](
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpustoragetextureaccess).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum StorageTextureAccess {
     /// The texture can only be written in the shader and it:
@@ -6119,8 +6161,7 @@ pub enum StorageTextureAccess {
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpusamplerbindingtype).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum SamplerBindingType {
     /// The sampling result is produced based on more than a single color sample from a texture,
@@ -6140,8 +6181,7 @@ pub enum SamplerBindingType {
 /// Corresponds to WebGPU's mutually exclusive fields within [`GPUBindGroupLayoutEntry`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpubindgrouplayoutentry).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum BindingType {
     /// A buffer binding.
     ///
@@ -6157,7 +6197,7 @@ pub enum BindingType {
         /// for each dynamic binding in increasing order of binding number.
         ///
         /// [RPsbg]: ../wgpu/struct.RenderPass.html#method.set_bind_group
-        #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+        #[cfg_attr(feature = "serde", serde(default))]
         has_dynamic_offset: bool,
 
         /// The minimum size for a [`BufferBinding`] matching this entry, in bytes.
@@ -6185,7 +6225,7 @@ pub enum BindingType {
         /// [minimum buffer binding size]: https://www.w3.org/TR/webgpu/#minimum-buffer-binding-size
         /// [`create_render_pipeline`]: ../wgpu/struct.Device.html#method.create_render_pipeline
         /// [`create_compute_pipeline`]: ../wgpu/struct.Device.html#method.create_compute_pipeline
-        #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+        #[cfg_attr(feature = "serde", serde(default))]
         min_binding_size: Option<BufferSize>,
     },
     /// A sampler that can be used to sample a texture.
@@ -6290,8 +6330,7 @@ impl BindingType {
 /// Corresponds to [WebGPU `GPUBindGroupLayoutEntry`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpubindgrouplayoutentry).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct BindGroupLayoutEntry {
     /// Binding index. Must match shader index and be unique inside a BindGroupLayout. A binding
     /// of index 1, would be described as `layout(set = 0, binding = 1) uniform` in shaders.
@@ -6305,7 +6344,7 @@ pub struct BindGroupLayoutEntry {
     /// If this value is Some and `ty` is `BindingType::Texture`, [`Features::TEXTURE_BINDING_ARRAY`] must be supported.
     ///
     /// If this value is Some and `ty` is any other variant, bind group creation will fail.
-    #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub count: Option<NonZeroU32>,
 }
 
@@ -6315,8 +6354,7 @@ pub struct BindGroupLayoutEntry {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopybuffer).
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageCopyBuffer<B> {
     /// The buffer to be copied to/from.
     pub buffer: B,
@@ -6330,8 +6368,7 @@ pub struct ImageCopyBuffer<B> {
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopytexture).
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageCopyTexture<T> {
     /// The texture to be copied to/from.
     pub texture: T,
@@ -6340,10 +6377,10 @@ pub struct ImageCopyTexture<T> {
     /// The base texel of the texture in the selected `mip_level`. Together
     /// with the `copy_size` argument to copy functions, defines the
     /// sub-region of the texture to copy.
-    #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub origin: Origin3d,
     /// The copy aspect.
-    #[cfg_attr(any(feature = "trace", feature = "replay"), serde(default))]
+    #[cfg_attr(feature = "serde", serde(default))]
     pub aspect: TextureAspect,
 }
 
@@ -6366,7 +6403,7 @@ impl<T> ImageCopyTexture<T> {
     }
 }
 
-/// View of an external texture that cna be used to copy to a texture.
+/// View of an external texture that can be used to copy to a texture.
 ///
 /// Corresponds to [WebGPU `GPUImageCopyExternalImage`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopyexternalimage).
@@ -6404,7 +6441,7 @@ pub enum ExternalImageSource {
     HTMLCanvasElement(web_sys::HtmlCanvasElement),
     /// Copy from a off-screen canvas.
     ///
-    /// Requies [`DownlevelFlags::UNRESTRICTED_EXTERNAL_TEXTURE_COPIES`]
+    /// Requires [`DownlevelFlags::UNRESTRICTED_EXTERNAL_TEXTURE_COPIES`]
     OffscreenCanvas(web_sys::OffscreenCanvas),
 }
 
@@ -6463,8 +6500,7 @@ unsafe impl Sync for ExternalImageSource {}
 /// Corresponds to [HTML Canvas `PredefinedColorSpace`](
 /// https://html.spec.whatwg.org/multipage/canvas.html#predefinedcolorspace).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum PredefinedColorSpace {
     /// sRGB color space
@@ -6479,8 +6515,7 @@ pub enum PredefinedColorSpace {
 /// Corresponds to [WebGPU `GPUImageCopyTextureTagged`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopytexturetagged).
 #[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageCopyTextureTagged<T> {
     /// The texture to be copied to/from.
     pub texture: T,
@@ -6511,8 +6546,7 @@ impl<T: Copy> ImageCopyTextureTagged<T> {
 /// Subresource range within an image
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ImageSubresourceRange {
     /// Aspect of the texture. Color textures must be [`TextureAspect::All`][TAA].
@@ -6613,8 +6647,7 @@ impl ImageSubresourceRange {
 /// Color variation to use when sampler addressing mode is [`AddressMode::ClampToBorder`]
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SamplerBorderColor {
     /// [0, 0, 0, 0]
     TransparentBlack,
@@ -6636,8 +6669,7 @@ pub enum SamplerBorderColor {
 /// Corresponds to [WebGPU `GPUQuerySetDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuquerysetdescriptor).
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct QuerySetDescriptor<L> {
     /// Debug label for the query set.
     pub label: L,
@@ -6664,8 +6696,7 @@ impl<L> QuerySetDescriptor<L> {
 /// Corresponds to [WebGPU `GPUQueryType`](
 /// https://gpuweb.github.io/gpuweb/#enumdef-gpuquerytype).
 #[derive(Copy, Clone, Debug)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum QueryType {
     /// Query returns a single 64-bit number, serving as an occlusion boolean.
     Occlusion,
@@ -6811,8 +6842,7 @@ impl DispatchIndirectArgs {
 
 /// Describes how shader bound checks should be performed.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShaderBoundChecks {
     runtime_checks: bool,
 }
@@ -7034,4 +7064,18 @@ pub enum DeviceLostReason {
     Unknown = 0,
     /// After Device::destroy
     Destroyed = 1,
+    /// After Device::drop
+    ///
+    /// WebGPU does not invoke the device lost callback when the device is
+    /// dropped to prevent garbage collection from being observable. In wgpu,
+    /// we invoke the callback on drop to help with managing memory owned by
+    /// the callback.
+    Dropped = 2,
+    /// After replacing the device_lost_callback
+    ///
+    /// WebGPU does not have a concept of a device lost callback, but wgpu
+    /// does. wgpu guarantees that any supplied callback will be invoked
+    /// exactly once before it is dropped, which helps with managing the
+    /// memory owned by the callback.
+    ReplacedCallback = 3,
 }

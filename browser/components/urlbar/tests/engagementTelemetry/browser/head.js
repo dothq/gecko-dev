@@ -68,6 +68,10 @@ function assertExposureTelemetry(expectedExtraList) {
 
 function _assertGleanTelemetry(telemetryName, expectedExtraList) {
   const telemetries = Glean.urlbar[telemetryName].testGetValue() ?? [];
+  info(
+    "Asserting Glean telemetry is correct, actual events are: " +
+      JSON.stringify(telemetries)
+  );
   Assert.equal(
     telemetries.length,
     expectedExtraList.length,
@@ -200,11 +204,9 @@ async function doPasteAndGo(data) {
 async function doTest(testFn) {
   await Services.fog.testFlushAllChildren();
   Services.fog.testResetFOG();
-  // Enable recording telemetry for abandonment, engagement and impression.
+  // Enable recording telemetry for impression, as it is disabled by default.
   Services.fog.setMetricsFeatureConfig(
     JSON.stringify({
-      "urlbar.abandonment": true,
-      "urlbar.engagement": true,
       "urlbar.impression": true,
     })
   );

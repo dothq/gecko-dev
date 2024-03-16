@@ -314,6 +314,42 @@ namespace ChromeUtils {
   Promise<sequence<CDMInformation>> getGMPContentDecryptionModuleInformation();
 
   /**
+   * Synchronously loads and evaluates the JS module source located at
+   * 'aResourceURI'.
+   *
+   * @param aResourceURI A resource:// URI string to load the module from.
+   * @param aOption An option to specify where to load the module into.
+   * @returns the module's namespace object.
+   *
+   * The implementation maintains a hash of aResourceURI->global obj.
+   * Subsequent invocations of import with 'aResourceURI' pointing to
+   * the same file will not cause the module to be re-evaluated.
+   *
+   * In worker threads, aOption is required and only { global: "current" } and
+   * { global: "contextual" } are supported.
+   */
+  [Throws]
+  object importESModule(DOMString aResourceURI,
+                        optional ImportESModuleOptionsDictionary aOptions = {});
+
+  /**
+   * Defines propertys on the given target which lazily imports a ES module
+   * when accessed.
+   *
+   * @param aTarget The target object on which to define the property.
+   * @param aModules An object with a property for each module property to be
+   *                 imported, where the property name is the name of the
+   *                 imported symbol and the value is the module URI.
+   * @param aOption An option to specify where to load the module into.
+   *
+   * In worker threads, aOption is required and only { global: "current" } and
+   * { global: "contextual" } are supported.
+   */
+  [Throws]
+  undefined defineESModuleGetters(object aTarget, object aModules,
+                                  optional ImportESModuleOptionsDictionary aOptions = {});
+
+  /**
    * IF YOU ADD NEW METHODS HERE, MAKE SURE THEY ARE THREAD-SAFE.
    */
 };
@@ -509,20 +545,6 @@ partial namespace ChromeUtils {
   object import(UTF8String aResourceURI, optional object aTargetObj);
 
   /**
-   * Synchronously loads and evaluates the JS module source located at
-   * 'aResourceURI'.
-   *
-   * @param aResourceURI A resource:// URI string to load the module from.
-   * @returns the module's namespace object.
-   *
-   * The implementation maintains a hash of aResourceURI->global obj.
-   * Subsequent invocations of import with 'aResourceURI' pointing to
-   * the same file will not cause the module to be re-evaluated.
-   */
-  [Throws]
-  object importESModule(DOMString aResourceURI, optional ImportESModuleOptionsDictionary options = {});
-
-  /**
    * Defines a property on the given target which lazily imports a JavaScript
    * module when accessed.
    *
@@ -554,18 +576,6 @@ partial namespace ChromeUtils {
    */
   [Throws]
   undefined defineModuleGetter(object target, DOMString id, DOMString resourceURI);
-
-  /**
-   * Defines propertys on the given target which lazily imports a ES module
-   * when accessed.
-   *
-   * @param target The target object on which to define the property.
-   * @param modules An object with a property for each module property to be
-   *                imported, where the property name is the name of the
-   *                imported symbol and the value is the module URI.
-   */
-  [Throws]
-  undefined defineESModuleGetters(object target, object modules);
 
   /**
    * Returns the scripted location of the first ancestor stack frame with a
@@ -983,6 +993,42 @@ dictionary CompileScriptOptionsDictionary {
   boolean hasReturnValue = false;
 };
 
+/**
+ * Where the modules are loaded into with importESModule and
+ * defineESModuleGetters.
+ */
+enum ImportESModuleTargetGlobal {
+  /**
+   * Load into the shared system global.
+   * This is the default value.
+   */
+  "shared",
+
+  /**
+   * Load into a distinct system global for DevTools, so that the DevTools can
+   * load a distinct set of modules and do not interfere with its debuggee.
+   */
+  "devtools",
+
+  /**
+   * If the current global is DevTools' distinct system global, load into the
+   * DevTools' distinct system global.
+   * If the current thread is worker thread, load into the current global.
+   * Otherwise load into the shared system global.
+   *
+   * This is a temporary workaround until DevTools modules are ESMified.
+   */
+  "contextual",
+
+  /**
+   * Load into current global.
+   *
+   * This can be used for any global.  If this is used for shared global or
+   * devtools global, this has the same effect as "shared" or "devtools".
+   */
+  "current",
+};
+
 dictionary ImportESModuleOptionsDictionary {
   /**
    * If true, a distinct module loader will be used, in the system principal,
@@ -990,6 +1036,8 @@ dictionary ImportESModuleOptionsDictionary {
    * of modules and do not interfere with its debuggee.
    */
   boolean loadInDevToolsLoader;
+
+  ImportESModuleTargetGlobal global;
 };
 
 /**
@@ -1105,4 +1153,5 @@ dictionary CDMInformation {
   required DOMString keySystemName;
   required DOMString capabilities;
   required boolean clearlead;
+  required boolean isHDCP22Compatible;
 };

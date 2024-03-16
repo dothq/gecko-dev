@@ -204,6 +204,8 @@ class RemoteTextureOwnerClient final {
                             bool aSharedRecycling = false);
   void UnregisterTextureOwner(const RemoteTextureOwnerId aOwnerId);
   void UnregisterAllTextureOwners();
+  bool WaitForTxn(const RemoteTextureOwnerId aOwnerId,
+                  RemoteTextureTxnType aTxnType, RemoteTextureTxnId aTxnId);
   void ClearRecycledTextures();
   void NotifyContextLost(const RemoteTextureOwnerIdSet* aOwnerIds = nullptr);
   void NotifyContextRestored(
@@ -325,14 +327,6 @@ class RemoteTextureMap {
                                           const RemoteTextureOwnerId aOwnerId,
                                           const base::ProcessId aForPid);
 
-  void RegisterRemoteTexturePushListener(const RemoteTextureOwnerId aOwnerId,
-                                         const base::ProcessId aForPid,
-                                         CompositableHost* aListener);
-
-  void UnregisterRemoteTexturePushListener(const RemoteTextureOwnerId aOwnerId,
-                                           const base::ProcessId aForPid,
-                                           CompositableHost* aListener);
-
   bool CheckRemoteTextureReady(
       const RemoteTextureInfo& aInfo,
       std::function<void(const RemoteTextureInfo&)>&& aCallback);
@@ -434,7 +428,7 @@ class RemoteTextureMap {
                      const RemoteTextureId aTextureId);
 
   UniquePtr<TextureOwner> UnregisterTextureOwner(
-      const MonitorAutoLock& aProofOfLock, const RemoteTextureOwnerId aOwnerId,
+      MonitorAutoLock& aProofOfLock, const RemoteTextureOwnerId aOwnerId,
       const base::ProcessId aForPid,
       std::vector<RefPtr<TextureHost>>& aReleasingTextures,
       std::vector<std::function<void(const RemoteTextureInfo&)>>&
@@ -478,10 +472,6 @@ class RemoteTextureMap {
   std::map<std::pair<base::ProcessId, RemoteTextureId>,
            UniquePtr<RemoteTextureHostWrapperHolder>>
       mRemoteTextureHostWrapperHolders;
-
-  std::map<std::pair<base::ProcessId, RemoteTextureOwnerId>,
-           RefPtr<CompositableHost>>
-      mRemoteTexturePushListeners;
 
   std::map<std::pair<base::ProcessId, RemoteTextureTxnType>,
            RemoteTextureTxnScheduler*>

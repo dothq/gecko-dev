@@ -430,6 +430,7 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   // immutable global. Otherwise this is always set to zero, and only imported
   // immutable globals are allowed.
   uint32_t maxInitializedGlobalsIndexPlus1_;
+  FeatureUsage featureUsage_;
 
 #ifdef DEBUG
   OpBytes op_;
@@ -520,14 +521,14 @@ class MOZ_STACK_CLASS OpIter : private Policy {
     controlStack_.back().setPolymorphicBase();
   }
 
-  inline bool checkIsSubtypeOf(FieldType actual, FieldType expected);
+  inline bool checkIsSubtypeOf(StorageType actual, StorageType expected);
 
   inline bool checkIsSubtypeOf(RefType actual, RefType expected) {
-    return checkIsSubtypeOf(ValType(actual).fieldType(),
-                            ValType(expected).fieldType());
+    return checkIsSubtypeOf(ValType(actual).storageType(),
+                            ValType(expected).storageType());
   }
   inline bool checkIsSubtypeOf(ValType actual, ValType expected) {
-    return checkIsSubtypeOf(actual.fieldType(), expected.fieldType());
+    return checkIsSubtypeOf(actual.storageType(), expected.storageType());
   }
 
   inline bool checkIsSubtypeOf(ResultType params, ResultType results);
@@ -545,6 +546,7 @@ class MOZ_STACK_CLASS OpIter : private Policy {
         d_(decoder),
         env_(env),
         maxInitializedGlobalsIndexPlus1_(0),
+        featureUsage_(FeatureUsage::None),
         op_(OpBytes(Op::Limit)),
         offsetOfLastReadOp_(0) {}
 #else
@@ -554,8 +556,11 @@ class MOZ_STACK_CLASS OpIter : private Policy {
         d_(decoder),
         env_(env),
         maxInitializedGlobalsIndexPlus1_(0),
+        featureUsage_(FeatureUsage::None),
         offsetOfLastReadOp_(0) {}
 #endif
+
+  FeatureUsage featureUsage() const { return featureUsage_; }
 
   // Return the decoding byte offset.
   uint32_t currentOffset() const { return d_.currentOffset(); }
@@ -900,8 +905,8 @@ class MOZ_STACK_CLASS OpIter : private Policy {
 };
 
 template <typename Policy>
-inline bool OpIter<Policy>::checkIsSubtypeOf(FieldType subType,
-                                             FieldType superType) {
+inline bool OpIter<Policy>::checkIsSubtypeOf(StorageType subType,
+                                             StorageType superType) {
   return CheckIsSubtypeOf(d_, env_, lastOpcodeOffset(), subType, superType);
 }
 
@@ -1598,6 +1603,7 @@ inline bool OpIter<Policy>::readBrTable(Uint32Vector* depths,
 template <typename Policy>
 inline bool OpIter<Policy>::readTry(ResultType* paramType) {
   MOZ_ASSERT(Classify(op_) == OpKind::Try);
+  featureUsage_ |= FeatureUsage::LegacyExceptions;
 
   BlockType type;
   if (!readBlockType(&type)) {
@@ -1675,6 +1681,17 @@ inline bool OpIter<Policy>::readTryTable(ResultType* paramType,
     if (!readVarU32(&tryTableCatch.labelRelativeDepth)) {
       return fail("unable to read catch depth");
     }
+
+    // The target branch depth is relative to the control labels outside of
+    // this try_table. e.g. `0` is a branch to the control outside of this
+    // try_table, not to the try_table itself. However, we've already pushed
+    // the control block for the try_table, and users will read it after we've
+    // returned, so we need to return the relative depth adjusted by 1 to
+    // account for our own control block.
+    if (tryTableCatch.labelRelativeDepth == UINT32_MAX) {
+      return fail("catch depth out of range");
+    }
+    tryTableCatch.labelRelativeDepth += 1;
 
     // Tagged catches will unpack the exception package and pass it to the
     // branch
@@ -3364,17 +3381,17 @@ inline bool OpIter<Policy>::readStructGet(uint32_t* typeIndex,
     return false;
   }
 
-  FieldType fieldType = structType.fields_[*fieldIndex].type;
+  StorageType StorageType = structType.fields_[*fieldIndex].type;
 
-  if (fieldType.isValType() && wideningOp != FieldWideningOp::None) {
+  if (StorageType.isValType() && wideningOp != FieldWideningOp::None) {
     return fail("must not specify signedness for unpacked field type");
   }
 
-  if (!fieldType.isValType() && wideningOp == FieldWideningOp::None) {
+  if (!StorageType.isValType() && wideningOp == FieldWideningOp::None) {
     return fail("must specify signedness for packed field type");
   }
 
-  return push(fieldType.widenToValType());
+  return push(StorageType.widenToValType());
 }
 
 template <typename Policy>
@@ -3507,7 +3524,7 @@ inline bool OpIter<Policy>::readArrayNewData(uint32_t* typeIndex,
 
   const TypeDef& typeDef = env_.types->type(*typeIndex);
   const ArrayType& arrayType = typeDef.arrayType();
-  FieldType elemType = arrayType.elementType_;
+  StorageType elemType = arrayType.elementType_;
   if (!elemType.isNumber() && !elemType.isPacked() && !elemType.isVector()) {
     return fail("element type must be i8/i16/i32/i64/f32/f64/v128");
   }
@@ -3544,7 +3561,7 @@ inline bool OpIter<Policy>::readArrayNewElem(uint32_t* typeIndex,
 
   const TypeDef& typeDef = env_.types->type(*typeIndex);
   const ArrayType& arrayType = typeDef.arrayType();
-  FieldType dstElemType = arrayType.elementType_;
+  StorageType dstElemType = arrayType.elementType_;
   if (!dstElemType.isRefType()) {
     return fail("element type is not a reftype");
   }
@@ -3586,7 +3603,7 @@ inline bool OpIter<Policy>::readArrayInitData(uint32_t* typeIndex,
 
   const TypeDef& typeDef = env_.types->type(*typeIndex);
   const ArrayType& arrayType = typeDef.arrayType();
-  FieldType elemType = arrayType.elementType_;
+  StorageType elemType = arrayType.elementType_;
   if (!elemType.isNumber() && !elemType.isPacked() && !elemType.isVector()) {
     return fail("element type must be i8/i16/i32/i64/f32/f64/v128");
   }
@@ -3629,7 +3646,7 @@ inline bool OpIter<Policy>::readArrayInitElem(uint32_t* typeIndex,
 
   const TypeDef& typeDef = env_.types->type(*typeIndex);
   const ArrayType& arrayType = typeDef.arrayType();
-  FieldType dstElemType = arrayType.elementType_;
+  StorageType dstElemType = arrayType.elementType_;
   if (!arrayType.isMutable_) {
     return fail("destination array is not mutable");
   }
@@ -3680,17 +3697,17 @@ inline bool OpIter<Policy>::readArrayGet(uint32_t* typeIndex,
     return false;
   }
 
-  FieldType fieldType = arrayType.elementType_;
+  StorageType elementType = arrayType.elementType_;
 
-  if (fieldType.isValType() && wideningOp != FieldWideningOp::None) {
+  if (elementType.isValType() && wideningOp != FieldWideningOp::None) {
     return fail("must not specify signedness for unpacked element type");
   }
 
-  if (!fieldType.isValType() && wideningOp == FieldWideningOp::None) {
+  if (!elementType.isValType() && wideningOp == FieldWideningOp::None) {
     return fail("must specify signedness for packed element type");
   }
 
-  return push(fieldType.widenToValType());
+  return push(elementType.widenToValType());
 }
 
 template <typename Policy>
@@ -3757,8 +3774,8 @@ inline bool OpIter<Policy>::readArrayCopy(int32_t* elemSize,
   const ArrayType& dstArrayType = dstTypeDef.arrayType();
   const TypeDef& srcTypeDef = env_.types->type(srcTypeIndex);
   const ArrayType& srcArrayType = srcTypeDef.arrayType();
-  FieldType dstElemType = dstArrayType.elementType_;
-  FieldType srcElemType = srcArrayType.elementType_;
+  StorageType dstElemType = dstArrayType.elementType_;
+  StorageType srcElemType = srcArrayType.elementType_;
   if (!dstArrayType.isMutable_) {
     return fail("destination array is not mutable");
   }

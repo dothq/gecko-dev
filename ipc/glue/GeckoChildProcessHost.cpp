@@ -254,8 +254,7 @@ class WindowsProcessLauncher : public BaseProcessLauncher {
   WindowsProcessLauncher(GeckoChildProcessHost* aHost,
                          std::vector<std::string>&& aExtraOpts)
       : BaseProcessLauncher(aHost, std::move(aExtraOpts)),
-        mCachedNtdllThunk(GetCachedNtDllThunk()),
-        mWerDataPointer(&(aHost->mWerData)) {}
+        mCachedNtdllThunk(GetCachedNtDllThunk()) {}
 
  protected:
   virtual Result<Ok, LaunchError> DoSetup() override;
@@ -266,7 +265,6 @@ class WindowsProcessLauncher : public BaseProcessLauncher {
   bool mUseSandbox = false;
 
   const Buffer<IMAGE_THUNK_DATA>* mCachedNtdllThunk;
-  CrashReporter::WindowsErrorReportingData const* mWerDataPointer;
 };
 typedef WindowsProcessLauncher ProcessLauncher;
 #endif  // XP_WIN
@@ -369,9 +367,6 @@ GeckoChildProcessHost::GeckoChildProcessHost(GeckoProcessType aProcessType,
       mProcessState(CREATING_CHANNEL),
 #ifdef XP_WIN
       mGroupId(u"-"),
-      mWerData{.mWerNotifyProc = CrashReporter::WerNotifyProc,
-               .mChildPid = 0,
-               .mMinidumpFile = {}},
 #endif
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
       mEnableSandboxLogging(false),
@@ -1570,12 +1565,6 @@ Result<Ok, LaunchError> WindowsProcessLauncher::DoSetup() {
   mCmdLine->AppendLooseValue(
       UTF8ToWide(CrashReporter::GetChildNotificationPipe()));
 
-  if (!CrashReporter::IsDummy()) {
-    char werDataAddress[17] = {};
-    SprintfLiteral(werDataAddress, "%p", mWerDataPointer);
-    mCmdLine->AppendLooseValue(UTF8ToWide(werDataAddress));
-  }
-
   // Process type
   mCmdLine->AppendLooseValue(UTF8ToWide(ChildProcessType()));
 
@@ -1626,25 +1615,6 @@ Result<Ok, LaunchError> WindowsProcessLauncher::DoFinishLaunch() {
   if (err.isErr()) {
     return err;
   }
-
-#  ifdef MOZ_SANDBOX
-  if (!mUseSandbox) {
-    // We need to be able to duplicate handles to some types of non-sandboxed
-    // child processes.
-    switch (mProcessType) {
-      case GeckoProcessType_Default:
-        MOZ_CRASH("shouldn't be launching a parent process");
-      case GeckoProcessType_IPDLUnitTest:
-        // No handle duplication necessary.
-        break;
-      default:
-        if (!SandboxBroker::AddTargetPeer(mResults.mHandle)) {
-          NS_WARNING("Failed to add child process as target peer.");
-        }
-        break;
-    }
-  }
-#  endif  // MOZ_SANDBOX
 
   return Ok();
 }

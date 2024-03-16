@@ -80,19 +80,24 @@ already_AddRefed<Performance> Performance::CreateForWorker(
 already_AddRefed<Performance> Performance::Get(JSContext* aCx,
                                                nsIGlobalObject* aGlobal) {
   RefPtr<Performance> performance;
-  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
-  if (window) {
-    performance = window->GetPerformance();
-  } else {
-    const WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
-    if (!workerPrivate) {
+  if (NS_IsMainThread()) {
+    nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
+    if (!window) {
       return nullptr;
     }
 
-    WorkerGlobalScope* scope = workerPrivate->GlobalScope();
-    MOZ_ASSERT(scope);
-    performance = scope->GetPerformance();
+    performance = window->GetPerformance();
+    return performance.forget();
   }
+
+  const WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
+  if (!workerPrivate) {
+    return nullptr;
+  }
+
+  WorkerGlobalScope* scope = workerPrivate->GlobalScope();
+  MOZ_ASSERT(scope);
+  performance = scope->GetPerformance();
 
   return performance.forget();
 }
@@ -396,17 +401,15 @@ DOMHighResTimeStamp Performance::ConvertMarkToTimestampWithString(
     return ConvertNameToTimestamp(aName, aRv);
   }
 
-  AutoTArray<RefPtr<PerformanceEntry>, 1> arr;
-  Optional<nsAString> typeParam;
-  nsAutoString str;
-  str.AssignLiteral("mark");
-  typeParam = &str;
-  GetEntriesByName(aName, typeParam, arr);
-  if (!arr.IsEmpty()) {
-    if (aReturnUnclamped) {
-      return arr.LastElement()->UnclampedStartTime();
+  RefPtr<nsAtom> name = NS_Atomize(aName);
+  // Just loop over the user entries
+  for (const PerformanceEntry* entry : Reversed(mUserEntries)) {
+    if (entry->GetName() == name && entry->GetEntryType() == nsGkAtoms::mark) {
+      if (aReturnUnclamped) {
+        return entry->UnclampedStartTime();
+      }
+      return entry->StartTime();
     }
-    return arr.LastElement()->StartTime();
   }
 
   nsPrintfCString errorMsg("Given mark name, %s, is unknown",
@@ -617,8 +620,8 @@ void Performance::MaybeEmitExternalProfilerMarker(
   uint64_t rawStart = startTimeStamp.RawQueryPerformanceCounterValue().value();
   uint64_t rawEnd = endTimeStamp.RawQueryPerformanceCounterValue().value();
 #elif XP_MACOSX
-  uint64_t rawStart = startTimeStamp.RawMachAbsoluteTimeValue();
-  uint64_t rawEnd = endTimeStamp.RawMachAbsoluteTimeValue();
+  uint64_t rawStart = startTimeStamp.RawMachAbsoluteTimeNanoseconds();
+  uint64_t rawEnd = endTimeStamp.RawMachAbsoluteTimeNanoseconds();
 #else
   uint64_t rawStart = 0;
   uint64_t rawEnd = 0;

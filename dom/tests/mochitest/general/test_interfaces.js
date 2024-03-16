@@ -390,7 +390,7 @@ let interfaceNamesInGlobalScope = [
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "DOMRectReadOnly", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "DOMRequest", insecureContext: true },
+  { name: "DOMRequest", insecureContext: true, disabled: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "DOMStringList", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1971,9 +1971,9 @@ let interfaceNamesInGlobalScope = [
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "visualViewport", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "WakeLock", nightly: true },
+  { name: "WakeLock", earlyBetaOrEarlier: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
-  { name: "WakeLockSentinel", nightly: true },
+  { name: "WakeLockSentinel", earlyBetaOrEarlier: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!
   { name: "webkitURL", insecureContext: true },
   // IMPORTANT: Do not change this list without review from a DOM peer!

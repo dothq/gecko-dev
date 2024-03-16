@@ -63,7 +63,7 @@ firefoxview-syncedtabs-loading-header = Sync in progress
 firefoxview-syncedtabs-loading-description = When it’s done, you’ll see any tabs you have open on other devices. Check back soon.
 
 firefoxview-tabpickup-fxa-admin-disabled-header = Your organization has disabled sync
-firefoxview-tabpickup-fxa-admin-disabled-description = { -brand-short-name } is not able to sync tabs between devices because your administrator has disabled syncing.
+firefoxview-tabpickup-fxa-disabled-by-policy-description = { -brand-short-name } is not able to sync tabs between devices because your organization has disabled syncing.
 
 firefoxview-tabpickup-network-offline-header = Check your internet connection
 firefoxview-tabpickup-network-offline-description = If you’re using a firewall or proxy, check that { -brand-short-name } has permission to access the web.
@@ -224,6 +224,8 @@ firefoxview-search-results-empty = No results for “{ $query }”
 
 firefoxview-sort-history-by-date-label = Sort by date
 firefoxview-sort-history-by-site-label = Sort by site
+firefoxview-sort-open-tabs-by-recency-label = Sort by recent activity
+firefoxview-sort-open-tabs-by-order-label = Sort by tab order
 
 # Variables:
 #   $url (string) - URL that will be opened in the new tab

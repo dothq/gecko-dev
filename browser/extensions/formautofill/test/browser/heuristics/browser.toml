@@ -1,5 +1,5 @@
 [DEFAULT]
-skip-if = ["toolkit == 'android'"] # bug 1730213
+skip-if = ["os == 'android'"] # bug 1730213
 support-files = [
   "../head.js",
   "../../fixtures/**",
@@ -19,8 +19,6 @@ skip-if = ["apple_silicon && !debug"]
 ["browser_de_fields.js"]
 
 ["browser_fr_fields.js"]
-
-["browser_ignore_invisible_fields.js"]
 
 ["browser_ignore_unfocusable_fields.js"]
 

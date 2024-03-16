@@ -7,15 +7,17 @@
 use std::fmt::{self, Write};
 
 use super::{
-    registry::PropertyRegistration,
+    registry::PropertyRegistrationData,
     syntax::{
         data_type::DataType, Component as SyntaxComponent, ComponentName, Descriptor, Multiplier,
     },
 };
 use crate::custom_properties::ComputedValue as ComputedPropertyValue;
 use crate::parser::{Parse, ParserContext};
+use crate::properties;
 use crate::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use crate::values::{
+    animated::{self, Animate, Procedure},
     computed::{self, ToComputedValue},
     specified, CustomIdent,
 };
@@ -88,7 +90,8 @@ impl<L, N, P, LP, C, Image, U, Integer, A, T, R, Transform>
 }
 
 /// A generic enum used for both specified value components and computed value components.
-#[derive(Clone, ToCss, ToComputedValue)]
+#[derive(Animate, Clone, ToCss, ToComputedValue, Debug, MallocSizeOf, PartialEq)]
+#[animation(no_bound(Image, Url))]
 pub enum GenericValueComponent<
     Length,
     Number,
@@ -114,8 +117,10 @@ pub enum GenericValueComponent<
     /// A <color> value
     Color(Color),
     /// An <image> value
+    #[animation(error)]
     Image(Image),
     /// A <url> value
+    #[animation(error)]
     Url(Url),
     /// An <integer> value
     Integer(Integer),
@@ -128,18 +133,35 @@ pub enum GenericValueComponent<
     /// A <transform-function> value
     TransformFunction(TransformFunction),
     /// A <custom-ident> value
+    #[animation(error)]
     CustomIdent(CustomIdent),
     /// A <transform-list> value, equivalent to <transform-function>+
     TransformList(ComponentList<Self>),
     /// A <string> value
+    #[animation(error)]
     String(OwnedStr),
 }
 
 /// A list of component values, including the list's multiplier.
-#[derive(Clone, ToComputedValue)]
+#[derive(Clone, ToComputedValue, Debug, MallocSizeOf, PartialEq)]
 pub struct ComponentList<Component> {
-    multiplier: Multiplier,
-    components: crate::OwnedSlice<Component>,
+    /// Multiplier
+    pub multiplier: Multiplier,
+    /// The list of components contained.
+    pub components: crate::OwnedSlice<Component>,
+}
+
+impl<Component: Animate> Animate for ComponentList<Component> {
+    fn animate(&self, other: &Self, procedure: Procedure) -> Result<Self, ()> {
+        if self.multiplier != other.multiplier {
+            return Err(());
+        }
+        let components = animated::lists::by_computed_value::animate(&self.components, &other.components, procedure)?;
+        Ok(Self {
+            multiplier: self.multiplier,
+            components,
+        })
+    }
 }
 
 impl<Component: ToCss> ToCss for ComponentList<Component> {
@@ -169,15 +191,16 @@ impl<Component: ToCss> ToCss for ComponentList<Component> {
 }
 
 /// A specified registered custom property value.
-#[derive(ToComputedValue, ToCss)]
+#[derive(Animate, ToComputedValue, ToCss, Clone, Debug, MallocSizeOf, PartialEq)]
 pub enum Value<Component> {
     /// A single specified component value whose syntax descriptor component did not have a
     /// multiplier.
     Component(Component),
     /// A specified value whose syntax descriptor was the universal syntax definition.
-    Universal(Arc<ComputedPropertyValue>),
+    #[animation(error)]
+    Universal(#[ignore_malloc_size_of = "Arc"] Arc<ComputedPropertyValue>),
     /// A list of specified component values whose syntax descriptor component had a multiplier.
-    List(ComponentList<Component>),
+    List(#[animation(field_bound)] ComponentList<Component>),
 }
 
 /// Specified custom property value.
@@ -187,15 +210,34 @@ pub type SpecifiedValue = Value<SpecifiedValueComponent>;
 pub type ComputedValue = Value<ComputedValueComponent>;
 
 impl SpecifiedValue {
-    /// Convert a registered custom property to a VariableValue, given input and a property
-    /// registration.
+    /// Convert a Computed custom property value to a VariableValue.
     pub fn compute<'i, 't>(
         input: &mut CSSParser<'i, 't>,
-        registration: &PropertyRegistration,
+        registration: &PropertyRegistrationData,
         url_data: &UrlExtraData,
         context: &computed::Context,
         allow_computationally_dependent: AllowComputationallyDependent,
-    ) -> Result<Arc<ComputedPropertyValue>, ()> {
+    ) -> Result<ComputedPropertyValue, ()> {
+        let value = Self::get_computed_value(
+            input,
+            registration,
+            url_data,
+            context,
+            allow_computationally_dependent,
+        )?;
+        Ok(value.to_variable_value(url_data))
+    }
+
+    /// Convert a registered custom property to a Computed custom property value, given input and a
+    /// property registration.
+    fn get_computed_value<'i, 't>(
+        input: &mut CSSParser<'i, 't>,
+        registration: &PropertyRegistrationData,
+        url_data: &UrlExtraData,
+        context: &computed::Context,
+        allow_computationally_dependent: AllowComputationallyDependent,
+    ) -> Result<ComputedValue, ()> {
+        debug_assert!(!registration.syntax.is_universal(), "Shouldn't be needed");
         let Ok(value) = Self::parse(
             input,
             &registration.syntax,
@@ -205,10 +247,7 @@ impl SpecifiedValue {
             return Err(());
         };
 
-        // TODO(zrhoffman, bug 1856522): All font-* properties should already be applied before
-        // computing the value of the registered custom property.
-        let value = value.to_computed_value(context);
-        Ok(value.to_var(url_data))
+        Ok(value.to_computed_value(context))
     }
 
     /// Parse and validate a registered custom property value according to its syntax descriptor,
@@ -255,19 +294,24 @@ impl ComputedValue {
         }
     }
 
-    fn to_var(&self, url_data: &UrlExtraData) -> Arc<ComputedPropertyValue> {
+    fn to_declared_value(&self, url_data: &UrlExtraData) -> Arc<ComputedPropertyValue> {
         if let Self::Universal(var) = self {
-            return var.clone();
+            return Arc::clone(var);
         }
+        Arc::new(self.to_variable_value(url_data))
+    }
+
+    fn to_variable_value(&self, url_data: &UrlExtraData) -> ComputedPropertyValue {
+        debug_assert!(!matches!(self, Self::Universal(..)), "Shouldn't be needed");
         // TODO(zrhoffman, 1864736): Preserve the computed type instead of converting back to a
         // string.
         let serialization_types = self.serialization_types();
-        Arc::new(ComputedPropertyValue::new(
+        ComputedPropertyValue::new(
             self.to_css_string(),
             url_data,
             serialization_types.0,
             serialization_types.1,
-        ))
+        )
     }
 }
 
@@ -483,5 +527,100 @@ impl<'a> Parser<'a> {
             },
             Multiplier::Comma => Ok(input.expect_comma()?),
         }
+    }
+}
+
+
+/// An animated value for custom property.
+#[derive(Clone, Debug, MallocSizeOf, PartialEq)]
+pub struct CustomAnimatedValue {
+    /// The name of the custom property.
+    pub(crate) name: crate::custom_properties::Name,
+    /// The computed value of the custom property.
+    value: ComputedValue,
+    /// The url data where the value came from.
+    /// FIXME: This seems like it should not be needed: registered properties don't need it, and
+    /// unregistered properties animate discretely. But we need it so far because the computed
+    /// value representation isn't typed.
+    url_data: UrlExtraData,
+}
+
+impl Animate for CustomAnimatedValue {
+    fn animate(&self, other: &Self, procedure: Procedure) -> Result<Self, ()> {
+        if self.name != other.name {
+            return Err(())
+        }
+        let value = self.value.animate(&other.value, procedure)?;
+        Ok(Self {
+            name: self.name.clone(),
+            value,
+            // NOTE: This is sketchy AF, but it's ~fine, since values that can animate (non-universal)
+            // don't need it.
+            url_data: self.url_data.clone(),
+        })
+    }
+}
+
+impl CustomAnimatedValue {
+    pub(crate) fn from_computed(
+        name: &crate::custom_properties::Name,
+        value: &Arc<ComputedPropertyValue>,
+    ) -> Self {
+        Self {
+            name: name.clone(),
+            // FIXME: Should probably preserve type-ness in ComputedPropertyValue.
+            value: ComputedValue::Universal(value.clone()),
+            url_data: value.url_data.clone(),
+        }
+    }
+
+    pub(crate) fn from_declaration(
+        declaration: &properties::CustomDeclaration,
+        context: &mut computed::Context,
+        _initial: &properties::ComputedValues,
+    ) -> Option<Self> {
+        let value = match declaration.value {
+            properties::CustomDeclarationValue::Value(ref v) => v,
+            // FIXME: This should be made to work to the extent possible like for non-custom
+            // properties (using `initial` at least to handle unset / inherit).
+            properties::CustomDeclarationValue::CSSWideKeyword(..) => return None,
+        };
+
+        debug_assert!(
+            context.builder.stylist.is_some(),
+            "Need a Stylist to get property registration!"
+        );
+        let registration =
+            context.builder.stylist.unwrap().get_custom_property_registration(&declaration.name);
+
+        // FIXME: Do we need to perform substitution here somehow?
+        let computed_value = if registration.syntax.is_universal() {
+            None
+        } else {
+            let mut input = cssparser::ParserInput::new(&value.css);
+            let mut input = CSSParser::new(&mut input);
+            SpecifiedValue::get_computed_value(
+                &mut input,
+                registration,
+                &value.url_data,
+                context,
+                AllowComputationallyDependent::Yes,
+            ).ok()
+        };
+
+        let url_data = value.url_data.clone();
+        let value = computed_value.unwrap_or_else(|| ComputedValue::Universal(Arc::clone(value)));
+        Some(Self {
+            name: declaration.name.clone(),
+            url_data,
+            value,
+        })
+    }
+
+    pub(crate) fn to_declaration(&self) -> properties::PropertyDeclaration {
+        properties::PropertyDeclaration::Custom(properties::CustomDeclaration {
+            name: self.name.clone(),
+            value: properties::CustomDeclarationValue::Value(self.value.to_declared_value(&self.url_data)),
+        })
     }
 }

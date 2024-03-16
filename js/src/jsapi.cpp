@@ -58,6 +58,7 @@
 #include "js/LocaleSensitive.h"
 #include "js/MemoryCallbacks.h"
 #include "js/MemoryFunctions.h"
+#include "js/Prefs.h"
 #include "js/PropertySpec.h"
 #include "js/Proxy.h"
 #include "js/ScriptPrivate.h"
@@ -4429,6 +4430,7 @@ JS_PUBLIC_API void JS_SetGlobalJitCompilerOption(JSContext* cx,
     case JSJITCOMPILER_WASM_JIT_OPTIMIZING:
       JS::ContextOptionsRef(cx).setWasmIon(!!value);
       break;
+
 #ifdef DEBUG
     case JSJITCOMPILER_FULL_DEBUG_CHECKS:
       jit::JitOptions.fullDebugChecks = !!value;

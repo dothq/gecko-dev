@@ -58,6 +58,10 @@ bool IsPlayReadyKeySystemAndSupported(const nsAString& aKeySystem) {
       StaticPrefs::media_wmf_media_engine_enabled() != 2) {
     return false;
   }
+  return IsPlayReadyKeySystem(aKeySystem);
+}
+
+bool IsPlayReadyKeySystem(const nsAString& aKeySystem) {
   return aKeySystem.EqualsLiteral(kPlayReadyKeySystemName) ||
          aKeySystem.EqualsLiteral(kPlayReadyKeySystemHardware) ||
          aKeySystem.EqualsLiteral(kPlayReadyHardwareClearLeadKeySystemName);
@@ -72,6 +76,10 @@ bool IsWidevineExperimentKeySystemAndSupported(const nsAString& aKeySystem) {
       StaticPrefs::media_wmf_media_engine_enabled() != 2) {
     return false;
   }
+  return IsWidevineExperimentKeySystem(aKeySystem);
+}
+
+bool IsWidevineExperimentKeySystem(const nsAString& aKeySystem) {
   return aKeySystem.EqualsLiteral(kWidevineExperimentKeySystemName) ||
          aKeySystem.EqualsLiteral(kWidevineExperiment2KeySystemName);
 }
@@ -202,6 +210,7 @@ void MFCDMCapabilitiesIPDLToKeySystemConfig(
     aKeySystemConfig.mEncryptionSchemes.AppendElement(
         NS_ConvertUTF8toUTF16(EncryptionSchemeStr(scheme)));
   }
+  aKeySystemConfig.mIsHDCP22Compatible = aCDMConfig.isHDCP22Compatible();
   EME_LOG("New Capabilities=%s",
           NS_ConvertUTF16toUTF8(aKeySystemConfig.GetDebugInfo()).get());
 }

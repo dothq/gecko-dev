@@ -168,7 +168,7 @@ class SupportsPriorityValueFor {
 
     switch (aFetchPriority) {
       case FetchPriority::Auto:
-        return nsISupportsPriority::PRIORITY_HIGH;
+        return nsISupportsPriority::PRIORITY_NORMAL;
       case FetchPriority::High:
         return nsISupportsPriority::PRIORITY_HIGH;
       case FetchPriority::Low:

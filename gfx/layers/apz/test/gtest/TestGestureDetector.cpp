@@ -567,8 +567,6 @@ TEST_F(APZCGestureDetectorTester, DoubleTap) {
   MakeApzcWaitForMainThread();
   MakeApzcZoomable();
 
-  apzc->GetFrameMetrics().SetIsRootContent(true);
-
   EXPECT_CALL(*mcc, HandleTap(TapType::eSingleTap, LayoutDevicePoint(10, 10), 0,
                               apzc->GetGuid(), _, _))
       .Times(0);
@@ -654,6 +652,7 @@ TEST_F(APZCGestureDetectorTester, DoubleTapPreventDefaultBoth) {
 
 // Test for bug 947892
 // We test whether we dispatch tap event when the tap is followed by pinch.
+// Additionally test that the pinch gesture successfully results in zooming.
 TEST_F(APZCGestureDetectorTester, TapFollowedByPinch) {
   MakeApzcZoomable();
 
@@ -663,22 +662,15 @@ TEST_F(APZCGestureDetectorTester, TapFollowedByPinch) {
 
   Tap(apzc, ScreenIntPoint(10, 10), TimeDuration::FromMilliseconds(100));
 
-  int inputId = 0;
-  MultiTouchInput mti;
-  mti = CreateMultiTouchInput(MultiTouchInput::MULTITOUCH_START, mcc->Time());
-  mti.mTouches.AppendElement(SingleTouchData(inputId, ParentLayerPoint(20, 20),
-                                             ScreenSize(0, 0), 0, 0));
-  mti.mTouches.AppendElement(SingleTouchData(
-      inputId + 1, ParentLayerPoint(10, 10), ScreenSize(0, 0), 0, 0));
-  apzc->ReceiveInputEvent(mti);
+  PinchWithTouchInput(
+      apzc, ScreenIntPoint(15, 15), 1.5,
+      PinchOptions().TimeBetweenTouchEvents(
+          // Time it so that the max tap timer expires while the fingers are
+          // down for the pinch but haven't started to move yet.
+          TimeDuration::FromMilliseconds(StaticPrefs::apz_max_tap_time() -
+                                         90)));
 
-  mti = CreateMultiTouchInput(MultiTouchInput::MULTITOUCH_END, mcc->Time());
-  mti.mTouches.AppendElement(SingleTouchData(inputId, ParentLayerPoint(20, 20),
-                                             ScreenSize(0, 0), 0, 0));
-  mti.mTouches.AppendElement(SingleTouchData(
-      inputId + 1, ParentLayerPoint(10, 10), ScreenSize(0, 0), 0, 0));
-  apzc->ReceiveInputEvent(mti);
-
+  EXPECT_GT(apzc->GetFrameMetrics().GetZoom().scale, 1.0f);
   apzc->AssertStateIsReset();
 }
 
@@ -748,14 +740,13 @@ TEST_F(APZCGestureDetectorTester, TapTimeoutInterruptedByWheel) {
   // insert the wheel event.
   MakeApzcZoomable();
 
-  uint64_t touchBlockId = 0;
-  Tap(apzc, ScreenIntPoint(10, 10), TimeDuration::FromMilliseconds(100),
-      nullptr, &touchBlockId);
+  APZEventResult result = Tap(apzc, ScreenIntPoint(10, 10),
+                              TimeDuration::FromMilliseconds(100), nullptr);
   mcc->AdvanceByMillis(10);
   uint64_t wheelBlockId =
       Wheel(apzc, ScreenIntPoint(10, 10), ScreenPoint(0, -10), mcc->Time())
           .mInputBlockId;
-  EXPECT_NE(touchBlockId, wheelBlockId);
+  EXPECT_NE(result.mInputBlockId, wheelBlockId);
   while (mcc->RunThroughDelayedTasks())
     ;
 }

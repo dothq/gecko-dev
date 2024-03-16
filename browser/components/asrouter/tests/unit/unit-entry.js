@@ -8,7 +8,13 @@ import {
 } from "newtab/test/unit/utils";
 import Adapter from "enzyme-adapter-react-16";
 import { chaiAssertions } from "newtab/test/schemas/pings";
+import chaiJsonSchema from "chai-json-schema";
 import enzyme from "enzyme";
+import FxMSCommonSchema from "../../content-src/schemas/FxMSCommon.schema.json";
+import {
+  MESSAGE_TYPE_LIST,
+  MESSAGE_TYPE_HASH,
+} from "modules/ActorConstants.sys.mjs";
 
 enzyme.configure({ adapter: new Adapter() });
 
@@ -33,6 +39,8 @@ const files = req.keys();
 sinon.assert.expose(assert, { prefix: "" });
 
 chai.use(chaiAssertions);
+chai.use(chaiJsonSchema);
+chai.tv4.addSchema("file:///FxMSCommon.schema.json", FxMSCommonSchema);
 
 const overrider = new GlobalOverrider();
 
@@ -707,6 +715,9 @@ const TEST_GLOBAL = {
   Utils: {
     SERVER_URL: "bogus://foo",
   },
+
+  MESSAGE_TYPE_LIST,
+  MESSAGE_TYPE_HASH,
 };
 overrider.set(TEST_GLOBAL);
 

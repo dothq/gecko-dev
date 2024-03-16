@@ -1492,8 +1492,7 @@ bool CanvasRenderingContext2D::BorrowTarget(const IntRect& aPersistedRect,
 bool CanvasRenderingContext2D::EnsureTarget(const gfx::Rect* aCoveredRect,
                                             bool aWillClear) {
   if (AlreadyShutDown()) {
-    gfxCriticalErrorOnce()
-        << "Attempt to render into a Canvas2d after shutdown.";
+    gfxCriticalNoteOnce << "Attempt to render into a Canvas2d after shutdown.";
     SetErrorState();
     return false;
   }
@@ -1726,6 +1725,10 @@ bool CanvasRenderingContext2D::TrySharedTarget(
         GetSize(), GetSurfaceFormat(),
         !mAllowAcceleration || GetEffectiveWillReadFrequently());
   } else if (mOffscreenCanvas) {
+    if (!StaticPrefs::gfx_offscreencanvas_shared_provider()) {
+      return false;
+    }
+
     RefPtr<layers::ImageBridgeChild> imageBridge =
         layers::ImageBridgeChild::GetSingleton();
     if (NS_WARN_IF(!imageBridge)) {
@@ -1734,7 +1737,8 @@ bool CanvasRenderingContext2D::TrySharedTarget(
 
     aOutProvider = layers::PersistentBufferProviderShared::Create(
         GetSize(), GetSurfaceFormat(), imageBridge,
-        !mAllowAcceleration || GetEffectiveWillReadFrequently());
+        !mAllowAcceleration || GetEffectiveWillReadFrequently(),
+        mOffscreenCanvas->GetWindowID());
   }
 
   if (!aOutProvider) {
@@ -1784,6 +1788,15 @@ Maybe<SurfaceDescriptor> CanvasRenderingContext2D::GetFrontBuffer(
     return provider->GetFrontBuffer();
   }
   return Nothing();
+}
+
+already_AddRefed<layers::FwdTransactionTracker>
+CanvasRenderingContext2D::UseCompositableForwarder(
+    layers::CompositableForwarder* aForwarder) {
+  if (mBufferProvider) {
+    return mBufferProvider->UseCompositableForwarder(aForwarder);
+  }
+  return nullptr;
 }
 
 PresShell* CanvasRenderingContext2D::GetPresShell() {

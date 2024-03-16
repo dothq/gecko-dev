@@ -24,6 +24,7 @@
 #include "mozilla/dom/FileCreatorHelper.h"
 #include "mozilla/dom/FetchUtil.h"
 #include "mozilla/dom/FormData.h"
+#include "mozilla/dom/quota/QuotaCommon.h"
 #include "mozilla/dom/MutableBlobStorage.h"
 #include "mozilla/dom/XMLDocument.h"
 #include "mozilla/dom/URLSearchParams.h"
@@ -118,6 +119,9 @@ using namespace mozilla::net;
 
 namespace mozilla::dom {
 
+using EventType = XMLHttpRequest::EventType;
+using Events = XMLHttpRequest::Events;
+
 // Maximum size that we'll grow an ArrayBuffer instead of doubling,
 // once doubling reaches this threshold
 const uint32_t XML_HTTP_REQUEST_ARRAYBUFFER_MAX_GROWTH = 32 * 1024 * 1024;
@@ -129,14 +133,6 @@ const int32_t XML_HTTP_REQUEST_MAX_CONTENT_LENGTH_PREALLOCATE =
     1 * 1024 * 1024 * 1024LL;
 
 namespace {
-const nsLiteralString ProgressEventTypeStrings[] = {
-    u"loadstart"_ns, u"progress"_ns, u"error"_ns,  u"abort"_ns,
-    u"timeout"_ns,   u"load"_ns,     u"loadend"_ns};
-static_assert(MOZ_ARRAY_LENGTH(ProgressEventTypeStrings) ==
-                  size_t(XMLHttpRequestMainThread::ProgressEventType::ENUM_MAX),
-              "Mismatched lengths for ProgressEventTypeStrings and "
-              "ProgressEventType enums");
-
 const nsString kLiteralString_readystatechange = u"readystatechange"_ns;
 const nsString kLiteralString_xmlhttprequest = u"xmlhttprequest"_ns;
 const nsString kLiteralString_DOMContentLoaded = u"DOMContentLoaded"_ns;
@@ -184,6 +180,57 @@ static void AddLoadFlags(nsIRequest* request, nsLoadFlags newFlags) {
 //
 /////////////////////////////////////////////
 
+#ifdef DEBUG
+
+// In debug mode, annotate WorkerRefs with the name of the function being
+// invoked for increased scrutability.  Save the previous value on the stack.
+namespace {
+struct DebugWorkerRefs {
+  RefPtr<ThreadSafeWorkerRef>& mTSWorkerRef;
+  nsCString mPrev;
+
+  DebugWorkerRefs(RefPtr<ThreadSafeWorkerRef>& aTSWorkerRef,
+                  const std::string& aStatus)
+      : mTSWorkerRef(aTSWorkerRef) {
+    if (!mTSWorkerRef) {
+      MOZ_LOG(gXMLHttpRequestLog, LogLevel::Info,
+              ("No WorkerRef during: %s", aStatus.c_str()));
+      return;
+    }
+
+    MOZ_ASSERT(mTSWorkerRef->Private());
+
+    nsCString status(aStatus.c_str());
+    mPrev = GET_WORKERREF_DEBUG_STATUS(mTSWorkerRef->Ref());
+    SET_WORKERREF_DEBUG_STATUS(mTSWorkerRef->Ref(), status);
+  }
+
+  ~DebugWorkerRefs() {
+    if (!mTSWorkerRef) {
+      return;
+    }
+
+    MOZ_ASSERT(mTSWorkerRef->Private());
+
+    SET_WORKERREF_DEBUG_STATUS(mTSWorkerRef->Ref(), mPrev);
+  }
+};
+}  // namespace
+
+#  define STREAM_STRING(stuff)                                    \
+    (((const std::ostringstream&)(std::ostringstream() << stuff)) \
+         .str())  // NOLINT
+#  define DEBUG_WORKERREFS \
+    DebugWorkerRefs MOZ_UNIQUE_VAR(debugWR__)(mTSWorkerRef, __func__)
+#  define DEBUG_WORKERREFS1(x)                 \
+    DebugWorkerRefs MOZ_UNIQUE_VAR(debugWR__)( \
+        mTSWorkerRef, STREAM_STRING(__func__ << ": " << x))  // NOLINT
+
+#else
+#  define DEBUG_WORKERREFS void()
+#  define DEBUG_WORKERREFS1(x) void()
+#endif  // DEBUG
+
 bool XMLHttpRequestMainThread::sDontWarnAboutSyncXHR = false;
 
 XMLHttpRequestMainThread::XMLHttpRequestMainThread(
@@ -227,10 +274,12 @@ XMLHttpRequestMainThread::XMLHttpRequestMainThread(
       mEventDispatchingSuspended(false),
       mEofDecoded(false),
       mDelayedDoneNotifier(nullptr) {
+  DEBUG_WORKERREFS;
   mozilla::HoldJSObjects(this);
 }
 
 XMLHttpRequestMainThread::~XMLHttpRequestMainThread() {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(
       !mDelayedDoneNotifier,
       "How can we have mDelayedDoneNotifier, which owns us, in destructor?");
@@ -259,6 +308,7 @@ void XMLHttpRequestMainThread::Construct(
     nsILoadGroup* aLoadGroup /* = nullptr */,
     PerformanceStorage* aPerformanceStorage /* = nullptr */,
     nsICSPEventListener* aCSPEventListener /* = nullptr */) {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(aPrincipal);
   mPrincipal = aPrincipal;
   mBaseURI = aBaseURI;
@@ -270,6 +320,7 @@ void XMLHttpRequestMainThread::Construct(
 }
 
 void XMLHttpRequestMainThread::InitParameters(bool aAnon, bool aSystem) {
+  DEBUG_WORKERREFS;
   if (!aAnon && !aSystem) {
     return;
   }
@@ -461,6 +512,7 @@ Document* XMLHttpRequestMainThread::GetResponseXML(ErrorResult& aRv) {
  * from HTTP headers.
  */
 nsresult XMLHttpRequestMainThread::DetectCharset() {
+  DEBUG_WORKERREFS;
   mDecoder = nullptr;
 
   if (mResponseType != XMLHttpRequestResponseType::_empty &&
@@ -938,6 +990,7 @@ void XMLHttpRequestMainThread::GetStatusText(nsACString& aStatusText,
 }
 
 void XMLHttpRequestMainThread::TerminateOngoingFetch(nsresult detail) {
+  DEBUG_WORKERREFS;
   if ((mState == XMLHttpRequest_Binding::OPENED && mFlagSend) ||
       mState == XMLHttpRequest_Binding::HEADERS_RECEIVED ||
       mState == XMLHttpRequest_Binding::LOADING) {
@@ -949,6 +1002,7 @@ void XMLHttpRequestMainThread::TerminateOngoingFetch(nsresult detail) {
 }
 
 void XMLHttpRequestMainThread::CloseRequest(nsresult detail) {
+  DEBUG_WORKERREFS;
   mWaitingForOnStopRequest = false;
   mErrorLoad = ErrorType::eTerminated;
   mErrorLoadDetail = detail;
@@ -960,20 +1014,12 @@ void XMLHttpRequestMainThread::CloseRequest(nsresult detail) {
 }
 
 void XMLHttpRequestMainThread::CloseRequestWithError(
-    const ProgressEventType aType) {
-  MOZ_LOG(
-      gXMLHttpRequestLog, LogLevel::Debug,
-      ("%p CloseRequestWithError(%hhu)", this, static_cast<uint8_t>(aType)));
-  nsresult detail = NS_ERROR_DOM_UNKNOWN_ERR;
-  if (aType == ProgressEventType::abort) {
-    detail = NS_ERROR_DOM_ABORT_ERR;
-  } else if (aType == ProgressEventType::error) {
-    detail = NS_ERROR_DOM_NETWORK_ERR;
-  } else if (aType == ProgressEventType::timeout) {
-    detail = NS_ERROR_DOM_TIMEOUT_ERR;
-  }
+    const ErrorProgressEventType& aType) {
+  DEBUG_WORKERREFS;
+  MOZ_LOG(gXMLHttpRequestLog, LogLevel::Debug,
+          ("%p CloseRequestWithError(%s)", this, aType.cStr));
 
-  CloseRequest(detail);
+  CloseRequest(aType.errorCode);
 
   ResetResponse();
 
@@ -1011,8 +1057,7 @@ void XMLHttpRequestMainThread::RequestErrorSteps(
     const ProgressEventType aEventType, const nsresult aOptionalException,
     ErrorResult& aRv) {
   MOZ_LOG(gXMLHttpRequestLog, LogLevel::Debug,
-          ("%p RequestErrorSteps(%hhu,0x%" PRIx32 ")", this,
-           static_cast<uint8_t>(aEventType),
+          ("%p RequestErrorSteps(%s,0x%" PRIx32 ")", this, aEventType.cStr,
            static_cast<uint32_t>(aOptionalException)));
 
   // Cancel our timers first before setting our state to done, so we don't
@@ -1079,7 +1124,7 @@ void XMLHttpRequestMainThread::AbortInternal(ErrorResult& aRv) {
   if ((mState == XMLHttpRequest_Binding::OPENED && mFlagSend) ||
       mState == XMLHttpRequest_Binding::HEADERS_RECEIVED ||
       mState == XMLHttpRequest_Binding::LOADING) {
-    RequestErrorSteps(ProgressEventType::abort, NS_ERROR_DOM_ABORT_ERR, aRv);
+    RequestErrorSteps(Events::abort, NS_ERROR_DOM_ABORT_ERR, aRv);
   }
 
   // Step 3
@@ -1324,8 +1369,9 @@ nsresult XMLHttpRequestMainThread::FireReadystatechangeEvent() {
 }
 
 void XMLHttpRequestMainThread::DispatchProgressEvent(
-    DOMEventTargetHelper* aTarget, const ProgressEventType aType,
+    DOMEventTargetHelper* aTarget, const ProgressEventType& aType,
     int64_t aLoaded, int64_t aTotal) {
+  DEBUG_WORKERREFS;
   NS_ASSERTION(aTarget, "null target");
 
   if (NS_FAILED(CheckCurrentGlobalCorrectness()) ||
@@ -1336,8 +1382,7 @@ void XMLHttpRequestMainThread::DispatchProgressEvent(
   // If blocked by CORS, zero-out the stats on progress events
   // and never fire "progress" or "load" events at all.
   if (IsDeniedCrossSiteCORSRequest()) {
-    if (aType == ProgressEventType::progress ||
-        aType == ProgressEventType::load) {
+    if (aType == Events::progress || aType == Events::load) {
       return;
     }
     aLoaded = 0;
@@ -1351,33 +1396,28 @@ void XMLHttpRequestMainThread::DispatchProgressEvent(
   init.mLoaded = aLoaded;
   init.mTotal = (aTotal == -1) ? 0 : aTotal;
 
-  const nsAString& typeString = ProgressEventTypeStrings[(uint8_t)aType];
   RefPtr<ProgressEvent> event =
-      ProgressEvent::Constructor(aTarget, typeString, init);
+      ProgressEvent::Constructor(aTarget, aType, init);
   event->SetTrusted(true);
 
-  if (MOZ_LOG_TEST(gXMLHttpRequestLog, LogLevel::Debug)) {
-    nsAutoString type;
-    event->GetType(type);
-    MOZ_LOG(gXMLHttpRequestLog, LogLevel::Debug,
-            ("firing %s event (%u,%u,%" PRIu64 ",%" PRIu64 ")",
-             NS_ConvertUTF16toUTF8(type).get(), aTarget == mUpload,
-             aTotal != -1, aLoaded, (aTotal == -1) ? 0 : aTotal));
-  }
+  MOZ_LOG(
+      gXMLHttpRequestLog, LogLevel::Debug,
+      ("firing %s event (%u,%u,%" PRIu64 ",%" PRIu64 ")", aType.cStr,
+       aTarget == mUpload, aTotal != -1, aLoaded, (aTotal == -1) ? 0 : aTotal));
 
   DispatchOrStoreEvent(aTarget, event);
 
   // If we're sending a load, error, timeout or abort event, then
   // also dispatch the subsequent loadend event.
-  if (aType == ProgressEventType::load || aType == ProgressEventType::error ||
-      aType == ProgressEventType::timeout ||
-      aType == ProgressEventType::abort) {
-    DispatchProgressEvent(aTarget, ProgressEventType::loadend, aLoaded, aTotal);
+  if (aType == Events::load || aType == Events::error ||
+      aType == Events::timeout || aType == Events::abort) {
+    DispatchProgressEvent(aTarget, Events::loadend, aLoaded, aTotal);
   }
 }
 
 void XMLHttpRequestMainThread::DispatchOrStoreEvent(
     DOMEventTargetHelper* aTarget, Event* aEvent) {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(aTarget);
   MOZ_ASSERT(aEvent);
 
@@ -1459,6 +1499,7 @@ void XMLHttpRequestMainThread::Open(const nsACString& aMethod,
                                     const nsAString& aUsername,
                                     const nsAString& aPassword,
                                     ErrorResult& aRv) {
+  DEBUG_WORKERREFS1(aMethod << " " << aUrl);
   NOT_CALLABLE_IN_SYNC_SEND_RV
 
   // Gecko-specific
@@ -1817,6 +1858,7 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest* request,
                                           nsIInputStream* inStr,
                                           uint64_t sourceOffset,
                                           uint32_t count) {
+  DEBUG_WORKERREFS;
   NS_ENSURE_ARG_POINTER(inStr);
 
   mProgressSinceLastProgressEvent = true;
@@ -1870,7 +1912,7 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest* request,
   if (mState == XMLHttpRequest_Binding::HEADERS_RECEIVED) {
     ChangeState(XMLHttpRequest_Binding::LOADING);
     if (!mFlagSynchronous) {
-      DispatchProgressEvent(this, ProgressEventType::progress, mLoadTransferred,
+      DispatchProgressEvent(this, Events::progress, mLoadTransferred,
                             mLoadTotal);
     }
     mProgressSinceLastProgressEvent = false;
@@ -1885,6 +1927,7 @@ XMLHttpRequestMainThread::OnDataAvailable(nsIRequest* request,
 
 NS_IMETHODIMP
 XMLHttpRequestMainThread::OnStartRequest(nsIRequest* request) {
+  DEBUG_WORKERREFS;
   AUTO_PROFILER_LABEL("XMLHttpRequestMainThread::OnStartRequest", NETWORK);
 
   nsresult rv = NS_OK;
@@ -1937,14 +1980,13 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest* request) {
     mUploadTransferred = mUploadTotal;
 
     if (mProgressSinceLastProgressEvent) {
-      DispatchProgressEvent(mUpload, ProgressEventType::progress,
-                            mUploadTransferred, mUploadTotal);
+      DispatchProgressEvent(mUpload, Events::progress, mUploadTransferred,
+                            mUploadTotal);
       mProgressSinceLastProgressEvent = false;
     }
 
     mUploadComplete = true;
-    DispatchProgressEvent(mUpload, ProgressEventType::load, mUploadTotal,
-                          mUploadTotal);
+    DispatchProgressEvent(mUpload, Events::load, mUploadTotal, mUploadTotal);
   }
 
   mFlagParseBody = true;
@@ -2159,6 +2201,7 @@ XMLHttpRequestMainThread::OnStartRequest(nsIRequest* request) {
 
 NS_IMETHODIMP
 XMLHttpRequestMainThread::OnStopRequest(nsIRequest* request, nsresult status) {
+  DEBUG_WORKERREFS;
   AUTO_PROFILER_LABEL("XMLHttpRequestMainThread::OnStopRequest", NETWORK);
 
   if (request != mChannel) {
@@ -2198,7 +2241,7 @@ XMLHttpRequestMainThread::OnStopRequest(nsIRequest* request, nsresult status) {
   if (status == NS_BINDING_ABORTED) {
     mFlagParseBody = false;
     IgnoredErrorResult rv;
-    RequestErrorSteps(ProgressEventType::abort, NS_ERROR_DOM_ABORT_ERR, rv);
+    RequestErrorSteps(Events::abort, NS_ERROR_DOM_ABORT_ERR, rv);
     ChangeState(XMLHttpRequest_Binding::UNSENT, false);
     return NS_OK;
   }
@@ -2311,7 +2354,7 @@ XMLHttpRequestMainThread::OnStopRequest(nsIRequest* request, nsresult status) {
                static_cast<uint32_t>(status)));
       IgnoredErrorResult rv;
       mFlagParseBody = false;
-      RequestErrorSteps(ProgressEventType::error, NS_ERROR_DOM_NETWORK_ERR, rv);
+      RequestErrorSteps(Events::error, NS_ERROR_DOM_NETWORK_ERR, rv);
       // RequestErrorSteps will not call ChangeStateToDone for sync XHRs, so we
       // do so here to ensure progress events are sent and our state is sane.
       if (mFlagSynchronous) {
@@ -2386,6 +2429,7 @@ void XMLHttpRequestMainThread::MatchCharsetAndDecoderToResponseDocument() {
     mDecoder = mResponseXML->GetDocumentCharacterSet()->NewDecoder();
   }
 }
+
 void XMLHttpRequestMainThread::DisconnectDoneNotifier() {
   if (mDelayedDoneNotifier) {
     // Disconnect may release the last reference to 'this'.
@@ -2396,6 +2440,7 @@ void XMLHttpRequestMainThread::DisconnectDoneNotifier() {
 }
 
 void XMLHttpRequestMainThread::ChangeStateToDone(bool aWasSync) {
+  DEBUG_WORKERREFS;
   DisconnectDoneNotifier();
 
   if (!mForWorker && !aWasSync && mChannel) {
@@ -2422,6 +2467,7 @@ void XMLHttpRequestMainThread::ChangeStateToDone(bool aWasSync) {
 }
 
 void XMLHttpRequestMainThread::ChangeStateToDoneInternal() {
+  DEBUG_WORKERREFS;
   DisconnectDoneNotifier();
   StopProgressEventTimer();
 
@@ -2437,8 +2483,7 @@ void XMLHttpRequestMainThread::ChangeStateToDoneInternal() {
   // will have not sent a progress event yet, so one must be sent here).
   if (!mFlagSynchronous &&
       (!mLoadTransferred || mProgressSinceLastProgressEvent)) {
-    DispatchProgressEvent(this, ProgressEventType::progress, mLoadTransferred,
-                          mLoadTotal);
+    DispatchProgressEvent(this, Events::progress, mLoadTransferred, mLoadTotal);
     mProgressSinceLastProgressEvent = false;
   }
 
@@ -2459,16 +2504,15 @@ void XMLHttpRequestMainThread::ChangeStateToDoneInternal() {
   // Per spec, if we failed in the upload phase, fire a final error
   // and loadend events for the upload after readystatechange=4/done.
   if (!mFlagSynchronous && mUpload && !mUploadComplete) {
-    DispatchProgressEvent(mUpload, ProgressEventType::error, 0, -1);
+    DispatchProgressEvent(mUpload, Events::error, 0, -1);
   }
 
   // Per spec, fire download's load/error and loadend events after
   // readystatechange=4/done (and of course all upload events).
   if (mErrorLoad != ErrorType::eOK) {
-    DispatchProgressEvent(this, ProgressEventType::error, 0, -1);
+    DispatchProgressEvent(this, Events::error, 0, -1);
   } else {
-    DispatchProgressEvent(this, ProgressEventType::load, mLoadTransferred,
-                          mLoadTotal);
+    DispatchProgressEvent(this, Events::load, mLoadTransferred, mLoadTotal);
   }
 
   if (mErrorLoad != ErrorType::eOK) {
@@ -2481,6 +2525,7 @@ void XMLHttpRequestMainThread::ChangeStateToDoneInternal() {
 }
 
 nsresult XMLHttpRequestMainThread::CreateChannel() {
+  DEBUG_WORKERREFS;
   // When we are called from JS we can find the load group for the page,
   // and add ourselves to it. This way any pending requests
   // will be automatically aborted if the user leaves the page.
@@ -2606,6 +2651,7 @@ void XMLHttpRequestMainThread::MaybeLowerChannelPriority() {
 nsresult XMLHttpRequestMainThread::InitiateFetch(
     already_AddRefed<nsIInputStream> aUploadStream, int64_t aUploadLength,
     nsACString& aUploadContentType) {
+  DEBUG_WORKERREFS;
   nsresult rv;
   nsCOMPtr<nsIInputStream> uploadStream = std::move(aUploadStream);
 
@@ -2902,6 +2948,7 @@ void XMLHttpRequestMainThread::EnsureChannelContentType() {
 }
 
 void XMLHttpRequestMainThread::ResumeTimeout() {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(mFlagSynchronous);
 
@@ -2916,6 +2963,7 @@ void XMLHttpRequestMainThread::Send(
         DocumentOrBlobOrArrayBufferViewOrArrayBufferOrFormDataOrURLSearchParamsOrUSVString>&
         aData,
     ErrorResult& aRv) {
+  DEBUG_WORKERREFS1(mRequestURL);
   NOT_CALLABLE_IN_SYNC_SEND_RV
 
   if (!CanSend(aRv)) {
@@ -2982,10 +3030,9 @@ nsresult XMLHttpRequestMainThread::MaybeSilentSendFailure(nsresult aRv) {
   // Defer the actual sending of async events just in case listeners
   // are attached after the send() method is called.
   Unused << NS_WARN_IF(
-      NS_FAILED(DispatchToMainThread(NewRunnableMethod<ProgressEventType>(
+      NS_FAILED(DispatchToMainThread(NewRunnableMethod<ErrorProgressEventType>(
           "dom::XMLHttpRequestMainThread::CloseRequestWithError", this,
-          &XMLHttpRequestMainThread::CloseRequestWithError,
-          ProgressEventType::error))));
+          &XMLHttpRequestMainThread::CloseRequestWithError, Events::error))));
   return NS_OK;
 }
 
@@ -3018,6 +3065,7 @@ bool XMLHttpRequestMainThread::CanSend(ErrorResult& aRv) {
 void XMLHttpRequestMainThread::SendInternal(const BodyExtractorBase* aBody,
                                             bool aBodyIsDocumentOrString,
                                             ErrorResult& aRv) {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(NS_IsMainThread());
 
   // We expect that CanSend has been called before we get here!
@@ -3204,10 +3252,9 @@ void XMLHttpRequestMainThread::SendInternal(const BodyExtractorBase* aBody,
       StartProgressEventTimer();
     }
     // Dispatch loadstart events
-    DispatchProgressEvent(this, ProgressEventType::loadstart, 0, -1);
+    DispatchProgressEvent(this, Events::loadstart, 0, -1);
     if (mUpload && !mUploadComplete) {
-      DispatchProgressEvent(mUpload, ProgressEventType::loadstart, 0,
-                            mUploadTotal);
+      DispatchProgressEvent(mUpload, Events::loadstart, 0, mUploadTotal);
     }
   }
 
@@ -3297,6 +3344,7 @@ nsIEventTarget* XMLHttpRequestMainThread::GetTimerEventTarget() {
 
 nsresult XMLHttpRequestMainThread::DispatchToMainThread(
     already_AddRefed<nsIRunnable> aRunnable) {
+  DEBUG_WORKERREFS;
   if (nsIGlobalObject* global = GetOwnerGlobal()) {
     return global->Dispatch(std::move(aRunnable));
   }
@@ -3304,6 +3352,7 @@ nsresult XMLHttpRequestMainThread::DispatchToMainThread(
 }
 
 void XMLHttpRequestMainThread::StartTimeoutTimer() {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(
       mRequestSentTime,
       "StartTimeoutTimer mustn't be called before the request was sent!");
@@ -3441,6 +3490,7 @@ NS_IMETHODIMP
 XMLHttpRequestMainThread::AsyncOnChannelRedirect(
     nsIChannel* aOldChannel, nsIChannel* aNewChannel, uint32_t aFlags,
     nsIAsyncVerifyRedirectCallback* callback) {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(aNewChannel, "Redirect without a channel?");
 
   // Prepare to receive callback
@@ -3472,6 +3522,7 @@ XMLHttpRequestMainThread::AsyncOnChannelRedirect(
 
 nsresult XMLHttpRequestMainThread::OnRedirectVerifyCallback(nsresult result,
                                                             bool aStripAuth) {
+  DEBUG_WORKERREFS;
   NS_ASSERTION(mRedirectCallback, "mRedirectCallback not set in callback");
   NS_ASSERTION(mNewRedirectChannel, "mNewRedirectChannel not set in callback");
 
@@ -3514,6 +3565,7 @@ nsresult XMLHttpRequestMainThread::OnRedirectVerifyCallback(nsresult result,
 NS_IMETHODIMP
 XMLHttpRequestMainThread::OnProgress(nsIRequest* aRequest, int64_t aProgress,
                                      int64_t aProgressMax) {
+  DEBUG_WORKERREFS;
   // When uploading, OnProgress reports also headers in aProgress and
   // aProgressMax. So, try to remove the headers, if possible.
   bool lengthComputable = (aProgressMax != -1);
@@ -3546,6 +3598,7 @@ XMLHttpRequestMainThread::OnProgress(nsIRequest* aRequest, int64_t aProgress,
 NS_IMETHODIMP
 XMLHttpRequestMainThread::OnStatus(nsIRequest* aRequest, nsresult aStatus,
                                    const char16_t* aStatusArg) {
+  DEBUG_WORKERREFS;
   if (mProgressEventSink) {
     mProgressEventSink->OnStatus(aRequest, aStatus, aStatusArg);
   }
@@ -3640,6 +3693,7 @@ bool XMLHttpRequestMainThread::MozAnon() const { return mIsAnon; }
 bool XMLHttpRequestMainThread::MozSystem() const { return IsSystemXHR(); }
 
 void XMLHttpRequestMainThread::HandleTimeoutCallback() {
+  DEBUG_WORKERREFS;
   if (mState == XMLHttpRequest_Binding::DONE) {
     MOZ_ASSERT_UNREACHABLE(
         "XMLHttpRequestMainThread::HandleTimeoutCallback "
@@ -3649,10 +3703,11 @@ void XMLHttpRequestMainThread::HandleTimeoutCallback() {
   }
 
   mFlagTimedOut = true;
-  CloseRequestWithError(ProgressEventType::timeout);
+  CloseRequestWithError(Events::timeout);
 }
 
 void XMLHttpRequestMainThread::CancelTimeoutTimer() {
+  DEBUG_WORKERREFS;
   if (mTimeoutTimer) {
     mTimeoutTimer->Cancel();
     mTimeoutTimer = nullptr;
@@ -3661,6 +3716,7 @@ void XMLHttpRequestMainThread::CancelTimeoutTimer() {
 
 NS_IMETHODIMP
 XMLHttpRequestMainThread::Notify(nsITimer* aTimer) {
+  DEBUG_WORKERREFS;
   if (mProgressNotifier == aTimer) {
     HandleProgressTimerCallback();
     return NS_OK;
@@ -3683,6 +3739,7 @@ XMLHttpRequestMainThread::Notify(nsITimer* aTimer) {
 }
 
 void XMLHttpRequestMainThread::HandleProgressTimerCallback() {
+  DEBUG_WORKERREFS;
   // Don't fire the progress event if mLoadTotal is 0, see XHR spec step 6.1
   if (!mLoadTotal && mLoadTransferred) {
     return;
@@ -3696,13 +3753,12 @@ void XMLHttpRequestMainThread::HandleProgressTimerCallback() {
 
   if (InUploadPhase()) {
     if (mUpload && !mUploadComplete && mFlagHadUploadListenersOnSend) {
-      DispatchProgressEvent(mUpload, ProgressEventType::progress,
-                            mUploadTransferred, mUploadTotal);
+      DispatchProgressEvent(mUpload, Events::progress, mUploadTransferred,
+                            mUploadTotal);
     }
   } else {
     FireReadystatechangeEvent();
-    DispatchProgressEvent(this, ProgressEventType::progress, mLoadTransferred,
-                          mLoadTotal);
+    DispatchProgressEvent(this, Events::progress, mLoadTransferred, mLoadTotal);
   }
 
   mProgressSinceLastProgressEvent = false;
@@ -3829,6 +3885,7 @@ XMLHttpRequestMainThread::nsHeaderVisitor::nsHeaderVisitor(
 XMLHttpRequestMainThread::nsHeaderVisitor::~nsHeaderVisitor() = default;
 
 void XMLHttpRequestMainThread::MaybeCreateBlobStorage() {
+  DEBUG_WORKERREFS;
   MOZ_ASSERT(mResponseType == XMLHttpRequestResponseType::Blob);
 
   if (mBlobStorage) {
@@ -3850,6 +3907,7 @@ void XMLHttpRequestMainThread::MaybeCreateBlobStorage() {
 
 void XMLHttpRequestMainThread::BlobStoreCompleted(
     MutableBlobStorage* aBlobStorage, BlobImpl* aBlobImpl, nsresult aRv) {
+  DEBUG_WORKERREFS;
   // Ok, the state is changed...
   if (mBlobStorage != aBlobStorage || NS_FAILED(aRv)) {
     return;
@@ -4089,12 +4147,12 @@ nsresult ArrayBufferBuilder::MapToFileInPackage(const nsCString& aFile,
     uint32_t offset = zip->GetDataOffset(zipItem);
     uint32_t size = zipItem->RealSize();
     mozilla::AutoFDClose pr_fd;
-    rv = aJarFile->OpenNSPRFileDesc(PR_RDONLY, 0, &pr_fd.rwget());
+    rv = aJarFile->OpenNSPRFileDesc(PR_RDONLY, 0, getter_Transfers(pr_fd));
     if (NS_FAILED(rv)) {
       return rv;
     }
     mMapPtr = JS::CreateMappedArrayBufferContents(
-        PR_FileDesc2NativeHandle(pr_fd), offset, size);
+        PR_FileDesc2NativeHandle(pr_fd.get()), offset, size);
     if (mMapPtr) {
       mLength = size;
       return NS_OK;

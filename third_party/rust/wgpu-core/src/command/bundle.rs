@@ -78,6 +78,8 @@ index format changes.
 
 #![allow(clippy::reversed_empty_ranges)]
 
+#[cfg(feature = "trace")]
+use crate::device::trace;
 use crate::{
     binding_model::{buffer_binding_type_alignment, BindGroup, BindGroupLayout, PipelineLayout},
     command::{
@@ -92,10 +94,11 @@ use crate::{
     error::{ErrorFormatter, PrettyError},
     hal_api::HalApi,
     hub::Hub,
-    id::{self, RenderBundleId},
+    id,
     init_tracker::{BufferInitTrackerAction, MemoryInitKind, TextureInitTrackerAction},
-    pipeline::{self, PipelineFlags, RenderPipeline},
+    pipeline::{PipelineFlags, RenderPipeline, VertexStep},
     resource::{Resource, ResourceInfo, ResourceType},
+    resource_log,
     track::RenderBundleScope,
     validation::check_buffer_usage,
     Label, LabelHelpers,
@@ -107,10 +110,94 @@ use thiserror::Error;
 
 use hal::CommandEncoder as _;
 
+/// https://gpuweb.github.io/gpuweb/#dom-gpurendercommandsmixin-draw
+fn validate_draw(
+    vertex: &[Option<VertexState>],
+    step: &[VertexStep],
+    first_vertex: u32,
+    vertex_count: u32,
+    first_instance: u32,
+    instance_count: u32,
+) -> Result<(), DrawError> {
+    let vertices_end = first_vertex as u64 + vertex_count as u64;
+    let instances_end = first_instance as u64 + instance_count as u64;
+
+    for (idx, (vbs, step)) in vertex.iter().zip(step).enumerate() {
+        let Some(vbs) = vbs else {
+            continue;
+        };
+
+        let stride_count = match step.mode {
+            wgt::VertexStepMode::Vertex => vertices_end,
+            wgt::VertexStepMode::Instance => instances_end,
+        };
+
+        if stride_count == 0 {
+            continue;
+        }
+
+        let offset = (stride_count - 1) * step.stride + step.last_stride;
+        let limit = vbs.range.end - vbs.range.start;
+        if offset > limit {
+            return Err(DrawError::VertexOutOfBounds {
+                step_mode: step.mode,
+                offset,
+                limit,
+                slot: idx as u32,
+            });
+        }
+    }
+
+    Ok(())
+}
+
+// See https://gpuweb.github.io/gpuweb/#dom-gpurendercommandsmixin-drawindexed
+fn validate_indexed_draw(
+    vertex: &[Option<VertexState>],
+    step: &[VertexStep],
+    index_state: &IndexState,
+    first_index: u32,
+    index_count: u32,
+    first_instance: u32,
+    instance_count: u32,
+) -> Result<(), DrawError> {
+    let last_index = first_index as u64 + index_count as u64;
+    let index_limit = index_state.limit();
+    if last_index <= index_limit {
+        return Err(DrawError::IndexBeyondLimit {
+            last_index,
+            index_limit,
+        });
+    }
+
+    let stride_count = first_instance as u64 + instance_count as u64;
+    for (idx, (vbs, step)) in vertex.iter().zip(step).enumerate() {
+        let Some(vbs) = vbs else {
+            continue;
+        };
+
+        if stride_count == 0 || step.mode != wgt::VertexStepMode::Instance {
+            continue;
+        }
+
+        let offset = (stride_count - 1) * step.stride + step.last_stride;
+        let limit = vbs.range.end - vbs.range.start;
+        if offset > limit {
+            return Err(DrawError::VertexOutOfBounds {
+                step_mode: step.mode,
+                offset,
+                limit,
+                slot: idx as u32,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// Describes a [`RenderBundleEncoder`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "trace", derive(serde::Serialize))]
-#[cfg_attr(feature = "replay", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RenderBundleEncoderDescriptor<'a> {
     /// Debug label of the render bundle encoder.
     ///
@@ -138,7 +225,7 @@ pub struct RenderBundleEncoderDescriptor<'a> {
 }
 
 #[derive(Debug)]
-#[cfg_attr(feature = "serial-pass", derive(serde::Deserialize, serde::Serialize))]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct RenderBundleEncoder {
     base: BasePass<RenderCommand>,
     parent_id: id::DeviceId,
@@ -147,9 +234,9 @@ pub struct RenderBundleEncoder {
     pub(crate) is_stencil_read_only: bool,
 
     // Resource binding dedupe state.
-    #[cfg_attr(feature = "serial-pass", serde(skip))]
+    #[cfg_attr(feature = "serde", serde(skip))]
     current_bind_groups: BindGroupStateChange,
-    #[cfg_attr(feature = "serial-pass", serde(skip))]
+    #[cfg_attr(feature = "serde", serde(skip))]
     current_pipeline: StateChange<id::RenderPipelineId>,
 }
 
@@ -312,7 +399,7 @@ impl RenderBundleEncoder {
                     }
 
                     // Identify the next `num_dynamic_offsets` entries from `base.dynamic_offsets`.
-                    let num_dynamic_offsets = num_dynamic_offsets as usize;
+                    let num_dynamic_offsets = num_dynamic_offsets;
                     let offsets_range =
                         next_dynamic_offset..next_dynamic_offset + num_dynamic_offsets;
                     next_dynamic_offset = offsets_range.end;
@@ -430,6 +517,16 @@ impl RenderBundleEncoder {
                     size,
                 } => {
                     let scope = PassErrorScope::SetVertexBuffer(buffer_id);
+
+                    let max_vertex_buffers = device.limits.max_vertex_buffers;
+                    if slot >= max_vertex_buffers {
+                        return Err(RenderCommandError::VertexBufferIndexOutOfRange {
+                            index: slot,
+                            max: max_vertex_buffers,
+                        })
+                        .map_pass_err(scope);
+                    }
+
                     let buffer = state
                         .trackers
                         .buffers
@@ -482,28 +579,21 @@ impl RenderBundleEncoder {
                     };
                     let pipeline = state.pipeline(scope)?;
                     let used_bind_groups = pipeline.used_bind_groups;
-                    let vertex_limits = state.vertex_limits(pipeline);
-                    let last_vertex = first_vertex + vertex_count;
-                    if last_vertex > vertex_limits.vertex_limit {
-                        return Err(DrawError::VertexBeyondLimit {
-                            last_vertex,
-                            vertex_limit: vertex_limits.vertex_limit,
-                            slot: vertex_limits.vertex_limit_slot,
-                        })
-                        .map_pass_err(scope);
+
+                    validate_draw(
+                        &state.vertex[..],
+                        &pipeline.steps,
+                        first_vertex,
+                        vertex_count,
+                        first_instance,
+                        instance_count,
+                    ).map_pass_err(scope)?;
+
+                    if instance_count > 0 && vertex_count > 0 {
+                        commands.extend(state.flush_vertices());
+                        commands.extend(state.flush_binds(used_bind_groups, base.dynamic_offsets));
+                        commands.push(command);
                     }
-                    let last_instance = first_instance + instance_count;
-                    if last_instance > vertex_limits.instance_limit {
-                        return Err(DrawError::InstanceBeyondLimit {
-                            last_instance,
-                            instance_limit: vertex_limits.instance_limit,
-                            slot: vertex_limits.instance_limit_slot,
-                        })
-                        .map_pass_err(scope);
-                    }
-                    commands.extend(state.flush_vertices());
-                    commands.extend(state.flush_binds(used_bind_groups, base.dynamic_offsets));
-                    commands.push(command);
                 }
                 RenderCommand::DrawIndexed {
                     index_count,
@@ -523,30 +613,23 @@ impl RenderBundleEncoder {
                         Some(ref index) => index,
                         None => return Err(DrawError::MissingIndexBuffer).map_pass_err(scope),
                     };
-                    //TODO: validate that base_vertex + max_index() is within the provided range
-                    let vertex_limits = state.vertex_limits(pipeline);
-                    let index_limit = index.limit();
-                    let last_index = first_index + index_count;
-                    if last_index > index_limit {
-                        return Err(DrawError::IndexBeyondLimit {
-                            last_index,
-                            index_limit,
-                        })
-                        .map_pass_err(scope);
+
+                    validate_indexed_draw(
+                        &state.vertex[..],
+                        &pipeline.steps,
+                        index,
+                        first_index,
+                        index_count,
+                        first_instance,
+                        instance_count,
+                    ).map_pass_err(scope)?;
+
+                    if instance_count > 0 && index_count > 0 {
+                        commands.extend(state.flush_index());
+                        commands.extend(state.flush_vertices());
+                        commands.extend(state.flush_binds(used_bind_groups, base.dynamic_offsets));
+                        commands.push(command);
                     }
-                    let last_instance = first_instance + instance_count;
-                    if last_instance > vertex_limits.instance_limit {
-                        return Err(DrawError::InstanceBeyondLimit {
-                            last_instance,
-                            instance_limit: vertex_limits.instance_limit,
-                            slot: vertex_limits.instance_limit_slot,
-                        })
-                        .map_pass_err(scope);
-                    }
-                    commands.extend(state.flush_index());
-                    commands.extend(state.flush_vertices());
-                    commands.extend(state.flush_binds(used_bind_groups, base.dynamic_offsets));
-                    commands.push(command);
                 }
                 RenderCommand::MultiDrawIndirect {
                     buffer_id,
@@ -749,25 +832,24 @@ pub struct RenderBundle<A: HalApi> {
     pub(super) buffer_memory_init_actions: Vec<BufferInitTrackerAction<A>>,
     pub(super) texture_memory_init_actions: Vec<TextureInitTrackerAction<A>>,
     pub(super) context: RenderPassContext,
-    pub(crate) info: ResourceInfo<RenderBundleId>,
+    pub(crate) info: ResourceInfo<RenderBundle<A>>,
     discard_hal_labels: bool,
 }
 
-#[cfg(any(
-    not(target_arch = "wasm32"),
-    all(
-        feature = "fragile-send-sync-non-atomic-wasm",
-        not(target_feature = "atomics")
-    )
-))]
+impl<A: HalApi> Drop for RenderBundle<A> {
+    fn drop(&mut self) {
+        resource_log!("Destroy raw RenderBundle {:?}", self.info.label());
+
+        #[cfg(feature = "trace")]
+        if let Some(t) = self.device.trace.lock().as_mut() {
+            t.add(trace::Action::DestroyRenderBundle(self.info.id()));
+        }
+    }
+}
+
+#[cfg(send_sync)]
 unsafe impl<A: HalApi> Send for RenderBundle<A> {}
-#[cfg(any(
-    not(target_arch = "wasm32"),
-    all(
-        feature = "fragile-send-sync-non-atomic-wasm",
-        not(target_feature = "atomics")
-    )
-))]
+#[cfg(send_sync)]
 unsafe impl<A: HalApi> Sync for RenderBundle<A> {}
 
 impl<A: HalApi> RenderBundle<A> {
@@ -809,10 +891,10 @@ impl<A: HalApi> RenderBundle<A> {
                             pipeline_layout.as_ref().unwrap().raw(),
                             index,
                             raw_bg,
-                            &offsets[..num_dynamic_offsets as usize],
+                            &offsets[..num_dynamic_offsets],
                         )
                     };
-                    offsets = &offsets[num_dynamic_offsets as usize..];
+                    offsets = &offsets[num_dynamic_offsets..];
                 }
                 RenderCommand::SetPipeline(pipeline_id) => {
                     let render_pipelines = trackers.render_pipelines.read();
@@ -985,14 +1067,16 @@ impl<A: HalApi> RenderBundle<A> {
     }
 }
 
-impl<A: HalApi> Resource<RenderBundleId> for RenderBundle<A> {
+impl<A: HalApi> Resource for RenderBundle<A> {
     const TYPE: ResourceType = "RenderBundle";
 
-    fn as_info(&self) -> &ResourceInfo<RenderBundleId> {
+    type Marker = crate::id::markers::RenderBundle;
+
+    fn as_info(&self) -> &ResourceInfo<Self> {
         &self.info
     }
 
-    fn as_info_mut(&mut self) -> &mut ResourceInfo<RenderBundleId> {
+    fn as_info_mut(&mut self) -> &mut ResourceInfo<Self> {
         &mut self.info
     }
 }
@@ -1014,12 +1098,13 @@ impl IndexState {
     /// Return the number of entries in the current index buffer.
     ///
     /// Panic if no index buffer has been set.
-    fn limit(&self) -> u32 {
+    fn limit(&self) -> u64 {
         let bytes_per_index = match self.format {
             wgt::IndexFormat::Uint16 => 2,
             wgt::IndexFormat::Uint32 => 4,
         };
-        ((self.range.end - self.range.start) / bytes_per_index) as u32
+
+        (self.range.end - self.range.start) / bytes_per_index
     }
 
     /// Generate a `SetIndexBuffer` command to prepare for an indexed draw
@@ -1100,18 +1185,6 @@ struct BindState<A: HalApi> {
     is_dirty: bool,
 }
 
-#[derive(Debug)]
-struct VertexLimitState {
-    /// Length of the shortest vertex rate vertex buffer
-    vertex_limit: u32,
-    /// Buffer slot which the shortest vertex rate vertex buffer is bound to
-    vertex_limit_slot: u32,
-    /// Length of the shortest instance rate vertex buffer
-    instance_limit: u32,
-    /// Buffer slot which the shortest instance rate vertex buffer is bound to
-    instance_limit_slot: u32,
-}
-
 /// The bundle's current pipeline, and some cached information needed for validation.
 struct PipelineState<A: HalApi> {
     /// The pipeline
@@ -1119,7 +1192,7 @@ struct PipelineState<A: HalApi> {
 
     /// How this pipeline's vertex shader traverses each vertex buffer, indexed
     /// by vertex buffer slot number.
-    steps: Vec<pipeline::VertexStep>,
+    steps: Vec<VertexStep>,
 
     /// Ranges of push constants this pipeline uses, copied from the pipeline
     /// layout.
@@ -1204,35 +1277,6 @@ struct State<A: HalApi> {
 }
 
 impl<A: HalApi> State<A> {
-    fn vertex_limits(&self, pipeline: &PipelineState<A>) -> VertexLimitState {
-        let mut vert_state = VertexLimitState {
-            vertex_limit: u32::MAX,
-            vertex_limit_slot: 0,
-            instance_limit: u32::MAX,
-            instance_limit_slot: 0,
-        };
-        for (idx, (vbs, step)) in self.vertex.iter().zip(&pipeline.steps).enumerate() {
-            if let Some(ref vbs) = *vbs {
-                let limit = ((vbs.range.end - vbs.range.start) / step.stride) as u32;
-                match step.mode {
-                    wgt::VertexStepMode::Vertex => {
-                        if limit < vert_state.vertex_limit {
-                            vert_state.vertex_limit = limit;
-                            vert_state.vertex_limit_slot = idx as _;
-                        }
-                    }
-                    wgt::VertexStepMode::Instance => {
-                        if limit < vert_state.instance_limit {
-                            vert_state.instance_limit = limit;
-                            vert_state.instance_limit_slot = idx as _;
-                        }
-                    }
-                }
-            }
-        }
-        vert_state
-    }
-
     /// Return the id of the current pipeline, if any.
     fn pipeline_id(&self) -> Option<id::RenderPipelineId> {
         self.pipeline.as_ref().map(|p| p.pipeline.as_info().id())
@@ -1394,7 +1438,7 @@ impl<A: HalApi> State<A> {
                         return Some(RenderCommand::SetBindGroup {
                             index: i.try_into().unwrap(),
                             bind_group_id: contents.bind_group.as_info().id(),
-                            num_dynamic_offsets: (offsets.end - offsets.start) as u8,
+                            num_dynamic_offsets: offsets.end - offsets.start,
                         });
                     }
                 }
@@ -1497,7 +1541,7 @@ pub mod bundle_ffi {
 
         bundle.base.commands.push(RenderCommand::SetBindGroup {
             index,
-            num_dynamic_offsets: offset_length.try_into().unwrap(),
+            num_dynamic_offsets: offset_length,
             bind_group_id,
         });
     }

@@ -245,7 +245,6 @@ skip-if = [
 ["browser_ext_incognito_views.js"]
 skip-if = [
   "apple_silicon && !fission", # Disabled due to bleedover with other tests when run in regular suites; passes in "failures" jobs
-  "win10_2004 && bits == 32 && debug", # Bug 1727925
 ]
 
 ["browser_ext_lastError.js"]
@@ -307,6 +306,8 @@ skip-if = [
   "verify && !debug && os == 'linux'",
   "verify && !debug && os == 'mac'",
 ]
+
+["browser_ext_optionsPage_activity.js"]
 
 ["browser_ext_optionsPage_browser_style.js"]
 
@@ -374,13 +375,15 @@ skip-if = ["os == 'linux' && swgl && fission && tsan"] # high frequency intermit
 
 ["browser_ext_port_disconnect_on_crash.js"]
 https_first_disabled = true
-skip-if = ["!crashreporter"]
+run-if = ["crashreporter"]
 
 ["browser_ext_port_disconnect_on_window_close.js"]
 
 ["browser_ext_reload_manifest_cache.js"]
 
 ["browser_ext_request_permissions.js"]
+
+["browser_ext_runtime_onPerformanceWarning.js"]
 
 ["browser_ext_runtime_openOptionsPage.js"]
 
@@ -456,6 +459,7 @@ https_first_disabled = true
 skip-if = [
   "debug",
   "asan",
+  "tsan" # Bug 1874317
 ]
 
 ["browser_ext_tab_runtimeConnect.js"]
@@ -484,7 +488,6 @@ https_first_disabled = true
 https_first_disabled = true
 skip-if = [
   "os == 'mac'", # Bug 1722607
-  "win10_2004 && debug", # high frequency intermittent Bug 1722607
   "os == 'linux' && debug", #Bug 1722607
 ]
 
@@ -607,14 +610,9 @@ https_first_disabled = true
 ["browser_ext_url_overrides_newtab.js"]
 skip-if = [
   "os == 'linux' && os_version == '18.04'", # Bug 1651261
-  "win10_2004 && asan", # Bug 1723573
-  "win10_2004 && debug", # Bug 1723573
   "win11_2009 && asan", # Bug 1797751
   "win11_2009 && debug", # Bug 1797751
 ]
-
-["browser_ext_urlbar.js"]
-https_first_disabled = true
 
 ["browser_ext_user_events.js"]
 

@@ -16,6 +16,7 @@
 namespace mozilla {
 
 namespace gfx {
+class DrawTargetRecording;
 class SourceSurface;
 }
 
@@ -96,7 +97,7 @@ class CanvasChild final : public PCanvasChild, public SupportsWeakPtr {
    * @param aFormat SurfaceFormat for the DrawTarget
    * @returns newly created DrawTargetRecording
    */
-  already_AddRefed<gfx::DrawTarget> CreateDrawTarget(
+  already_AddRefed<gfx::DrawTargetRecording> CreateDrawTarget(
       int64_t aTextureId, const RemoteTextureOwnerId& aTextureOwnerId,
       gfx::IntSize aSize, gfx::SurfaceFormat aFormat);
 
@@ -117,6 +118,12 @@ class CanvasChild final : public PCanvasChild, public SupportsWeakPtr {
    */
   already_AddRefed<gfx::SourceSurface> WrapSurface(
       const RefPtr<gfx::SourceSurface>& aSurface, int64_t aTextureId);
+
+  /**
+   * The DrawTargetRecording backing the surface has not been modified since the
+   * previous use, so it is safe to reattach the snapshot for readback.
+   */
+  void AttachSurface(const RefPtr<gfx::SourceSurface>& aSurface);
 
   /**
    * The DrawTargetRecording is about to change, so detach the old snapshot.

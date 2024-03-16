@@ -1,6 +1,6 @@
 [DEFAULT]
 tags = "search-telemetry"
-support-files = ["head.js"]
+support-files = ["head.js", "head-spa.js"]
 prefs = ["browser.search.log=true"]
 
 ["browser_search_glean_serp_event_telemetry_categorization_enabled_by_nimbus_variable.js"]
@@ -47,7 +47,7 @@ support-files = ["domain_category_mappings.json"]
 ["browser_search_telemetry_domain_categorization_extraction.js"]
 support-files = ["searchTelemetryDomainExtraction.html"]
 
-["browser_search_telemetry_domain_categorization_locale_and_region.js"]
+["browser_search_telemetry_domain_categorization_region.js"]
 support-files = ["searchTelemetryDomainCategorizationReporting.html"]
 
 ["browser_search_telemetry_domain_categorization_reporting.js"]
@@ -180,3 +180,18 @@ support-files = ["searchTelemetry.html", "searchTelemetryAd.html"]
 
 ["browser_search_telemetry_sources_webextension.js"]
 support-files = ["searchTelemetry.html", "searchTelemetryAd.html"]
+
+["browser_search_telemetry_spa_in_content.js"]
+support-files = ["searchTelemetrySinglePageApp.html"]
+skip-if = [
+  "(os == 'linux') && tsan && verify",
+] # Can fail on ad_count visibility
+
+["browser_search_telemetry_spa_multi_provider.js"]
+support-files = ["searchTelemetrySinglePageApp.html"]
+
+["browser_search_telemetry_spa_multi_tab.js"]
+support-files = ["searchTelemetrySinglePageApp.html"]
+
+["browser_search_telemetry_spa_single_tab.js"]
+support-files = ["searchTelemetrySinglePageApp.html"]

@@ -21,6 +21,7 @@
 
 #include "builtin/DataViewObject.h"
 #include "builtin/MapObject.h"
+#include "builtin/String.h"
 #include "debugger/DebugAPI.h"
 #include "jit/BaselineFrame.h"
 #include "jit/BaselineIC.h"
@@ -691,18 +692,18 @@ ICInterpretOps(BaselineFrame* frame, VMFrameManager& frameMgr, State& state,
           return ICInterpretOpResult::NextIC;
         }
         break;
-      case GuardClassKind::ArrayBuffer:
-        if (object->getClass() != &ArrayBufferObject::class_) {
+      case GuardClassKind::FixedLengthArrayBuffer:
+        if (object->getClass() != &FixedLengthArrayBufferObject::class_) {
           return ICInterpretOpResult::NextIC;
         }
         break;
-      case GuardClassKind::SharedArrayBuffer:
-        if (object->getClass() != &SharedArrayBufferObject::class_) {
+      case GuardClassKind::FixedLengthSharedArrayBuffer:
+        if (object->getClass() != &FixedLengthSharedArrayBufferObject::class_) {
           return ICInterpretOpResult::NextIC;
         }
         break;
-      case GuardClassKind::DataView:
-        if (object->getClass() != &DataViewObject::class_) {
+      case GuardClassKind::FixedLengthDataView:
+        if (object->getClass() != &FixedLengthDataViewObject::class_) {
           return ICInterpretOpResult::NextIC;
         }
         break;
@@ -1714,6 +1715,7 @@ ICInterpretOps(BaselineFrame* frame, VMFrameManager& frameMgr, State& state,
   CACHEOP_CASE_UNIMPL(GuardIsNotProxy)
   CACHEOP_CASE_UNIMPL(GuardIsNotArrayBufferMaybeShared)
   CACHEOP_CASE_UNIMPL(GuardIsTypedArray)
+  CACHEOP_CASE_UNIMPL(GuardIsFixedLengthTypedArray)
   CACHEOP_CASE_UNIMPL(GuardHasProxyHandler)
   CACHEOP_CASE_UNIMPL(GuardIsNotDOMProxy)
   CACHEOP_CASE_UNIMPL(GuardObjectIdentity)
@@ -1721,6 +1723,7 @@ ICInterpretOps(BaselineFrame* frame, VMFrameManager& frameMgr, State& state,
   CACHEOP_CASE_UNIMPL(GuardStringToIndex)
   CACHEOP_CASE_UNIMPL(GuardStringToInt32)
   CACHEOP_CASE_UNIMPL(GuardStringToNumber)
+  CACHEOP_CASE_UNIMPL(StringToAtom)
   CACHEOP_CASE_UNIMPL(BooleanToNumber)
   CACHEOP_CASE_UNIMPL(GuardHasGetterSetter)
   CACHEOP_CASE_UNIMPL(GuardInt32IsNonNegative)
@@ -1747,11 +1750,13 @@ ICInterpretOps(BaselineFrame* frame, VMFrameManager& frameMgr, State& state,
   CACHEOP_CASE_UNIMPL(LoadWrapperTarget)
   CACHEOP_CASE_UNIMPL(LoadValueTag)
   CACHEOP_CASE_UNIMPL(TruncateDoubleToUInt32)
+  CACHEOP_CASE_UNIMPL(DoubleToUint8Clamped)
   CACHEOP_CASE_UNIMPL(MegamorphicLoadSlotResult)
   CACHEOP_CASE_UNIMPL(MegamorphicLoadSlotByValueResult)
   CACHEOP_CASE_UNIMPL(MegamorphicStoreSlot)
   CACHEOP_CASE_UNIMPL(MegamorphicSetElement)
   CACHEOP_CASE_UNIMPL(MegamorphicHasPropResult)
+  CACHEOP_CASE_UNIMPL(SmallObjectVariableKeyHasOwnResult)
   CACHEOP_CASE_UNIMPL(ObjectToIteratorResult)
   CACHEOP_CASE_UNIMPL(ValueToIteratorResult)
   CACHEOP_CASE_UNIMPL(LoadDOMExpandoValue)
@@ -1805,6 +1810,10 @@ ICInterpretOps(BaselineFrame* frame, VMFrameManager& frameMgr, State& state,
   CACHEOP_CASE_UNIMPL(StringTrimResult)
   CACHEOP_CASE_UNIMPL(StringTrimStartResult)
   CACHEOP_CASE_UNIMPL(StringTrimEndResult)
+  CACHEOP_CASE_UNIMPL(LinearizeForCodePointAccess)
+  CACHEOP_CASE_UNIMPL(LoadStringAtResult)
+  CACHEOP_CASE_UNIMPL(LoadStringCodePointResult)
+  CACHEOP_CASE_UNIMPL(ToRelativeStringIndex)
   CACHEOP_CASE_UNIMPL(MathAbsInt32Result)
   CACHEOP_CASE_UNIMPL(MathAbsNumberResult)
   CACHEOP_CASE_UNIMPL(MathClz32Result)
@@ -4416,23 +4425,43 @@ PBIResult PortableBaselineInterpret(JSContext* cx_, State& state, Stack& stack,
     }
 
     CASE(AsyncResolve) {
-      // valueOrReason, gen => promise
-      auto resolveKind = AsyncFunctionResolveKind(GET_UINT8(pc));
+      // value, gen => promise
       JSObject* promise;
       {
         ReservedRooted<JSObject*> obj0(&state.obj0,
                                        &POP().asValue().toObject());  // gen
         ReservedRooted<Value> value0(&state.value0,
-                                     POP().asValue());  // valueOrReason
+                                     POP().asValue());  // value
         PUSH_EXIT_FRAME();
         promise = AsyncFunctionResolve(
-            cx, obj0.as<AsyncFunctionGeneratorObject>(), value0, resolveKind);
+            cx, obj0.as<AsyncFunctionGeneratorObject>(), value0);
         if (!promise) {
           goto error;
         }
       }
       PUSH(StackVal(ObjectValue(*promise)));
       END_OP(AsyncResolve);
+    }
+
+    CASE(AsyncReject) {
+      // reason, gen => promise
+      JSObject* promise;
+      {
+        ReservedRooted<JSObject*> obj0(&state.obj0,
+                                       &POP().asValue().toObject());  // gen
+        ReservedRooted<Value> value0(&state.value0,
+                                     POP().asValue());  // stack
+        ReservedRooted<Value> value1(&state.value1,
+                                     POP().asValue());  // reason
+        PUSH_EXIT_FRAME();
+        promise = AsyncFunctionReject(
+            cx, obj0.as<AsyncFunctionGeneratorObject>(), value1, value0);
+        if (!promise) {
+          goto error;
+        }
+      }
+      PUSH(StackVal(ObjectValue(*promise)));
+      END_OP(AsyncReject);
     }
 
     CASE(CanSkipAwait) {
@@ -4719,6 +4748,17 @@ PBIResult PortableBaselineInterpret(JSContext* cx_, State& state, Stack& stack,
       END_OP(Throw);
     }
 
+    CASE(ThrowWithStack) {
+      {
+        ReservedRooted<Value> value0(&state.value0, POP().asValue());
+        ReservedRooted<Value> value1(&state.value1, POP().asValue());
+        PUSH_EXIT_FRAME();
+        MOZ_ALWAYS_FALSE(ThrowWithStackOperation(cx, value1, value0));
+        goto error;
+      }
+      END_OP(ThrowWithStack);
+    }
+
     CASE(ThrowMsg) {
       {
         PUSH_EXIT_FRAME();
@@ -4753,6 +4793,25 @@ PBIResult PortableBaselineInterpret(JSContext* cx_, State& state, Stack& stack,
       PUSH(StackVal(state.res));
       state.res.setUndefined();
       END_OP(Exception);
+    }
+
+    CASE(ExceptionAndStack) {
+      {
+        ReservedRooted<Value> value0(&state.value0);
+        {
+          PUSH_EXIT_FRAME();
+          if (!cx.getCx()->getPendingExceptionStack(&value0)) {
+            goto error;
+          }
+          if (!GetAndClearException(cx, &state.res)) {
+            goto error;
+          }
+        }
+        PUSH(StackVal(state.res));
+        PUSH(StackVal(value0));
+        state.res.setUndefined();
+      }
+      END_OP(ExceptionAndStack);
     }
 
     CASE(Finally) {
@@ -5020,12 +5079,12 @@ PBIResult PortableBaselineInterpret(JSContext* cx_, State& state, Stack& stack,
       {
         PUSH_EXIT_FRAME();
         if (frame->isDebuggee()) {
-          TRACE_PRINTF("doing DebugLeaveThenRecreateLexicalEnv\n");
-          if (!DebugLeaveThenRecreateLexicalEnv(cx, frame, pc)) {
+          TRACE_PRINTF("doing DebuggeeRecreateLexicalEnv\n");
+          if (!DebuggeeRecreateLexicalEnv(cx, frame, pc)) {
             goto error;
           }
         } else {
-          if (!frame->recreateLexicalEnvironment(cx)) {
+          if (!frame->recreateLexicalEnvironment<false>(cx)) {
             goto error;
           }
         }
@@ -5037,12 +5096,12 @@ PBIResult PortableBaselineInterpret(JSContext* cx_, State& state, Stack& stack,
       {
         PUSH_EXIT_FRAME();
         if (frame->isDebuggee()) {
-          TRACE_PRINTF("doing DebugLeaveThenFreshenLexicalEnv\n");
-          if (!DebugLeaveThenFreshenLexicalEnv(cx, frame, pc)) {
+          TRACE_PRINTF("doing DebuggeeFreshenLexicalEnv\n");
+          if (!DebuggeeFreshenLexicalEnv(cx, frame, pc)) {
             goto error;
           }
         } else {
-          if (!frame->freshenLexicalEnvironment(cx)) {
+          if (!frame->freshenLexicalEnvironment<false>(cx)) {
             goto error;
           }
         }
@@ -5251,6 +5310,7 @@ error:
         sp = reinterpret_cast<StackVal*>(rfe.stackPointer);
         TRACE_PRINTF(" -> finally to pc %p\n", pc);
         PUSH(StackVal(rfe.exception));
+        PUSH(StackVal(rfe.exceptionStack));
         PUSH(StackVal(BooleanValue(true)));
         stack.unwindingSP = sp;
         goto unwind;

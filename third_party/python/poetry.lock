@@ -495,14 +495,14 @@ files = [
 
 [[package]]
 name = "fluent-migrate"
-version = "0.12.0"
+version = "0.13.0"
 description = "Toolchain to migrate legacy translation to Fluent."
 category = "main"
 optional = false
 python-versions = "*"
 files = [
-    {file = "fluent.migrate-0.12.0-py2.py3-none-any.whl", hash = "sha256:e3564c92d1f53700e98792f1be1ff954488d431ff9f5ec290a4ab13b5de69487"},
-    {file = "fluent.migrate-0.12.0.tar.gz", hash = "sha256:926e69e94975521a974b206e242a479310c2cbca1865ca26bf40fa3c7a357338"},
+    {file = "fluent.migrate-0.13.0-py2.py3-none-any.whl", hash = "sha256:18a5c9d0c00cd50f45754a8e568d1fa57500679bdd00a98604de963cafef5a70"},
+    {file = "fluent.migrate-0.13.0.tar.gz", hash = "sha256:15d48d51c838167a2ace3788f34b130d40e4946f08f9f48d9495a34ac565bb1c"},
 ]
 
 [package.dependencies]
@@ -1421,14 +1421,14 @@ files = [
 
 [[package]]
 name = "tomlkit"
-version = "0.11.8"
+version = "0.12.3"
 description = "Style preserving TOML library"
 category = "main"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "tomlkit-0.11.8-py3-none-any.whl", hash = "sha256:8c726c4c202bdb148667835f68d68780b9a003a9ec34167b6c673b38eff2a171"},
-    {file = "tomlkit-0.11.8.tar.gz", hash = "sha256:9330fc7faa1db67b541b28e62018c17d20be733177d290a13b24c62d1614e0c3"},
+    {file = "tomlkit-0.12.3-py3-none-any.whl", hash = "sha256:b0a645a9156dc7cb5d3a1f0d4bab66db287fcb8e0430bdd4664a095ea16414ba"},
+    {file = "tomlkit-0.12.3.tar.gz", hash = "sha256:75baf5012d06501f07bee5bf8e801b9f343e7aac5a92581f20f80ce632e6b5a4"},
 ]
 
 [[package]]
@@ -1606,4 +1606,4 @@ testing = ["func-timeout", "jaraco.itertools", "pytest (>=4.6)", "pytest-black (
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.8"
-content-hash = "8f6e38dcef9aba9437efbfb39d7cce3b0bb2d1ca42fae2aafe56ab86e2ae3084"
+content-hash = "22aaa5192c95ba8c8effd4a6e39b32d356a790e72e7bae067615bbfe0c4e9896"

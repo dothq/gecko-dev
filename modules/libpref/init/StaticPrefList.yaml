@@ -29,13 +29,14 @@
 # -----------
 # A pref definition looks like this:
 #
-#   - name: <pref-name>                    # mandatory
-#     type: <cpp-type>                     # mandatory
-#     value: <default-value>               # mandatory
-#     mirror: <never | once | always>      # mandatory
-#     do_not_use_directly: <true | false>  # optional
-#     include: <header-file>               # optional
-#     rust: <true | false>                 # optional
+#   - name: <pref-name>                                 # mandatory
+#     type: <cpp-type>                                  # mandatory
+#     value: <default-value>                            # mandatory
+#     mirror: <never | once | always>                   # mandatory
+#     do_not_use_directly: <true | false>               # optional
+#     include: <header-file>                            # optional
+#     rust: <true | false>                              # optional
+#     set_spidermonkey_pref: <false | startup | always> # optional
 #
 # - `name` is the name of the pref, without double-quotes, as it appears
 #   in about:config. It is used in most libpref API functions (from both C++
@@ -97,6 +98,13 @@
 # - `rust` indicates if the mirror variable is used by Rust code. If so, it
 #   will be usable via the `static_prefs::pref!` macro, e.g.
 #   `static_prefs::pref!("layout.css.cross-fade.enabled")`.
+#
+# - `set_spidermonkey_pref` indicates whether SpiderMonkey boilerplate code
+#   should be generated for this pref. If this is set to 'startup', the
+#   pref on the SpiderMonkey side is only set during process startup. If set to
+#   'always', the SpiderMonkey pref value is also updated when this pref is
+#   changed at runtime.
+#   This option is only valid for javascript.options.* prefs.
 #
 # The getter function's base name is the same as the pref's name, but with
 # '.' or '-' chars converted to '_', to make a valid identifier. For example,
@@ -1133,6 +1141,13 @@
   value: false
   mirror: never
 
+# Whether content analysis should allow content if there is a problem communicating
+# with the agent.
+- name: browser.contentanalysis.default_allow
+  type: bool
+  value: false
+  mirror: never
+
 # Is the IPC pipe to the DLP tool specific to the user or to the system?
 - name: browser.contentanalysis.is_per_user
   type: bool
@@ -1761,23 +1776,6 @@
   mirror: always
   do_not_use_directly: true
 
-# When this pref is enabled, <object> and <embed> elements will create
-# synthetic documents when the resource type they're loading is an image.
-- name: browser.opaqueResponseBlocking.syntheticBrowsingContext
-  type: bool
-  value: true
-  mirror: once
-
-# When this pref is enabled, <object> and <embed> elements will filter the
-# browsing contexts created for the synthetic browsing contexts for the
-# synthetic documents when browser.opaqueResponseBlocking.syntheticBrowsingContext
-# is enabled from `Window.frames`, `Window.length` and named targeting.
-- name: browser.opaqueResponseBlocking.syntheticBrowsingContext.filter
-  type: bool
-  value: true
-  mirror: once
-  do_not_use_directly: true
-
 # When true, zooming will be enabled on all sites, even ones that declare
 # user-scalable=no.
 - name: browser.ui.zoom.force-user-scalable
@@ -2162,24 +2160,10 @@
   value: true
   mirror: always
 
-# Is support for Document.getAnimations() and Element.getAnimations()
-# supported?
-- name: dom.animations-api.getAnimations.enabled
-  type: bool
-  value: true
-  mirror: always
-
 # Is support for timelines from the Web Animations API enabled?
 - name: dom.animations-api.timelines.enabled
   type: bool
   value: true
-  mirror: always
-
-# Synchronize transform animations with geometric animations on the
-# main thread.
-- name: dom.animations.mainthread-synchronization-with-geometric-animations
-  type: bool
-  value: false
   mirror: always
 
 # Is support for Navigator.getBattery enabled?
@@ -2340,6 +2324,11 @@
   value: false
   mirror: always
 
+- name: dom.domrequest.enabled
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # Only intended for fuzzing purposes, this will break mozPrintCallback, etc.
 - name: dom.window_print.fuzzing.block_while_printing
   type: bool
@@ -2358,6 +2347,13 @@
   value: @IS_NIGHTLY_BUILD@
   mirror: always
   rust: true
+
+# Whether the blocking attribute implementation is enabled,
+# see https://html.spec.whatwg.org/#blocking-attributes
+- name: dom.element.blocking.enabled
+  type: bool
+  value: false
+  mirror: always
 
 # Whether CustomStateSet is enabled
 - name: dom.element.customstateset.enabled
@@ -2440,12 +2436,6 @@
   value: true
   mirror: always
 
-# Whether wheel listeners are passive by default.
-- name: dom.event.default_to_passive_wheel_listeners
-  type: bool
-  value: true
-  mirror: always
-
 - name: dom.event.dragexit.enabled
   type: bool
   value: @IS_NOT_NIGHTLY_BUILD@
@@ -2515,6 +2505,14 @@
   mirror: always
 #endif
 
+# Whether Gecko keeps store or forgets the last deepest "enter" event target for
+# the next "enter" or "leave" event dispatching when the last "over" event
+# target is removed from the DOM tree.
+- name: dom.events.mouse-pointer-boundary.keep-enter-targets-after-over-target-removed
+  type: bool
+  value: @IS_EARLY_BETA_OR_EARLIER@
+  mirror: always
+
 # Whether .offset{X,Y} for events targeted at SVG nodes returns bounds relative
 # to the outer SVG.
 - name: dom.events.offset-in-svg-relative-to-svg-root
@@ -2544,13 +2542,6 @@
   value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: always
   do_not_use_directly: true
-
-# Guard for bug 1731504, in case fix breaks more websites
-# If true, event is first captured then bubbled on target element
-- name: dom.events.phases.correctOrderOnTarget
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
 
 # This pref controls whether or not the `protected` dataTransfer state is
 # enabled. If the `protected` dataTransfer stae is disabled, then the
@@ -2937,13 +2928,13 @@
 
 - name: dom.forms.always_allow_pointer_events.enabled
   type: bool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: always
 
 # Is support for key events and focus events on disabled elements enabled?
 - name: dom.forms.always_allow_key_and_focus_events.enabled
   type: bool
-  value: @IS_NIGHTLY_BUILD@
+  value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: always
 
 # Whether to disable only the descendants or the parent fieldset element too
@@ -3466,13 +3457,7 @@
 # Enable Screen Wake Lock API
 - name: dom.screenwakelock.enabled
   type: bool
-  value: @IS_NIGHTLY_BUILD@
-  mirror: always
-
-# Prevent errors when using set_permission from permissions.sys.mjs
-- name: dom.screenwakelock.testing
-  type: bool
-  value: false
+  value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: always
 
 # Whether to enable the JavaScript start-up cache. This causes one of the first
@@ -3813,6 +3798,11 @@
 - name: dom.select.showPicker.enabled
   type: bool
   value: true
+  mirror: always
+
+- name: dom.send_after_paint_to_content
+  type: bool
+  value: false
   mirror: always
 
 - name: dom.separate_event_queue_for_post_message.enabled
@@ -6210,6 +6200,11 @@
   value: true
   mirror: always
 
+- name: gfx.offscreencanvas.shared-provider
+  type: RelaxedAtomicBool
+  value: true
+  mirror: always
+
 - name: gfx.omta.background-color
   type: bool
   value: true
@@ -7017,9 +7012,9 @@
 # testing/fuzzing purposes. -1 disables this limit (there are other limits in
 # place).
 - name: image.mem.max_legal_imgframe_size_kb
-  type: int32_t
+  type: RelaxedAtomicInt32
   value: -1
-  mirror: once
+  mirror: always
 
 # Whether we record SVG images as blobs or not.
 - name: image.svg.blob-image
@@ -7419,16 +7414,31 @@
   mirror: always
   do_not_use_directly: true
 
+- name: javascript.options.use_emulates_undefined_fuse
+  type: bool
+  value: true
+  mirror: always
+  do_not_use_directly: true
+  set_spidermonkey_pref: startup
+
 - name: javascript.options.compact_on_user_inactive
   type: bool
   value: true
   mirror: always
+
+# No-op pref for testing the SpiderMonkey pref system.
+- name: javascript.options.tests.uint32-pref
+  type: uint32_t
+  value: 1
+  mirror: always
+  set_spidermonkey_pref: always
 
 # Enable fuse based destructuring
 - name: javascript.options.destructuring_fuse
   type: bool
   value: true
   mirror: always
+  set_spidermonkey_pref: startup
 
 # The default amount of time to wait from the user being idle to starting a
 # shrinking GC. Measured in milliseconds.
@@ -7446,18 +7456,21 @@
   type: bool
   value: @IS_NIGHTLY_OR_DEV_EDITION@
   mirror: always
+  set_spidermonkey_pref: startup
 
 # Support for weak references in JavaScript (WeakRef and FinalizationRegistry).
 - name: javascript.options.weakrefs
   type: bool
   value: true
   mirror: always
+  set_spidermonkey_pref: startup
 
 # Whether to expose the FinalizationRegistry.prototype.cleanupSome method.
 - name: javascript.options.experimental.weakrefs.expose_cleanupSome
   type: bool
   value: false
   mirror: always
+  set_spidermonkey_pref: startup
 
 # ShadowRealms: https://github.com/tc39/proposal-shadowrealm
 - name: javascript.options.experimental.shadow_realms
@@ -7466,18 +7479,22 @@
   type: RelaxedAtomicBool
   value: false
   mirror: always
+  # Non-startup pref because the WPT test harness sets prefs after startup.
+  set_spidermonkey_pref: always
 
 # Support for String.prototype.{is,to}WellFormed in JavaScript.
 - name: javascript.options.well_formed_unicode_strings
   type: bool
   value: true
   mirror: always
+  set_spidermonkey_pref: startup
 
 # Support for Object.groupBy/Map.groupBy in JavaScript.
 -  name: javascript.options.array_grouping
    type: bool
    value: true
    mirror: always
+   set_spidermonkey_pref: startup
 
 #ifdef NIGHTLY_BUILD
   # Experimental support for Iterator Helpers in JavaScript.
@@ -7485,18 +7502,35 @@
     type: bool
     value: false
     mirror: always
+    set_spidermonkey_pref: startup
 
   # Experimental support for New Set methods
 -   name: javascript.options.experimental.new_set_methods
     type: bool
     value: false
     mirror: always
+    set_spidermonkey_pref: startup
 
-      # Experimental support for Symbols as WeakMap keys in JavaScript.
+  # Experimental support for Symbols as WeakMap keys in JavaScript.
 -   name: javascript.options.experimental.symbols_as_weakmap_keys
     type: bool
     value: false
     mirror: always
+    set_spidermonkey_pref: startup
+
+  # Experimental support for resizable ArrayBuffers in JavaScript.
+-   name: javascript.options.experimental.arraybuffer_resizable
+    type: bool
+    value: false
+    mirror: always
+    set_spidermonkey_pref: startup
+
+  # Experimental support for growable SharedArrayBuffers in JavaScript.
+-   name: javascript.options.experimental.sharedarraybuffer_growable
+    type: bool
+    value: false
+    mirror: always
+    set_spidermonkey_pref: startup
 #endif  // NIGHTLY_BUILD
 
 # Experimental support for ArrayBuffer.prototype.transfer{,ToFixedLength}() in JavaScript.
@@ -7504,6 +7538,7 @@
     type: bool
     value: true
     mirror: always
+    set_spidermonkey_pref: startup
 
 #ifdef NIGHTLY_BUILD
   # Experimental support for Import Assertions in JavaScript.
@@ -7634,6 +7669,11 @@
     value: true
     mirror: always
 
+-   name: javascript.options.wasm_exnref
+    type: bool
+    value: @IS_EARLY_BETA_OR_EARLIER@
+    mirror: always
+
 #if defined(ENABLE_WASM_FUNCTION_REFERENCES)
 -   name: javascript.options.wasm_function_references
     type: bool
@@ -7684,8 +7724,9 @@
 - name: javascript.options.site_based_pretenuring
   type: bool
   value: true
-  mirror: always  # LoadStartupJSPrefs
+  mirror: always
   do_not_use_directly: true
+  set_spidermonkey_pref: startup
 
 #if !defined(JS_CODEGEN_MIPS32) && !defined(JS_CODEGEN_MIPS64) && !defined(JS_CODEGEN_LOONG64)
   # Spectre security vulnerability mitigations for the JS JITs.
@@ -7762,6 +7803,7 @@
   type: bool
   value: @IS_EARLY_BETA_OR_EARLIER@
   mirror: always
+  set_spidermonkey_pref: always
 
 # Whether to support parsing '//(#@) source(Mapping)?URL=' pragmas.
 - name: javascript.options.source_pragmas
@@ -8556,13 +8598,6 @@
   mirror: always
   rust: true
 
-# Is support for CSS overflow: overlay enabled
-- name: layout.css.overflow-overlay.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-  rust: true
-
 # Is support for overscroll-behavior enabled?
 - name: layout.css.overscroll-behavior.enabled
   type: bool
@@ -8794,13 +8829,6 @@
   value: true
   mirror: always
 
-# Enable experimental enhanced color CSS color spaces. (lab(), lch(), oklab(), oklch(), color())
-- name: layout.css.more_color_4.enabled
-  type: RelaxedAtomicBool
-  value: true
-  mirror: always
-  rust: true
-
 # The margin used for detecting relevancy for `content-visibility: auto`.
 - name: layout.css.content-visibility-relevant-content-margin
   type: float
@@ -8847,12 +8875,6 @@
   value: @IS_NIGHTLY_BUILD@
   mirror: always
   rust: true
-
-# Whether to block large cursors intersecting UI.
-- name: layout.cursor.block.enabled
-  type: bool
-  value: true
-  mirror: always
 
 # The maximum width or height of the cursor we should allow when intersecting
 # the UI, in CSS pixels.
@@ -9008,6 +9030,16 @@
 - name: layout.reflow.synthMouseMove
   type: bool
   value: @IS_NOT_ANDROID@
+  mirror: always
+
+# This pref determines which side vertical scrollbars should be on.
+# 0 = end-side in UI direction
+# 1 = end-side in document/content direction
+# 2 = right
+# 3 = left
+- name: layout.scrollbar.side
+  type: int32_t
+  value: 0
   mirror: always
 
 # This pref is to be set by test code only.
@@ -9294,13 +9326,6 @@
   value: false
   mirror: always
 
-# Should deprecated plugin behavior fallback to normal behavior or use
-# the experimental design.
-- name: layout.use-plugin-fallback
-  type: bool
-  value: false
-  mirror: always
-
 # Whether to draw images in CSS backgrounds if we only have a partial frame.
 - name: layout.display_partial_background_images
   type: bool
@@ -9317,6 +9342,12 @@
 - name: layout.details.force-block-layout
   type: bool
   value: true
+  mirror: always
+
+# Whether table cells can generate scroll boxes.
+- name: layout.tables.scrollable-cells
+  type: bool
+  value: @IS_NIGHTLY_BUILD@
   mirror: always
 
 # Whether to disable layer pixel alignment in scroll related stuff.
@@ -9892,6 +9923,8 @@
   value: true
 #elif defined(ANDROID) && !defined(MOZ_ANDROID_CONTENT_SERVICE_ISOLATED_PROCESS)
   value: true
+#elif defined(XP_FREEBSD)
+  value: true
 #elif defined(XP_OPENBSD)
   value: true
 #else
@@ -9971,14 +10004,9 @@
 
 # Now we will completely disable the ability to perform audio decoding outside
 # of Utility.
-# We do that only on nightly builds for now.
 -   name: media.allow-audio-non-utility
     type: RelaxedAtomicBool
-#if defined(NIGHTLY_BUILD) || defined(EARLY_BETA_OR_EARLIER)
     value: false
-#else
-    value: true
-#endif // defined(NIGHTLY_BUILD) || defined(EARLY_BETA_OR_EARLIER)
     mirror: always
 
 #ifdef MOZ_OMX
@@ -10636,6 +10664,14 @@
   value: true
   mirror: once
 
+# Tell the audio backend to prefer a stream adapted for voice when processing is
+# enabled through constraints (possibly defaults). Whether it has any effect
+# depends on the backend.
+- name: media.getusermedia.microphone.prefer_voice_stream_with_processing.enabled
+  type: RelaxedAtomicBool
+  value: True
+  mirror: always
+
 # This pref turns on legacy (non-spec) exposure of camera and microphone
 # information from enumerateDevices and devicechange ahead of successful
 # getUserMedia calls. Should only be turned on to resolve web compat issues,
@@ -11041,6 +11077,21 @@
 - name: memory.phc.min_ram_mb
   type: uint32_t
   value: 8000
+  mirror: always
+
+- name: memory.phc.avg_delay.first
+  type: uint32_t
+  value: 65536
+  mirror: always
+
+- name: memory.phc.avg_delay.normal
+  type: uint32_t
+  value: 16384
+  mirror: always
+
+- name: memory.phc.avg_delay.page_reuse
+  type: uint32_t
+  value: 262144
   mirror: always
 
 #---------------------------------------------------------------------------
@@ -11860,6 +11911,17 @@
   value: false
   mirror: always
 
+# When true, the HTTPS query will actually call the native
+# platform API. When false it will return before the call
+# to the platform API
+# This pref is necessary because having a HTTPS record
+# could cause channels to connect to a different port,
+# which is not desirable in automation.
+- name: network.dns.native_https_query_in_automation
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 # When resolving a native HTTPS query with native APIs
 # the Android implementation has a max timeout
 - name: network.dns.native_https_timeout_android
@@ -12441,7 +12503,7 @@
 
 - name: network.http.http2.move_to_pending_list_after_network_change
   type: RelaxedAtomicBool
-  value: @IS_EARLY_BETA_OR_EARLIER@
+  value: true
   mirror: always
 
 # Enable HTTP/3
@@ -12651,6 +12713,24 @@
   value: false
   mirror: always
 
+# CacheStorageService::MemoryPool::PurgeByFrecency does a rather expensive
+# sort we cannot interrupt by an incoming cache operation, so we want the
+# purging to do some progress to not have just wasted cycles.
+# Initial default 0, see bug 1879814.
+- name: network.cache.purgebyfrecency_minprogress_disk
+  type: RelaxedAtomicUint32
+  value: 0
+  mirror: always
+
+# CacheStorageService::MemoryPool::PurgeByFrecency does a rather expensive
+# sort we cannot interrupt by an incoming cache operation, so we want the
+# purging to do at least some progress to not have just wasted cycles.
+# Initial default 0, see bug 1879814.
+- name: network.cache.purgebyfrecency_minprogress_memory
+  type: RelaxedAtomicUint32
+  value: 0
+  mirror: always
+
 # When true we will dispatch a background task (separate process) to
 # delete the cache folder at shutdown in order to avoid shutdown hangs.
 - name: network.cache.shutdown_purge_in_background_task
@@ -12813,6 +12893,14 @@
   type: bool
   value: true
   mirror: always
+
+# Inner schemes that are allowed to display application/http-index-format.
+# Set to * to allow all schemes.
+- name: network.http_index_format.allowed_schemes
+  type: String
+  value: "file,moz-gio"
+  mirror: never
+
 
 #---------------------------------------------------------------------------
 # Prefs starting with "nglayout."
@@ -14712,6 +14800,13 @@
 #endif
   mirror: always
 
+#ifdef XP_WIN
+- name: ui.key.layout.load_when_first_needed
+  type: bool
+  value: @IS_EARLY_BETA_OR_EARLIER@
+  mirror: always
+#endif
+
 # Does the access key by itself focus the menu bar?
 - name: ui.key.menuAccessKeyFocuses
   type: bool
@@ -14920,7 +15015,7 @@
   value: true
   mirror: always
 
-# When true, selection is not collapased at the right click point if there is a
+# When true, selection is not collapsed at the right click point if there is a
 # non-collapsed selection.
 - name: ui.mouse.right_click.collapse_selection.stop_if_non_collapsed_selection
   type: bool
@@ -14930,6 +15025,13 @@
 # When true, selection is not collapsed at the right click point if the clicked
 # node is not editable.
 - name: ui.mouse.right_click.collapse_selection.stop_if_non_editable_node
+  type: bool
+  value: false
+  mirror: always
+
+# When true, the caret is not moved to the right click point in focused editable
+# content.
+- name: ui.mouse.right_click.move_caret.stop_if_in_focused_editable_node
   type: bool
   value: false
   mirror: always
@@ -15448,6 +15550,11 @@
   value: false
   mirror: always
 
+- name: widget.disable_file_pickers
+  type: RelaxedAtomicBool
+  value: false
+  mirror: always
+
 - name: widget.window-transforms.disabled
   type: RelaxedAtomicBool
   value: false
@@ -15499,6 +15606,13 @@
 - name: widget.gtk.libadwaita-colors.enabled
   type: bool
   value: true
+  mirror: always
+
+# Whether to use gtk titlebar actions for middle click instead of Firefox
+# build in one
+- name: widget.gtk.titlebar-action-middle-click-enabled
+  type: bool
+  value: false
   mirror: always
 
 # Whether we enable rounded bottom corners on GTK by default.

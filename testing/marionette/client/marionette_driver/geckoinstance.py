@@ -60,8 +60,6 @@ class GeckoInstance(object):
         # Do not show datareporting policy notifications which can interfere with tests
         "datareporting.policy.dataSubmissionEnabled": False,
         "datareporting.policy.dataSubmissionPolicyBypassNotification": True,
-        # Automatically unload beforeunload alerts
-        "dom.disable_beforeunload": True,
         # Enabling the support for File object creation in the content process.
         "dom.file.createInChild": True,
         # Disable delayed user input event handling
@@ -439,8 +437,6 @@ class FennecInstance(GeckoInstance):
         "browser.safebrowsing.update.enabled": False,
         # Do not restore the last open set of tabs if the browser has crashed
         "browser.sessionstore.resume_from_crash": False,
-        # Disable e10s by default
-        "browser.tabs.remote.autostart": False,
     }
 
     def __init__(

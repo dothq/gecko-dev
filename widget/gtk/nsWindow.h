@@ -26,6 +26,7 @@
 #include "nsIDragService.h"
 #include "nsRefPtrHashtable.h"
 #include "IMContextWrapper.h"
+#include "LookAndFeel.h"
 
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/LocalAccessible.h"
@@ -228,7 +229,6 @@ class nsWindow final : public nsBaseWidget {
   gboolean OnConfigureEvent(GtkWidget* aWidget, GdkEventConfigure* aEvent);
   void OnMap();
   void OnUnmap();
-  void OnUnrealize();
   void OnSizeAllocate(GtkAllocation* aAllocation);
   void OnDeleteEvent();
   void OnEnterNotifyEvent(GdkEventCrossing* aEvent);
@@ -367,6 +367,7 @@ class nsWindow final : public nsBaseWidget {
 
   nsresult SetNonClientMargins(const LayoutDeviceIntMargin&) override;
   void SetDrawsInTitlebar(bool aState);
+  void SetTitlebarRect();
   mozilla::LayoutDeviceIntCoord GetTitlebarRadius();
   LayoutDeviceIntRect GetTitlebarRect();
   void UpdateWindowDraggingRegion(
@@ -455,6 +456,8 @@ class nsWindow final : public nsBaseWidget {
   // rendering queue blocking (see Bug 1782948).
   void ClearRenderingQueue();
 
+  void DisableRendering();
+
   bool ApplyEnterLeaveMutterWorkaround();
 
   void NotifyOcclusionState(mozilla::widget::OcclusionState aState) override;
@@ -490,6 +493,9 @@ class nsWindow final : public nsBaseWidget {
       const mozilla::LayoutDeviceIntPoint& aRefPoint);
 
   void TryToShowNativeWindowMenu(GdkEventButton* aEvent);
+
+  bool DoTitlebarAction(mozilla::LookAndFeel::TitlebarEvent aEvent,
+                        GdkEventButton* aButtonEvent);
 
   void WaylandStartVsync();
   void WaylandStopVsync();
@@ -617,14 +623,10 @@ class nsWindow final : public nsBaseWidget {
   static GdkCursor* gsGtkCursorCache[eCursorCount];
 
   // If true, draw our own window titlebar.
-  //
-  // Needs to be atomic because GetTitlebarRect() gets called from non-main
-  // threads.
-  //
-  // FIXME(emilio): GetTitlebarRect() reads other things that TSAN doesn't
-  // catch because mDrawInTitlebar is false on automation ~always. We should
-  // probably make GetTitlebarRect() simpler / properly thread-safe.
-  mozilla::Atomic<bool, mozilla::Relaxed> mDrawInTitlebar{false};
+  bool mDrawInTitlebar = false;
+
+  mozilla::Mutex mTitlebarRectMutex;
+  LayoutDeviceIntRect mTitlebarRect MOZ_GUARDED_BY(mTitlebarRectMutex);
 
   mozilla::Mutex mDestroyMutex;
 
@@ -640,7 +642,7 @@ class nsWindow final : public nsBaseWidget {
   // it is visible (mIsShown == true).
   bool mNeedsShow : 1;
   // This track real window visibility from OS perspective.
-  // It's set by OnMap/OnUnrealize which is based on Gtk events.
+  // It's set by OnMap/OnUnmap which is based on Gtk events.
   bool mIsMapped : 1;
   // is this widget enabled?
   bool mEnabled : 1;
@@ -980,6 +982,8 @@ class nsWindow final : public nsBaseWidget {
   void KioskLockOnMonitor();
 
   void EmulateResizeDrag(GdkEventMotion* aEvent);
+
+  void RequestRepaint(LayoutDeviceIntRegion& aRepaintRegion);
 
 #ifdef MOZ_X11
   typedef enum {GTK_WIDGET_COMPOSIDED_DEFAULT = 0,

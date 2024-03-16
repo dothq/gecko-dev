@@ -81,7 +81,7 @@ class SendShutdownToWorkerThread : public MainThreadWorkerControlRunnable {
  */
 class ImageBitmapShutdownObserver final : public nsIObserver {
  public:
-  explicit ImageBitmapShutdownObserver() {
+  void Init() {
     sShutdownMutex.AssertCurrentThreadOwns();
     if (NS_IsMainThread()) {
       RegisterObserver();
@@ -649,6 +649,7 @@ ImageBitmap::ImageBitmap(nsIGlobalObject* aGlobal, layers::Image* aData,
   if (!sShutdownObserver &&
       !AppShutdown::IsInOrBeyond(ShutdownPhase::XPCOMShutdown)) {
     sShutdownObserver = new ImageBitmapShutdownObserver();
+    sShutdownObserver->Init();
   }
   if (sShutdownObserver) {
     mShutdownRunnable = sShutdownObserver->Track(this);
@@ -1578,7 +1579,8 @@ class FulfillImageBitmapPromiseWorkerTask final
  public:
   FulfillImageBitmapPromiseWorkerTask(Promise* aPromise,
                                       ImageBitmap* aImageBitmap)
-      : WorkerSameThreadRunnable(GetCurrentThreadWorkerPrivate()),
+      : WorkerSameThreadRunnable(GetCurrentThreadWorkerPrivate(),
+                                 "FulfillImageBitmapPromiseWorkerTask"),
         FulfillImageBitmapPromise(aPromise, aImageBitmap) {}
 
   bool WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) override {
@@ -1699,13 +1701,13 @@ class CreateImageBitmapFromBlob final : public DiscardableRunnable,
 NS_IMPL_ISUPPORTS_INHERITED(CreateImageBitmapFromBlob, DiscardableRunnable,
                             imgIContainerCallback, nsIInputStreamCallback)
 
-class CreateImageBitmapFromBlobRunnable : public WorkerRunnable {
+class CreateImageBitmapFromBlobRunnable final : public WorkerRunnable {
  public:
   explicit CreateImageBitmapFromBlobRunnable(WorkerPrivate* aWorkerPrivate,
                                              CreateImageBitmapFromBlob* aTask,
                                              layers::Image* aImage,
                                              nsresult aStatus)
-      : WorkerRunnable(aWorkerPrivate),
+      : WorkerRunnable(aWorkerPrivate, "CreateImageBitmapFromBlobRunnable"),
         mTask(aTask),
         mImage(aImage),
         mStatus(aStatus) {}

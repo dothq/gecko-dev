@@ -473,7 +473,7 @@ MSG_DEF(JSMSG_WASM_BAD_I31REF_VALUE,  0, JSEXN_TYPEERR,     "can only pass a 31-
 MSG_DEF(JSMSG_WASM_BAD_STRUCTREF_VALUE,  0, JSEXN_TYPEERR,     "can only pass a WebAssembly struct object to a structref")
 MSG_DEF(JSMSG_WASM_BAD_ARRAYREF_VALUE,  0, JSEXN_TYPEERR,     "can only pass a WebAssembly array object to an arrayref")
 MSG_DEF(JSMSG_WASM_BAD_TYPEREF_VALUE,  0, JSEXN_TYPEERR,     "bad type")
-MSG_DEF(JSMSG_WASM_BAD_VAL_TYPE,       0, JSEXN_TYPEERR,     "cannot pass v128 to or from JS")
+MSG_DEF(JSMSG_WASM_BAD_VAL_TYPE,       0, JSEXN_TYPEERR,     "cannot pass value to or from JS")
 MSG_DEF(JSMSG_WASM_BAD_STRING_VAL_TYPE,    0, JSEXN_TYPEERR,     "bad value type")
 MSG_DEF(JSMSG_WASM_BAD_STRING_IDX_TYPE,    0, JSEXN_TYPEERR,     "bad index type")
 MSG_DEF(JSMSG_WASM_BAD_EXN_ARG,        0, JSEXN_TYPEERR,     "first argument must be a WebAssembly.Tag")
@@ -648,9 +648,6 @@ MSG_DEF(JSMSG_INVALID_CLASS_SET_OP,        0, JSEXN_SYNTAXERR, "invalid class se
 MSG_DEF(JSMSG_INVALID_CHAR_IN_CLASS,       0, JSEXN_SYNTAXERR, "invalid character in class in regular expression")
 MSG_DEF(JSMSG_NEGATED_CLASS_WITH_STR,      0, JSEXN_SYNTAXERR, "negated character class with strings in regular expression")
 
-// Self-hosting
-MSG_DEF(JSMSG_DEFAULT_LOCALE_ERROR,    0, JSEXN_ERR, "internal error getting the default locale")
-
 // Typed object
 MSG_DEF(JSMSG_TYPEDOBJECT_SETTING_IMMUTABLE, 0, JSEXN_ERR, "setting immutable field")
 
@@ -666,6 +663,7 @@ MSG_DEF(JSMSG_SHORT_ARRAY_BUFFER_RETURNED, 2, JSEXN_TYPEERR, "expected ArrayBuff
 MSG_DEF(JSMSG_TYPED_ARRAY_BAD_ARGS,    0, JSEXN_TYPEERR, "invalid arguments")
 MSG_DEF(JSMSG_TYPED_ARRAY_DETACHED,    0, JSEXN_TYPEERR, "attempting to access detached ArrayBuffer")
 MSG_DEF(JSMSG_ARRAYBUFFER_LENGTH_PINNED, 0, JSEXN_RANGEERR, "attempting to change pinned length of ArrayBuffer")
+MSG_DEF(JSMSG_TYPED_ARRAY_RESIZED_BOUNDS, 0, JSEXN_TYPEERR, "attempting to access outside the bounds of resized ArrayBuffer")
 MSG_DEF(JSMSG_TYPED_ARRAY_CONSTRUCT_OFFSET_BOUNDS, 2, JSEXN_RANGEERR, "start offset of {0}Array should be a multiple of {1}")
 MSG_DEF(JSMSG_TYPED_ARRAY_CONSTRUCT_OFFSET_MISALIGNED, 2, JSEXN_RANGEERR, "buffer length for {0}Array should be a multiple of {1}")
 MSG_DEF(JSMSG_TYPED_ARRAY_CONSTRUCT_OFFSET_LENGTH_BOUNDS, 1, JSEXN_RANGEERR, "size of buffer is too small for {0}Array with byteOffset")
@@ -677,7 +675,8 @@ MSG_DEF(JSMSG_NON_TYPED_ARRAY_RETURNED, 0, JSEXN_TYPEERR, "constructor didn't re
 MSG_DEF(JSMSG_SHORT_TYPED_ARRAY_RETURNED, 2, JSEXN_TYPEERR, "expected TypedArray of at least length {0}, but constructor returned TypedArray of length {1}")
 MSG_DEF(JSMSG_TYPED_ARRAY_NOT_COMPATIBLE, 2, JSEXN_TYPEERR, "{0} elements are incompatible with {1}")
 MSG_DEF(JSMSG_ARRAYBUFFER_REQUIRED, 0, JSEXN_TYPEERR, "ArrayBuffer object required")
-
+MSG_DEF(JSMSG_ARRAYBUFFER_LENGTH_LARGER_THAN_MAXIMUM, 0, JSEXN_RANGEERR, "byte length is larger than maximum byte length")
+MSG_DEF(JSMSG_ARRAYBUFFER_NON_RESIZABLE, 0, JSEXN_TYPEERR, "can't resize non-resizable ArrayBuffer")
 MSG_DEF(JSMSG_ARRAYBUFFER_COPY_RANGE, 0, JSEXN_RANGEERR, "ArrayBuffer range incorrect for copying")
 
 // Shared array buffer
@@ -685,6 +684,7 @@ MSG_DEF(JSMSG_SHARED_ARRAY_BAD_LENGTH,  0, JSEXN_RANGEERR, "length argument out 
 MSG_DEF(JSMSG_NON_SHARED_ARRAY_BUFFER_RETURNED, 0, JSEXN_TYPEERR, "expected SharedArrayBuffer, but species constructor returned non-SharedArrayBuffer")
 MSG_DEF(JSMSG_SAME_SHARED_ARRAY_BUFFER_RETURNED, 0, JSEXN_TYPEERR, "expected different SharedArrayBuffer, but species constructor returned same SharedArrayBuffer")
 MSG_DEF(JSMSG_SHORT_SHARED_ARRAY_BUFFER_RETURNED, 2, JSEXN_TYPEERR, "expected SharedArrayBuffer with at least {0} bytes, but species constructor returns SharedArrayBuffer with {1} bytes")
+MSG_DEF(JSMSG_SHARED_ARRAY_LENGTH_SMALLER_THAN_CURRENT, 0, JSEXN_RANGEERR, "byte length is smaller than current byte length")
 
 // Reflect
 MSG_DEF(JSMSG_BAD_PARSE_NODE,          0, JSEXN_INTERNALERR, "bad parse node")

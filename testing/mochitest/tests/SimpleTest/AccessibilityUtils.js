@@ -233,15 +233,103 @@ this.AccessibilityUtils = (function () {
     if (!node || !node.ownerGlobal) {
       return false;
     }
-    const toolbar = node.closest("toolbar");
-    if (
-      !toolbar ||
-      toolbar.getAttribute("keyNav") != "true" ||
-      node.id == "urlbar-go-button"
-    ) {
+    const toolbar =
+      node.closest("toolbar") ||
+      node.flattenedTreeParentNode.closest("toolbar");
+    if (!toolbar || toolbar.getAttribute("keyNav") != "true") {
       return false;
     }
+    // The Go button in the Url Bar is an example of a purposefully
+    // non-focusable image toolbar button that provides an mouse/touch-only
+    // control for the search query submission, while a keyboard user could
+    // press `Enter` to do it. Similarly, two scroll buttons that appear when
+    // toolbar is overflowing, and keyboard-only users would actually scroll
+    // tabs in the toolbar while trying to navigate to these controls. When
+    // toolbarbuttons are redundant for keyboard users, we do not want to
+    // create an extra tab stop for such controls, thus we are expecting the
+    // button markup to include `keyNav="false"` attribute to flag it.
+    if (node.getAttribute("keyNav") == "false") {
+      const ariaRoles = getAriaRoles(accessible);
+      return (
+        ariaRoles.includes("button") ||
+        accessible.role == Ci.nsIAccessibleRole.ROLE_PUSHBUTTON
+      );
+    }
     return node.ownerGlobal.ToolbarKeyboardNavigator._isButton(node);
+  }
+
+  /**
+   * Determine if an accessible is a keyboard focusable control within a Firefox
+   * View list. The main landmark of the Firefox View has role="application" for
+   * users to expect a custom keyboard navigation pattern. Controls within this
+   * area aren't keyboard focusable in the usual way. Instead, focus is managed
+   * by JS code which sets tabindex on a single control within each list at a
+   * time. Thus, we need to special case the focusable check for these controls.
+   */
+  function isKeyboardFocusableFxviewControlInApplication(accessible) {
+    const node = accessible.DOMNode;
+    if (!node || !node.ownerGlobal) {
+      return false;
+    }
+    // Firefox View application rows currently include only buttons and links:
+    if (
+      !node.className.includes("fxview-tab-row-") ||
+      (accessible.role != Ci.nsIAccessibleRole.ROLE_PUSHBUTTON &&
+        accessible.role != Ci.nsIAccessibleRole.ROLE_LINK)
+    ) {
+      return false; // Not a button or a link in a Firefox View app.
+    }
+    // ToDo: We may eventually need to support intervening generics between
+    // a list and its listitem here and/or aria-owns lists.
+    const listitemAcc = accessible.parent;
+    const listAcc = listitemAcc.parent;
+    if (
+      (!listAcc || listAcc.role != Ci.nsIAccessibleRole.ROLE_LIST) &&
+      (!listitemAcc || listitemAcc.role != Ci.nsIAccessibleRole.ROLE_LISTITEM)
+    ) {
+      return false; // This button/link isn't inside a listitem within a list.
+    }
+    // All listitems should be not focusable while both a button and a link
+    // within each list item might have tabindex="-1".
+    if (
+      node.tabIndex &&
+      matchState(accessible, STATE_FOCUSABLE) &&
+      !matchState(listitemAcc, STATE_FOCUSABLE)
+    ) {
+      // ToDo: We may eventually need to support lists which use aria-owns here.
+      // Check that there is only one keyboard reachable control within the list.
+      const childCount = listAcc.childCount;
+      let foundFocusable = false;
+      for (let c = 0; c < childCount; c++) {
+        const listitem = listAcc.getChildAt(c);
+        const listitemChildCount = listitem.childCount;
+        for (let i = 0; i < listitemChildCount; i++) {
+          const listitemControl = listitem.getChildAt(i);
+          // Use tabIndex rather than a11y focusable state because all controls
+          // within the listitem might have tabindex="-1".
+          if (listitemControl.DOMNode.tabIndex == 0) {
+            if (foundFocusable) {
+              // Only one control within a list should be focusable.
+              // ToDo: Fine-tune the a11y-check error message generated in this case.
+              // Strictly speaking, it's not ideal that we're performing an action
+              // from an is function, which normally only queries something without
+              // any externally observable behaviour. That said, fixing that would
+              // involve different return values for different cases (not a list,
+              // too many focusable listitem controls, etc) so we could move the
+              // a11yFail call to the caller.
+              a11yFail(
+                "Only one control should be focusable in a list",
+                accessible
+              );
+              return false;
+            }
+            foundFocusable = true;
+          }
+        }
+      }
+      return foundFocusable;
+    }
+    return false;
   }
 
   /**
@@ -428,7 +516,34 @@ this.AccessibilityUtils = (function () {
     return (
       node.tagName == "span" &&
       ariaRoles.includes("option") &&
-      node.classList.contains("urlbarView-row-inner")
+      node.classList.contains("urlbarView-row-inner") &&
+      node.hasAttribute("data-l10n-id")
+    );
+  }
+
+  /**
+   * Determine if an accessible is a menuitem within the XUL menu. We know each
+   * menuitem is accessible, but it disappears as soon as it is clicked during
+   * tests and the a11y-checks do not have time to test the label, because the
+   * Fluent localization is not yet completed by then. Thus, we need to special
+   * case the label check for these controls.
+   */
+  function isUnlabeledMenuitem(accessible) {
+    const node = accessible.DOMNode;
+    if (!node || !node.ownerGlobal) {
+      return false;
+    }
+    let hasLabel = false;
+    for (const child of node.childNodes) {
+      if (child.tagName == "label") {
+        hasLabel = true;
+      }
+    }
+    return (
+      accessible.role == Ci.nsIAccessibleRole.ROLE_MENUITEM &&
+      accessible.parent.role == Ci.nsIAccessibleRole.ROLE_MENUPOPUP &&
+      hasLabel &&
+      node.hasAttribute("data-l10n-id")
     );
   }
 
@@ -460,7 +575,8 @@ this.AccessibilityUtils = (function () {
       isKeyboardFocusablePanelMultiViewControl(accessible) ||
       isKeyboardFocusableUrlbarButton(accessible) ||
       isKeyboardFocusableXULTab(accessible) ||
-      isKeyboardFocusableTabInTablist(accessible)
+      isKeyboardFocusableTabInTablist(accessible) ||
+      isKeyboardFocusableFxviewControlInApplication(accessible)
     ) {
       return true;
     }
@@ -640,14 +756,15 @@ this.AccessibilityUtils = (function () {
    */
   function assertLabelled(accessible, allowRecurse = true) {
     const { DOMNode } = accessible;
-    if (
-      isUnlabeledUrlBarCombobox(accessible) ||
-      isUnlabeledUrlBarOption(accessible)
-    ) {
-      return;
-    }
     let name = accessible.name;
     if (!name) {
+      if (
+        isUnlabeledUrlBarCombobox(accessible) ||
+        isUnlabeledUrlBarOption(accessible) ||
+        isUnlabeledMenuitem(accessible)
+      ) {
+        return;
+      }
       // If text has just been inserted into the tree, the a11y engine might not
       // have picked it up yet.
       forceRefreshDriverTick(DOMNode);

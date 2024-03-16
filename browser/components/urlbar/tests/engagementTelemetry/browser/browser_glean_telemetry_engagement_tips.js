@@ -13,15 +13,11 @@ Services.scriptloader.loadSubScript(
 add_setup(async function () {
   makeProfileResettable();
 
-  Services.fog.setMetricsFeatureConfig(
-    JSON.stringify({ "urlbar.engagement": false })
-  );
   await SpecialPowers.pushPrefEnv({
     set: [["browser.urlbar.quickactions.enabled", false]],
   });
 
   registerCleanupFunction(async function () {
-    Services.fog.setMetricsFeatureConfig("{}");
     await SpecialPowers.popPrefEnv();
   });
 });
@@ -92,10 +88,16 @@ add_task(async function selected_result_tip() {
 });
 
 add_task(async function selected_result_intervention_clear() {
+  let useOldClearHistoryDialog = Services.prefs.getBoolPref(
+    "privacy.sanitize.useOldClearHistoryDialog"
+  );
+  let dialogURL = useOldClearHistoryDialog
+    ? "chrome://browser/content/sanitize.xhtml"
+    : "chrome://browser/content/sanitize_v2.xhtml";
   await doInterventionTest(
     SEARCH_STRINGS.CLEAR,
     "intervention_clear",
-    "chrome://browser/content/sanitize.xhtml",
+    dialogURL,
     [
       {
         selected_result: "intervention_clear",

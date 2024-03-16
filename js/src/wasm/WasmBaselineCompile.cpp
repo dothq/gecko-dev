@@ -381,11 +381,11 @@ bool BaseCompiler::beginFunction() {
   ArgTypeVector args(funcType());
   size_t inboundStackArgBytes = StackArgAreaSizeUnaligned(args);
   MOZ_ASSERT(inboundStackArgBytes % sizeof(void*) == 0);
-  stackMapGenerator_.numStackArgWords = inboundStackArgBytes / sizeof(void*);
+  stackMapGenerator_.numStackArgBytes = inboundStackArgBytes;
 
   MOZ_ASSERT(stackMapGenerator_.machineStackTracker.length() == 0);
   if (!stackMapGenerator_.machineStackTracker.pushNonGCPointers(
-          stackMapGenerator_.numStackArgWords)) {
+          stackMapGenerator_.numStackArgBytes / sizeof(void*))) {
     return false;
   }
 
@@ -1389,18 +1389,15 @@ void BaseCompiler::startCallArgs(size_t stackArgAreaSizeUnaligned,
   MOZ_ASSERT(stackArgAreaSizeUnaligned <= stackArgAreaSizeAligned);
 
   // Record the masm.framePushed() value at this point, before we push args
-  // for the call, but including the alignment space placed above the args.
-  // This defines the lower limit of the stackmap that will be created for
-  // this call.
+  // for the call and any required alignment space. This defines the lower limit
+  // of the stackmap that will be created for this call.
   MOZ_ASSERT(
       stackMapGenerator_.framePushedExcludingOutboundCallArgs.isNothing());
   stackMapGenerator_.framePushedExcludingOutboundCallArgs.emplace(
       // However much we've pushed so far
       masm.framePushed() +
       // Extra space we'll push to get the frame aligned
-      call->frameAlignAdjustment +
-      // Extra space we'll push to get the outbound arg area aligned
-      (stackArgAreaSizeAligned - stackArgAreaSizeUnaligned));
+      call->frameAlignAdjustment);
 
   call->stackArgAreaSize = stackArgAreaSizeAligned;
 
@@ -1745,19 +1742,19 @@ void BaseCompiler::loadTag(RegPtr instance, uint32_t tagIndex, RegRef tagDst) {
   masm.loadPtr(Address(instance, offset), tagDst);
 }
 
-void BaseCompiler::consumePendingException(RegRef* exnDst, RegRef* tagDst) {
+void BaseCompiler::consumePendingException(RegPtr instance, RegRef* exnDst,
+                                           RegRef* tagDst) {
   RegPtr pendingAddr = RegPtr(PreBarrierReg);
   needPtr(pendingAddr);
   masm.computeEffectiveAddress(
-      Address(InstanceReg, Instance::offsetOfPendingException()), pendingAddr);
+      Address(instance, Instance::offsetOfPendingException()), pendingAddr);
   *exnDst = needRef();
   masm.loadPtr(Address(pendingAddr, 0), *exnDst);
   emitBarrieredClear(pendingAddr);
 
   *tagDst = needRef();
   masm.computeEffectiveAddress(
-      Address(InstanceReg, Instance::offsetOfPendingExceptionTag()),
-      pendingAddr);
+      Address(instance, Instance::offsetOfPendingExceptionTag()), pendingAddr);
   masm.loadPtr(Address(pendingAddr, 0), *tagDst);
   emitBarrieredClear(pendingAddr);
   freePtr(pendingAddr);
@@ -3229,6 +3226,13 @@ bool BaseCompiler::jumpConditionalWithResults(BranchState* b, RegRef object,
                                               RefType sourceType,
                                               RefType destType,
                                               bool onSuccess) {
+  // Temporarily take the result registers so that branchIfRefSubtype
+  // doesn't use them.
+  needIntegerResultRegisters(b->resultType);
+  BranchIfRefSubtypeRegisters regs =
+      allocRegistersForBranchIfRefSubtype(destType);
+  freeIntegerResultRegisters(b->resultType);
+
   if (b->hasBlockResults()) {
     StackHeight resultsBase(0);
     if (!topBranchParams(b->resultType, &resultsBase)) {
@@ -3236,13 +3240,12 @@ bool BaseCompiler::jumpConditionalWithResults(BranchState* b, RegRef object,
     }
     if (b->stackHeight != resultsBase) {
       Label notTaken;
-      // Temporarily take the result registers so that branchIfRefSubtype
-      // doesn't use them.
-      needIntegerResultRegisters(b->resultType);
-      branchIfRefSubtype(
+
+      masm.branchWasmRefIsSubtype(
           object, sourceType, destType, &notTaken,
-          /*onSuccess=*/b->invertBranch ? onSuccess : !onSuccess);
-      freeIntegerResultRegisters(b->resultType);
+          /*onSuccess=*/b->invertBranch ? onSuccess : !onSuccess, regs.superSTV,
+          regs.scratch1, regs.scratch2);
+      freeRegistersForBranchIfRefSubtype(regs);
 
       // Shuffle stack args.
       shuffleStackResultsBeforeBranch(resultsBase, b->stackHeight,
@@ -3253,8 +3256,11 @@ bool BaseCompiler::jumpConditionalWithResults(BranchState* b, RegRef object,
     }
   }
 
-  branchIfRefSubtype(object, sourceType, destType, b->label,
-                     /*onSuccess=*/b->invertBranch ? !onSuccess : onSuccess);
+  masm.branchWasmRefIsSubtype(
+      object, sourceType, destType, b->label,
+      /*onSuccess=*/b->invertBranch ? !onSuccess : onSuccess, regs.superSTV,
+      regs.scratch1, regs.scratch2);
+  freeRegistersForBranchIfRefSubtype(regs);
   return true;
 }
 #endif
@@ -4073,59 +4079,48 @@ bool BaseCompiler::emitTryTable() {
     return false;
   }
 
-  if (deadCode_) {
-    return true;
+  if (!deadCode_) {
+    // Simplifies jumping out, but it is also necessary so that control
+    // can re-enter the catch handler without restoring registers.
+    sync();
   }
-
-  // Simplifies jumping out, but it is also necessary so that control
-  // can re-enter the catch handler without restoring registers.
-  sync();
 
   initControl(controlItem(), params);
   // Be conservative for BCE due to complex control flow in try blocks.
   controlItem().bceSafeOnExit = 0;
 
+  // Don't emit a landing pad if this whole try is dead code
+  if (deadCode_) {
+    return true;
+  }
+
   // Emit a landing pad that exceptions will jump into. Jump over it for now.
-  Label skip;
-  masm.jump(&skip);
+  Label skipLandingPad;
+  masm.jump(&skipLandingPad);
+
+  // Bind the otherLabel so that delegate can target this
+  masm.bind(&controlItem().otherLabel);
 
   StackHeight prePadHeight = fr.stackHeight();
   uint32_t padOffset = masm.currentOffset();
   uint32_t padStackHeight = masm.framePushed();
 
-  // Store the Instance that was left in InstanceReg by the exception
-  // handling mechanism, that is this frame's Instance but with the exception
-  // filled in Instance::pendingException.
-  fr.storeInstancePtr(InstanceReg);
-
-  // Ensure we don't take the result register that we'll need for passing
-  // results to the branch target. Also make sure we don't take the
-  // InstanceReg which is used for loading tags.
-  //
-  // TODO: future proof this code for multiple result registers.
-  ResultType resultRegs = ResultType::Single(RefType::extern_());
-  needIntegerResultRegisters(resultRegs);
+  // InstanceReg is live and contains this function's instance by the exception
+  // handling resume method. We keep it alive for use in loading the tag for
+  // each catch handler.
+  RegPtr instance = RegPtr(InstanceReg);
 #ifndef RABALDR_PIN_INSTANCE
-  needPtr(RegPtr(InstanceReg));
+  needPtr(instance);
 #endif
 
   // Load exception and tag from instance, clearing it in the process.
   RegRef exn;
   RegRef exnTag;
-  consumePendingException(&exn, &exnTag);
+  consumePendingException(instance, &exn, &exnTag);
 
   // Get a register to hold the tags for each catch
   RegRef catchTag = needRef();
 
-  // Release our reserved registers.
-#ifndef RABALDR_PIN_INSTANCE
-  freePtr(RegPtr(InstanceReg));
-#endif
-  freeIntegerResultRegisters(resultRegs);
-
-  MOZ_ASSERT(exn != InstanceReg);
-  MOZ_ASSERT(exnTag != InstanceReg);
-  MOZ_ASSERT(catchTag != InstanceReg);
   bool hadCatchAll = false;
   for (const TryTableCatch& tryTableCatch : catches) {
     ResultType labelParams = ResultType::Vector(tryTableCatch.labelType);
@@ -4135,20 +4130,23 @@ bool BaseCompiler::emitTryTable() {
 
     // Handle a catch_all by jumping to the target block
     if (tryTableCatch.tagIndex == CatchAllIndex) {
-      // Capture the exnref if it has been requested
+      // Capture the exnref if it has been requested, or else free it.
       if (tryTableCatch.captureExnRef) {
         pushRef(exn);
-      }
-      popBlockResults(labelParams, target.stackHeight, ContinuationKind::Jump);
-      masm.jump(&target.label);
-      // The registers holding the join values are free for the remainder of
-      // this block.
-      freeResultRegisters(labelParams);
-      // Free the exn register, as code assumes that it's consumed by the final
-      // catch_all.
-      if (!tryTableCatch.captureExnRef) {
+      } else {
         freeRef(exn);
       }
+      // Free all of the other registers
+      freeRef(exnTag);
+      freeRef(catchTag);
+#ifndef RABALDR_PIN_INSTANCE
+      freePtr(instance);
+#endif
+
+      // Pop the results needed for the target branch and perform the jump
+      popBlockResults(labelParams, target.stackHeight, ContinuationKind::Jump);
+      masm.jump(&target.label);
+      freeResultRegisters(labelParams);
 
       // Break from the loop and skip the implicit rethrow that's needed
       // if we didn't have a catch_all
@@ -4156,18 +4154,26 @@ bool BaseCompiler::emitTryTable() {
       break;
     }
 
+    // This is a `catch $t`, load the tag type we're trying to match
     const TagType& tagType = *moduleEnv_.tags[tryTableCatch.tagIndex].type;
     const TagOffsetVector& tagOffsets = tagType.argOffsets();
     ResultType tagParams = tagType.resultType();
 
-    Label skip;
-    loadTag(RegPtr(InstanceReg), tryTableCatch.tagIndex, catchTag);
-    masm.branchPtr(Assembler::NotEqual, exnTag, catchTag, &skip);
+    // Load the tag for this catch and compare it against the exception's tag.
+    // If they don't match, skip to the next catch handler.
+    Label skipCatch;
+    loadTag(instance, tryTableCatch.tagIndex, catchTag);
+    masm.branchPtr(Assembler::NotEqual, exnTag, catchTag, &skipCatch);
 
-    // Get a register for unpacking exceptions. We re-use the exnTag register
-    // as it is already reserved and dead from this point until the jump to the
-    // target label.
-    RegPtr data = RegPtr(exnTag);
+    // The tags and instance are dead after we've had a match, free them
+    freeRef(exnTag);
+    freeRef(catchTag);
+#ifndef RABALDR_PIN_INSTANCE
+    freePtr(instance);
+#endif
+
+    // Allocate a register to hold the exception data pointer
+    RegPtr data = needPtr();
 
     // Unpack the tag and jump to the block
     masm.loadPtr(Address(exn, (int32_t)WasmExceptionObject::offsetOfData()),
@@ -4226,50 +4232,68 @@ bool BaseCompiler::emitTryTable() {
       }
     }
 
-    // Capture the exnref if it has been requested
+    // The exception data pointer is no longer live after unpacking the
+    // exception
+    freePtr(data);
+
+    // Capture the exnref if it has been requested, or else free it.
     if (tryTableCatch.captureExnRef) {
       pushRef(exn);
+    } else {
+      freeRef(exn);
     }
+
+    // Pop the results needed for the target branch and perform the jump
     popBlockResults(labelParams, target.stackHeight, ContinuationKind::Jump);
     masm.jump(&target.label);
-    // The registers holding the join values are free for the remainder of this
-    // block.
     freeResultRegisters(labelParams);
 
-    // Reset the stack height for the skip
+    // Reset the stack height for the skip to the next catch handler
     fr.setStackHeight(prePadHeight);
-    masm.bind(&skip);
+    masm.bind(&skipCatch);
 
-    // Re-assert ownership of the exnref register for the next branch of the
-    // try switch.
-    if (tryTableCatch.captureExnRef) {
-      needRef(exn);
-    }
+    // Reset ownership of the registers for the next catch handler we emit
+    needRef(exn);
+    needRef(exnTag);
+    needRef(catchTag);
+#ifndef RABALDR_PIN_INSTANCE
+    needPtr(instance);
+#endif
   }
 
   if (!hadCatchAll) {
+    // Free all registers, except for the exception
+    freeRef(exnTag);
+    freeRef(catchTag);
+#ifndef RABALDR_PIN_INSTANCE
+    freePtr(instance);
+#endif
+
     // If none of the tag checks succeed and there is no catch_all,
-    // then we rethrow the exception.
+    // then we rethrow the exception
     if (!throwFrom(exn)) {
       return false;
     }
   } else {
-    // `exn` should be consumed by the catch_all code so it doesn't leak
+    // All registers should have been freed by the catch_all
     MOZ_ASSERT(isAvailableRef(exn));
+    MOZ_ASSERT(isAvailableRef(exnTag));
+    MOZ_ASSERT(isAvailableRef(catchTag));
+#ifndef RABALDR_PIN_INSTANCE
+    MOZ_ASSERT(isAvailablePtr(instance));
+#endif
   }
 
-  freeRef(catchTag);
-  freeRef(exnTag);
-
-  // Reset stack height for skip.
+  // Reset stack height for skipLandingPad, and bind it
   fr.setStackHeight(prePadHeight);
+  masm.bind(&skipLandingPad);
 
-  masm.bind(&skip);
-
+  // Start the try note for this try block, after the landing pad
   if (!startTryNote(&controlItem().tryNoteIndex)) {
     return false;
   }
-  // The landing pad begins at this point
+
+  // Mark the try note to start at the landing pad we created above
   TryNoteVector& tryNotes = masm.tryNotes();
   TryNote& tryNote = tryNotes[controlItem().tryNoteIndex];
   tryNote.setLandingPad(padOffset, padStackHeight);
@@ -4475,7 +4499,7 @@ bool BaseCompiler::emitBodyDelegateThrowPad() {
     // responsible to unpack the exception and rethrow it.
     RegRef exn;
     RegRef tag;
-    consumePendingException(&exn, &tag);
+    consumePendingException(RegPtr(InstanceReg), &exn, &tag);
     freeRef(tag);
     if (!throwFrom(exn)) {
       return false;
@@ -4540,6 +4564,7 @@ bool BaseCompiler::emitDelegate() {
   // try block or the very last block (to re-throw out of the function).
   Control& lastBlock = controlOutermost();
   while (controlKind(relativeDepth) != LabelKind::Try &&
+         controlKind(relativeDepth) != LabelKind::TryTable &&
          &controlItem(relativeDepth) != &lastBlock) {
     relativeDepth++;
   }
@@ -4627,7 +4652,7 @@ bool BaseCompiler::endTryCatch(ResultType type) {
   // saved before the following call will clear it.
   RegRef exn;
   RegRef tag;
-  consumePendingException(&exn, &tag);
+  consumePendingException(RegPtr(InstanceReg), &exn, &tag);
 
   // Get a register to hold the tags for each catch
   RegRef catchTag = needRef();
@@ -4678,8 +4703,10 @@ bool BaseCompiler::endTryCatch(ResultType type) {
 }
 
 bool BaseCompiler::endTryTable(ResultType type) {
-  // Mark the end of the try body. This may insert a nop.
-  finishTryNote(controlItem().tryNoteIndex);
+  if (!controlItem().deadOnArrival) {
+    // Mark the end of the try body. This may insert a nop.
+    finishTryNote(controlItem().tryNoteIndex);
+  }
   return endBlock(type);
 }
 
@@ -6788,8 +6815,8 @@ void BaseCompiler::emitPreBarrier(RegPtr valueAddr) {
   fr.loadInstancePtr(instance);
 #endif
 
-  EmitWasmPreBarrierGuard(masm, instance, scratch, valueAddr,
-                          /*valueOffset=*/0, &skipBarrier, nullptr);
+  EmitWasmPreBarrierGuard(masm, instance, scratch, Address(valueAddr, 0),
+                          &skipBarrier, nullptr);
 
 #ifndef RABALDR_PIN_INSTANCE
   fr.loadInstancePtr(instance);
@@ -6802,7 +6829,8 @@ void BaseCompiler::emitPreBarrier(RegPtr valueAddr) {
   masm.Mov(x28, sp);
 #endif
   // The prebarrier call preserves all volatile registers
-  EmitWasmPreBarrierCall(masm, instance, scratch, valueAddr, /*valueOffset=*/0);
+  EmitWasmPreBarrierCallImmediate(masm, instance, scratch, valueAddr,
+                                  /*valueOffset=*/0);
 
   masm.bind(&skipBarrier);
 }
@@ -6997,10 +7025,10 @@ void BaseCompiler::emitGcArrayBoundsCheck(RegI32 index, RegI32 numElements) {
 }
 
 template <typename T, typename NullCheckPolicy>
-void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
+void BaseCompiler::emitGcGet(StorageType type, FieldWideningOp wideningOp,
                              const T& src) {
   switch (type.kind()) {
-    case FieldType::I8: {
+    case StorageType::I8: {
       MOZ_ASSERT(wideningOp != FieldWideningOp::None);
       RegI32 r = needI32();
       FaultingCodeOffset fco;
@@ -7013,7 +7041,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       pushI32(r);
       break;
     }
-    case FieldType::I16: {
+    case StorageType::I16: {
       MOZ_ASSERT(wideningOp != FieldWideningOp::None);
       RegI32 r = needI32();
       FaultingCodeOffset fco;
@@ -7026,7 +7054,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       pushI32(r);
       break;
     }
-    case FieldType::I32: {
+    case StorageType::I32: {
       MOZ_ASSERT(wideningOp == FieldWideningOp::None);
       RegI32 r = needI32();
       FaultingCodeOffset fco = masm.load32(src, r);
@@ -7034,7 +7062,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       pushI32(r);
       break;
     }
-    case FieldType::I64: {
+    case StorageType::I64: {
       MOZ_ASSERT(wideningOp == FieldWideningOp::None);
       RegI64 r = needI64();
 #  ifdef JS_64BIT
@@ -7048,7 +7076,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       pushI64(r);
       break;
     }
-    case FieldType::F32: {
+    case StorageType::F32: {
       MOZ_ASSERT(wideningOp == FieldWideningOp::None);
       RegF32 r = needF32();
       FaultingCodeOffset fco = masm.loadFloat32(src, r);
@@ -7056,7 +7084,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       pushF32(r);
       break;
     }
-    case FieldType::F64: {
+    case StorageType::F64: {
       MOZ_ASSERT(wideningOp == FieldWideningOp::None);
       RegF64 r = needF64();
       FaultingCodeOffset fco = masm.loadDouble(src, r);
@@ -7065,7 +7093,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       break;
     }
 #  ifdef ENABLE_WASM_SIMD
-    case FieldType::V128: {
+    case StorageType::V128: {
       MOZ_ASSERT(wideningOp == FieldWideningOp::None);
       RegV128 r = needV128();
       FaultingCodeOffset fco = masm.loadUnalignedSimd128(src, r);
@@ -7074,7 +7102,7 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
       break;
     }
 #  endif
-    case FieldType::Ref: {
+    case StorageType::Ref: {
       MOZ_ASSERT(wideningOp == FieldWideningOp::None);
       RegRef r = needRef();
       FaultingCodeOffset fco = masm.loadPtr(src, r);
@@ -7089,24 +7117,25 @@ void BaseCompiler::emitGcGet(FieldType type, FieldWideningOp wideningOp,
 }
 
 template <typename T, typename NullCheckPolicy>
-void BaseCompiler::emitGcSetScalar(const T& dst, FieldType type, AnyReg value) {
+void BaseCompiler::emitGcSetScalar(const T& dst, StorageType type,
+                                   AnyReg value) {
   switch (type.kind()) {
-    case FieldType::I8: {
+    case StorageType::I8: {
       FaultingCodeOffset fco = masm.store8(value.i32(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store8);
       break;
     }
-    case FieldType::I16: {
+    case StorageType::I16: {
       FaultingCodeOffset fco = masm.store16(value.i32(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store16);
       break;
     }
-    case FieldType::I32: {
+    case StorageType::I32: {
       FaultingCodeOffset fco = masm.store32(value.i32(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store32);
       break;
     }
-    case FieldType::I64: {
+    case StorageType::I64: {
 #  ifdef JS_64BIT
       FaultingCodeOffset fco = masm.store64(value.i64(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store64);
@@ -7118,18 +7147,18 @@ void BaseCompiler::emitGcSetScalar(const T& dst, FieldType type, AnyReg value) {
 #  endif
       break;
     }
-    case FieldType::F32: {
+    case StorageType::F32: {
       FaultingCodeOffset fco = masm.storeFloat32(value.f32(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store32);
       break;
     }
-    case FieldType::F64: {
+    case StorageType::F64: {
       FaultingCodeOffset fco = masm.storeDouble(value.f64(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store64);
       break;
     }
 #  ifdef ENABLE_WASM_SIMD
-    case FieldType::V128: {
+    case StorageType::V128: {
       FaultingCodeOffset fco = masm.storeUnalignedSimd128(value.v128(), dst);
       NullCheckPolicy::emitTrapSite(this, fco, TrapMachineInsn::Store128);
       break;
@@ -7143,13 +7172,13 @@ void BaseCompiler::emitGcSetScalar(const T& dst, FieldType type, AnyReg value) {
 
 template <typename NullCheckPolicy>
 bool BaseCompiler::emitGcStructSet(RegRef object, RegPtr areaBase,
-                                   uint32_t areaOffset, FieldType fieldType,
+                                   uint32_t areaOffset, StorageType type,
                                    AnyReg value,
                                    PreBarrierKind preBarrierKind) {
   // Easy path if the field is a scalar
-  if (!fieldType.isRefRepr()) {
+  if (!type.isRefRepr()) {
     emitGcSetScalar<Address, NullCheckPolicy>(Address(areaBase, areaOffset),
-                                              fieldType, value);
+                                              type, value);
     freeAny(value);
     return true;
   }
@@ -7225,9 +7254,6 @@ bool BaseCompiler::emitGcArraySet(RegRef object, RegPtr data, RegI32 index,
   return true;
 }
 
-// Emits allocation code for a GC struct. The struct may have an out-of-line
-// data area; if so, `isOutlineStruct` will be true and `outlineBase` will be
-// allocated and must be freed.
 template <bool ZeroFields>
 bool BaseCompiler::emitStructAlloc(uint32_t typeIndex, RegRef* object,
                                    bool* isOutlineStruct, RegPtr* outlineBase) {
@@ -7344,21 +7370,21 @@ bool BaseCompiler::emitStructNew() {
   uint32_t fieldIndex = structType.fields_.length();
   while (fieldIndex-- > 0) {
     const StructField& field = structType.fields_[fieldIndex];
-    FieldType fieldType = field.type;
+    StorageType type = field.type;
     uint32_t fieldOffset = field.offset;
 
     bool areaIsOutline;
     uint32_t areaOffset;
-    WasmStructObject::fieldOffsetToAreaAndOffset(fieldType, fieldOffset,
+    WasmStructObject::fieldOffsetToAreaAndOffset(type, fieldOffset,
                                                  &areaIsOutline, &areaOffset);
 
     // Reserve the barrier reg if we might need it for this store
-    if (fieldType.isRefRepr()) {
+    if (type.isRefRepr()) {
       needPtr(RegPtr(PreBarrierReg));
     }
     AnyReg value = popAny();
     // Free the barrier reg now that we've loaded the value
-    if (fieldType.isRefRepr()) {
+    if (type.isRefRepr()) {
       freePtr(RegPtr(PreBarrierReg));
     }
 
@@ -7368,17 +7394,16 @@ bool BaseCompiler::emitStructNew() {
                    outlineBase);
 
       // Consumes value and outline data, object is preserved by this call.
-      if (!emitGcStructSet<NoNullCheck>(object, outlineBase, areaOffset,
-                                        fieldType, value,
-                                        PreBarrierKind::None)) {
+      if (!emitGcStructSet<NoNullCheck>(object, outlineBase, areaOffset, type,
+                                        value, PreBarrierKind::None)) {
         return false;
       }
     } else {
       // Consumes value. object is unchanged by this call.
       if (!emitGcStructSet<NoNullCheck>(
               object, RegPtr(object),
-              WasmStructObject::offsetOfInlineData() + areaOffset, fieldType,
-              value, PreBarrierKind::None)) {
+              WasmStructObject::offsetOfInlineData() + areaOffset, type, value,
+              PreBarrierKind::None)) {
         return false;
       }
     }
@@ -7432,7 +7457,7 @@ bool BaseCompiler::emitStructGet(FieldWideningOp wideningOp) {
   const StructType& structType = (*moduleEnv_.types)[typeIndex].structType();
 
   // Decide whether we're accessing inline or outline, and at what offset
-  FieldType fieldType = structType.fields_[fieldIndex].type;
+  StorageType fieldType = structType.fields_[fieldIndex].type;
   uint32_t fieldOffset = structType.fields_[fieldIndex].offset;
 
   bool areaIsOutline;
@@ -7477,7 +7502,7 @@ bool BaseCompiler::emitStructSet() {
   const StructField& structField = structType.fields_[fieldIndex];
 
   // Decide whether we're accessing inline or outline, and at what offset
-  FieldType fieldType = structType.fields_[fieldIndex].type;
+  StorageType fieldType = structType.fields_[fieldIndex].type;
   uint32_t fieldOffset = structType.fields_[fieldIndex].offset;
 
   bool areaIsOutline;
@@ -7528,6 +7553,116 @@ bool BaseCompiler::emitStructSet() {
   return true;
 }
 
+template <bool ZeroFields>
+bool BaseCompiler::emitArrayAlloc(uint32_t typeIndex, RegRef object,
+                                  RegI32 numElements, uint32_t elemSize) {
+  // We eagerly sync the value stack to the machine stack here so as not to
+  // confuse things with the conditional instance call below.
+  sync();
+
+  RegPtr instance;
+#  ifndef RABALDR_PIN_INSTANCE
+  // We reuse the object register for the instance. This is ok because object is
+  // not live until instance is dead.
+  instance = RegPtr(object);
+  fr.loadInstancePtr(instance);
+#  else
+  // We can use the pinned instance register.
+  instance = RegPtr(InstanceReg);
+#  endif
+
+  RegPtr typeDefData = loadTypeDefInstanceData(typeIndex);
+  RegPtr temp = needPtr();
+
+  Label success;
+  Label fail;
+  masm.wasmNewArrayObject(instance, object, numElements, typeDefData, temp,
+                          &fail, elemSize, ZeroFields);
+  freePtr(temp);
+  masm.jump(&success);
+
+  masm.bind(&fail);
+  freeRef(object);
+  pushI32(numElements);
+  pushPtr(typeDefData);
+  if (!emitInstanceCall(ZeroFields ? SASigArrayNew_true
+                                   : SASigArrayNew_false)) {
+    return false;
+  }
+  popRef(object);
+
+  masm.bind(&success);
+  return true;
+}
+
+template <bool ZeroFields>
+bool BaseCompiler::emitArrayAllocFixed(uint32_t typeIndex, RegRef object,
+                                       uint32_t numElements,
+                                       uint32_t elemSize) {
+  // The maximum number of elements for array.new_fixed enforced in validation
+  // should always prevent overflow here.
+  MOZ_ASSERT(WasmArrayObject::calcStorageBytesChecked(elemSize, numElements)
+                 .isValid());
+
+  SymbolicAddressSignature fun =
+      ZeroFields ? SASigArrayNew_true : SASigArrayNew_false;
+
+  uint32_t storageBytes =
+      WasmArrayObject::calcStorageBytes(elemSize, numElements);
+  if (storageBytes > WasmArrayObject_MaxInlineBytes) {
+    RegPtr typeDefData = loadTypeDefInstanceData(typeIndex);
+    freeRef(object);
+    pushI32(numElements);
+    pushPtr(typeDefData);
+    if (!emitInstanceCall(fun)) {
+      return false;
+    }
+    popRef(object);
+
+    return true;
+  }
+
+  // We eagerly sync the value stack to the machine stack here so as not to
+  // confuse things with the conditional instance call below.
+  sync();
+
+  RegPtr instance;
+#  ifndef RABALDR_PIN_INSTANCE
+  // We reuse the object register for the instance. This is ok because object is
+  // not live until instance is dead.
+  instance = RegPtr(object);
+  fr.loadInstancePtr(instance);
+#  else
+  // We can use the pinned instance register.
+  instance = RegPtr(InstanceReg);
+#  endif
+
+  RegPtr typeDefData = loadTypeDefInstanceData(typeIndex);
+  RegPtr temp1 = needPtr();
+  RegPtr temp2 = needPtr();
+
+  Label success;
+  Label fail;
+  masm.wasmNewArrayObjectFixed(instance, object, typeDefData, temp1, temp2,
+                               &fail, numElements, storageBytes, ZeroFields);
+  freePtr(temp1);
+  freePtr(temp2);
+  masm.jump(&success);
+
+  masm.bind(&fail);
+  freeRef(object);
+  pushI32(numElements);
+  pushPtr(typeDefData);
+  if (!emitInstanceCall(fun)) {
+    return false;
+  }
+  popRef(object);
+
+  masm.bind(&success);
+
+  return true;
+}
+
 bool BaseCompiler::emitArrayNew() {
   uint32_t typeIndex;
   Nothing nothing;
@@ -7541,27 +7676,26 @@ bool BaseCompiler::emitArrayNew() {
 
   const ArrayType& arrayType = (*moduleEnv_.types)[typeIndex].arrayType();
 
-  // Allocate an uninitialized array. This requires the type definition
-  // for the array to be pushed on the stack. This will trap on OOM.
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  if (!emitInstanceCall(SASigArrayNew_false)) {
-    return false;
-  }
-
   // Reserve this register early if we will need it so that it is not taken by
   // any register used in this function.
   if (arrayType.elementType_.isRefRepr()) {
     needPtr(RegPtr(PreBarrierReg));
   }
 
-  RegRef rp = popRef();
+  RegRef object = needRef();
+  RegI32 numElements = popI32();
+  if (!emitArrayAlloc<false>(typeIndex, object, numElements,
+                             arrayType.elementType_.size())) {
+    return false;
+  }
+
   AnyReg value = popAny();
 
   // Acquire the data pointer from the object
-  RegPtr rdata = emitGcArrayGetData<NoNullCheck>(rp);
+  RegPtr rdata = emitGcArrayGetData<NoNullCheck>(object);
 
-  // Acquire the number of elements
-  RegI32 numElements = emitGcArrayGetNumElements<NoNullCheck>(rp);
+  // Acquire the number of elements again
+  numElements = emitGcArrayGetNumElements<NoNullCheck>(object);
 
   // Free the barrier reg after we've allocated all registers
   if (arrayType.elementType_.isRefRepr()) {
@@ -7580,7 +7714,7 @@ bool BaseCompiler::emitArrayNew() {
   masm.sub32(Imm32(1), numElements);
 
   // Assign value to array[numElements]. All registers are preserved
-  if (!emitGcArraySet(rp, rdata, numElements, arrayType, value,
+  if (!emitGcArraySet(object, rdata, numElements, arrayType, value,
                       PreBarrierKind::None)) {
     return false;
   }
@@ -7592,7 +7726,7 @@ bool BaseCompiler::emitArrayNew() {
   freeI32(numElements);
   freeAny(value);
   freePtr(rdata);
-  pushRef(rp);
+  pushRef(object);
 
   return true;
 }
@@ -7610,16 +7744,6 @@ bool BaseCompiler::emitArrayNewFixed() {
 
   const ArrayType& arrayType = (*moduleEnv_.types)[typeIndex].arrayType();
 
-  // At this point, the top section of the value stack contains the values to
-  // be used to initialise the array, with index 0 as the topmost value.  Push
-  // the required number of elements and the required type on, since the call
-  // to SASigArrayNew_true will use them.
-  pushI32(numElements);
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  if (!emitInstanceCall(SASigArrayNew_true)) {
-    return false;
-  }
-
   // Reserve this register early if we will need it so that it is not taken by
   // any register used in this function.
   bool avoidPreBarrierReg = arrayType.elementType_.isRefRepr();
@@ -7627,11 +7751,14 @@ bool BaseCompiler::emitArrayNewFixed() {
     needPtr(RegPtr(PreBarrierReg));
   }
 
-  // Get hold of the pointer to the array, as created by SASigArrayNew_true.
-  RegRef rp = popRef();
+  RegRef object = needRef();
+  if (!emitArrayAllocFixed<false>(typeIndex, object, numElements,
+                                  arrayType.elementType_.size())) {
+    return false;
+  }
 
   // Acquire the data pointer from the object
-  RegPtr rdata = emitGcArrayGetData<NoNullCheck>(rp);
+  RegPtr rdata = emitGcArrayGetData<NoNullCheck>(object);
 
   // Free the barrier reg if we previously reserved it.
   if (avoidPreBarrierReg) {
@@ -7659,7 +7786,7 @@ bool BaseCompiler::emitArrayNewFixed() {
     if (avoidPreBarrierReg) {
       freePtr(RegPtr(PreBarrierReg));
     }
-    if (!emitGcArraySet(rp, rdata, index, arrayType, value,
+    if (!emitGcArraySet(object, rdata, index, arrayType, value,
                         PreBarrierKind::None)) {
       return false;
     }
@@ -7669,7 +7796,7 @@ bool BaseCompiler::emitArrayNewFixed() {
 
   freePtr(rdata);
 
-  pushRef(rp);
+  pushRef(object);
   return true;
 }
 
@@ -7684,10 +7811,17 @@ bool BaseCompiler::emitArrayNewDefault() {
     return true;
   }
 
-  // Allocate a default initialized array. This requires the type definition
-  // for the array to be pushed on the stack. This will trap on OOM.
-  pushPtr(loadTypeDefInstanceData(typeIndex));
-  return emitInstanceCall(SASigArrayNew_true);
+  const ArrayType& arrayType = (*moduleEnv_.types)[typeIndex].arrayType();
+
+  RegRef object = needRef();
+  RegI32 numElements = popI32();
+  if (!emitArrayAlloc<true>(typeIndex, object, numElements,
+                            arrayType.elementType_.size())) {
+    return false;
+  }
+
+  pushRef(object);
+  return true;
 }
 
 bool BaseCompiler::emitArrayNewData() {
@@ -7928,7 +8062,7 @@ bool BaseCompiler::emitArrayFill() {
 
   const TypeDef& typeDef = moduleEnv_.types->type(typeIndex);
   const ArrayType& arrayType = typeDef.arrayType();
-  FieldType fieldType = arrayType.elementType_;
+  StorageType elementType = arrayType.elementType_;
 
   // On x86 (32-bit), we are very short of registers, hence the code
   // generation scheme is less straightforward than it might otherwise be.
@@ -7985,7 +8119,7 @@ bool BaseCompiler::emitArrayFill() {
 
   // Reserve this register early if we will need it so that it is not taken by
   // any register used in this function.
-  if (fieldType.isRefRepr()) {
+  if (elementType.isRefRepr()) {
     needPtr(RegPtr(PreBarrierReg));
   }
 
@@ -8131,7 +8265,7 @@ bool BaseCompiler::emitArrayFill() {
   // 3: numElements rp rdata
 
   // Free the barrier reg after we've allocated all registers
-  if (fieldType.isRefRepr()) {
+  if (elementType.isRefRepr()) {
     freePtr(RegPtr(PreBarrierReg));
   }
 
@@ -8216,95 +8350,30 @@ bool BaseCompiler::emitI31Get(FieldWideningOp wideningOp) {
   return true;
 }
 
-void BaseCompiler::emitRefTestCommon(RefType sourceType, RefType destType) {
-  Label success;
-  Label join;
-  RegRef ref = popRef();
-  RegI32 result = needI32();
-
-  branchIfRefSubtype(ref, sourceType, destType, &success,
-                     /*onSuccess=*/true);
-  masm.xor32(result, result);
-  masm.jump(&join);
-  masm.bind(&success);
-  masm.move32(Imm32(1), result);
-  masm.bind(&join);
-
-  pushI32(result);
-  freeRef(ref);
+BranchIfRefSubtypeRegisters BaseCompiler::allocRegistersForBranchIfRefSubtype(
+    RefType destType) {
+  BranchWasmRefIsSubtypeRegisters needs =
+      MacroAssembler::regsForBranchWasmRefIsSubtype(destType);
+  return BranchIfRefSubtypeRegisters{
+      .superSTV = needs.needSuperSTV
+                      ? loadSuperTypeVector(
+                            moduleEnv_.types->indexOf(*destType.typeDef()))
+                      : RegPtr::Invalid(),
+      .scratch1 = needs.needScratch1 ? needI32() : RegI32::Invalid(),
+      .scratch2 = needs.needScratch2 ? needI32() : RegI32::Invalid(),
+  };
 }
 
-void BaseCompiler::emitRefCastCommon(RefType sourceType, RefType destType) {
-  RegRef ref = popRef();
-
-  Label success;
-  branchIfRefSubtype(ref, sourceType, destType, &success, /*onSuccess=*/true);
-  masm.wasmTrap(Trap::BadCast, bytecodeOffset());
-  masm.bind(&success);
-  pushRef(ref);
-}
-
-void BaseCompiler::branchIfRefSubtype(RegRef ref, RefType sourceType,
-                                      RefType destType, Label* label,
-                                      bool onSuccess) {
-  if (destType.isAnyHierarchy()) {
-    RegPtr superSTV;
-    if (MacroAssembler::needSuperSTVForBranchWasmRefIsSubtypeAny(destType)) {
-      uint32_t typeIndex = moduleEnv_.types->indexOf(*destType.typeDef());
-      superSTV = loadSuperTypeVector(typeIndex);
-    }
-    RegI32 scratch1 =
-        MacroAssembler::needScratch1ForBranchWasmRefIsSubtypeAny(destType)
-            ? needI32()
-            : RegI32::Invalid();
-    RegI32 scratch2 =
-        MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeAny(destType)
-            ? needI32()
-            : RegI32::Invalid();
-
-    masm.branchWasmRefIsSubtypeAny(ref, sourceType, destType, label, onSuccess,
-                                   superSTV, scratch1, scratch2);
-
-    if (scratch2.isValid()) {
-      freeI32(scratch2);
-    }
-    if (scratch1.isValid()) {
-      freeI32(scratch1);
-    }
-    if (superSTV.isValid()) {
-      freePtr(superSTV);
-    }
-  } else if (destType.isFuncHierarchy()) {
-    RegPtr superSTV;
-    RegI32 scratch1;
-    if (MacroAssembler::needSuperSTVAndScratch1ForBranchWasmRefIsSubtypeFunc(
-            destType)) {
-      uint32_t typeIndex = moduleEnv_.types->indexOf(*destType.typeDef());
-      superSTV = loadSuperTypeVector(typeIndex);
-      scratch1 = needI32();
-    }
-    RegI32 scratch2 =
-        MacroAssembler::needScratch2ForBranchWasmRefIsSubtypeFunc(destType)
-            ? needI32()
-            : RegI32::Invalid();
-
-    masm.branchWasmRefIsSubtypeFunc(ref, sourceType, destType, label, onSuccess,
-                                    superSTV, scratch1, scratch2);
-
-    if (scratch2.isValid()) {
-      freeI32(scratch2);
-    }
-    if (scratch1.isValid()) {
-      freeI32(scratch1);
-    }
-    if (superSTV.isValid()) {
-      freePtr(superSTV);
-    }
-  } else if (destType.isExternHierarchy()) {
-    masm.branchWasmRefIsSubtypeExtern(ref, sourceType, destType, label,
-                                      onSuccess);
-  } else {
-    MOZ_CRASH("unknown type hierarchy in cast");
+void BaseCompiler::freeRegistersForBranchIfRefSubtype(
+    const BranchIfRefSubtypeRegisters& regs) {
+  if (regs.superSTV.isValid()) {
+    freePtr(regs.superSTV);
+  }
+  if (regs.scratch1.isValid()) {
+    freeI32(regs.scratch1);
+  }
+  if (regs.scratch2.isValid()) {
+    freeI32(regs.scratch2);
   }
 }
 
@@ -8320,7 +8389,26 @@ bool BaseCompiler::emitRefTest(bool nullable) {
     return true;
   }
 
-  emitRefTestCommon(sourceType, destType);
+  Label success;
+  Label join;
+  RegRef ref = popRef();
+  RegI32 result = needI32();
+
+  BranchIfRefSubtypeRegisters regs =
+      allocRegistersForBranchIfRefSubtype(destType);
+  masm.branchWasmRefIsSubtype(ref, sourceType, destType, &success,
+                              /*onSuccess=*/true, regs.superSTV, regs.scratch1,
+                              regs.scratch2);
+  freeRegistersForBranchIfRefSubtype(regs);
+
+  masm.xor32(result, result);
+  masm.jump(&join);
+  masm.bind(&success);
+  masm.move32(Imm32(1), result);
+  masm.bind(&join);
+
+  pushI32(result);
+  freeRef(ref);
 
   return true;
 }
@@ -8337,7 +8425,19 @@ bool BaseCompiler::emitRefCast(bool nullable) {
     return true;
   }
 
-  emitRefCastCommon(sourceType, destType);
+  RegRef ref = popRef();
+
+  Label success;
+  BranchIfRefSubtypeRegisters regs =
+      allocRegistersForBranchIfRefSubtype(destType);
+  masm.branchWasmRefIsSubtype(ref, sourceType, destType, &success,
+                              /*onSuccess=*/true, regs.superSTV, regs.scratch1,
+                              regs.scratch2);
+  freeRegistersForBranchIfRefSubtype(regs);
+
+  masm.wasmTrap(Trap::BadCast, bytecodeOffset());
+  masm.bind(&success);
+  pushRef(ref);
 
   return true;
 }
@@ -11906,6 +12006,9 @@ bool js::wasm::BaselineCompileFunctions(const ModuleEnvironment& moduleEnv,
                                       hasUnwindInfo)) {
       return false;
     }
+
+    // Record observed feature usage
+    code->featureUsage |= f.iter_.featureUsage();
   }
 
   masm.finish();

@@ -55,13 +55,6 @@ const httpTestingPaths = [
 ];
 
 module.exports = {
-  parser: "@babel/eslint-parser",
-  parserOptions: {
-    sourceType: "script",
-    babelOptions: {
-      configFile: path.join(__dirname, ".babel-eslint.rc.js"),
-    },
-  },
   settings: {
     "import/extensions": [".mjs"],
   },
@@ -75,13 +68,30 @@ module.exports = {
   plugins: ["mozilla", "import", "json"],
   overrides: [
     {
-      // All .eslintrc.js files are in the node environment, so turn that
-      // on here.
-      // https://github.com/eslint/eslint/issues/13008
-      files: [".eslintrc.js"],
+      files: [
+        // All .eslintrc.js files are in the node environment, so turn that
+        // on here.
+        // https://github.com/eslint/eslint/issues/13008
+        ".eslintrc.js",
+        // *.config.js files are generally assumed to be configuration files
+        // based for node.
+        "*.config.?(m)js",
+      ],
       env: {
         node: true,
         browser: false,
+      },
+    },
+    {
+      files: [
+        "**/*.jsx",
+        "browser/components/pocket/content/**/*.js",
+        "browser/components/storybook/.storybook/**/*.mjs",
+      ],
+      parserOptions: {
+        ecmaFeatures: {
+          jsx: true,
+        },
       },
     },
     {
@@ -226,7 +236,7 @@ module.exports = {
         "browser/components/enterprisepolicies/**",
         "browser/components/firefoxview/**",
         "browser/components/migration/**",
-        "browser/components/newtab/lib/ASRouterPreferences.jsm",
+        "browser/components/newtab/lib/ASRouterPreferences.sys.mjs",
         "browser/components/protocolhandler/WebProtocolHandlerRegistrar.sys.mjs",
         "browser/components/shell/ShellService.sys.mjs",
         "browser/components/syncedtabs/TabListComponent.sys.mjs",
@@ -431,14 +441,10 @@ module.exports = {
         "dom/base/test/jsmodules/**",
         "dom/canvas/test/**",
         "dom/events/test/**",
-        "dom/fetch/tests/**",
-        "dom/file/ipc/tests/**",
         "dom/file/tests/**",
         "dom/html/test/**",
-        "dom/jsurl/test/**",
         "dom/media/webaudio/test/**",
         "dom/media/webrtc/tests/**",
-        "dom/messagechannel/tests/**",
         "dom/payments/test/**",
         "dom/performance/tests/**",
         "dom/quota/test/browser/**",
@@ -454,9 +460,6 @@ module.exports = {
         "dom/websocket/tests/**",
         "dom/workers/test/**",
         "dom/worklet/tests/**",
-        "dom/xml/test/**",
-        "dom/xslt/tests/**",
-        "dom/xul/test/**",
       ],
       rules: {
         "mozilla/avoid-removeChild": "off",
@@ -475,8 +478,8 @@ module.exports = {
         "no-lone-blocks": "off",
         "no-lonely-if": "off",
         "no-nested-ternary": "off",
-        "no-new-object": "off",
         "no-new-wrappers": "off",
+        "no-object-constructor": "off",
         "no-redeclare": "off",
         "no-restricted-globals": "off",
         "no-shadow": "off",
@@ -495,7 +498,6 @@ module.exports = {
         "dom/base/test/jsmodules/**",
         "dom/canvas/test/**",
         "dom/events/test/**",
-        "dom/file/ipc/tests/**",
         "dom/file/tests/**",
         "dom/html/test/**",
         "dom/media/webrtc/tests/**",
@@ -519,7 +521,6 @@ module.exports = {
         "dom/websocket/tests/**",
         "dom/workers/test/**",
         "dom/worklet/tests/**",
-        "dom/xslt/tests/**",
       ],
       rules: {
         "no-undef": "off",
@@ -629,6 +630,7 @@ module.exports = {
         // these test files for now. Bug 1758951
         "browser/components/aboutlogins/tests/browser/browser_createLogin.js",
         "browser/components/aboutlogins/tests/chrome/test_login_item.html",
+        "browser/components/asrouter/modules/CFRMessageProvider.sys.mjs",
         "browser/components/contextualidentity/test/browser/browser_broadcastchannel.js",
         "browser/components/contextualidentity/test/browser/browser_eme.js",
         "browser/components/contextualidentity/test/browser/browser_favicon.js",
@@ -726,7 +728,6 @@ module.exports = {
         "browser/components/extensions/test/browser/browser_ext_tabs_warmup.js",
         "browser/components/extensions/test/browser/browser_ext_tabs_zoom.js",
         "browser/components/extensions/test/browser/browser_ext_topSites.js",
-        "browser/components/extensions/test/browser/browser_ext_urlbar.js",
         "browser/components/extensions/test/browser/browser_ext_webNavigation_containerIsolation.js",
         "browser/components/extensions/test/browser/browser_ext_webNavigation_getFrames.js",
         "browser/components/extensions/test/browser/browser_ext_webNavigation_urlbar_transitions.js",
@@ -738,8 +739,7 @@ module.exports = {
         "browser/components/firefoxview/tests/browser/browser_recently_closed_tabs.js",
         "browser/components/newtab/content-src/components/DiscoveryStreamComponents/TopSites/TopSites.jsx ",
         "browser/components/newtab/content-src/components/TopSites/TopSiteForm.jsx ",
-        "browser/components/newtab/lib/CFRMessageProvider.sys.mjs ",
-        "browser/components/newtab/lib/PlacesFeed.jsm ",
+        "browser/components/newtab/lib/PlacesFeed.sys.mjs ",
         "browser/components/originattributes/test/browser/browser_broadcastChannel.js",
         "browser/components/originattributes/test/browser/browser_cache.js",
         "browser/components/originattributes/test/browser/browser_favicon_firstParty.js",
@@ -1850,7 +1850,6 @@ module.exports = {
         "toolkit/components/places/tests/browser/browser_visituri_privatebrowsing_perwindowpb.js",
         "toolkit/components/places/tests/browser/redirect_once.sjs",
         "toolkit/components/places/tests/chrome/test_371798.xhtml",
-        "toolkit/components/places/tests/chrome/test_favicon_annotations.xhtml",
         "toolkit/components/printing/tests/head.js",
         "toolkit/components/processtools/tests/browser/browser_test_powerMetrics.js",
         "toolkit/components/processtools/tests/browser/browser_test_procinfo.js",

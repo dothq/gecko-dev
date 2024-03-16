@@ -1256,9 +1256,9 @@ static const float kRectVertexData[12] = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,
 // buffers.
 void SharedContextWebgl::ResetPathVertexBuffer(bool aChanged) {
   mWebgl->BindBuffer(LOCAL_GL_ARRAY_BUFFER, mPathVertexBuffer.get());
-  mWebgl->BufferData(
+  mWebgl->UninitializedBufferData_SizeOnly(
       LOCAL_GL_ARRAY_BUFFER,
-      std::max(size_t(mPathVertexCapacity), sizeof(kRectVertexData)), nullptr,
+      std::max(size_t(mPathVertexCapacity), sizeof(kRectVertexData)),
       LOCAL_GL_DYNAMIC_DRAW);
   mWebgl->BufferSubData(LOCAL_GL_ARRAY_BUFFER, 0, sizeof(kRectVertexData),
                         (const uint8_t*)kRectVertexData);
@@ -3223,18 +3223,15 @@ already_AddRefed<TextureHandle> SharedContextWebgl::DrawStrokeMask(
   mWebgl->FramebufferAttach(LOCAL_GL_FRAMEBUFFER, LOCAL_GL_COLOR_ATTACHMENT0,
                             LOCAL_GL_TEXTURE_2D, attachInfo);
   mWebgl->Viewport(texBounds.x, texBounds.y, texBounds.width, texBounds.height);
+  EnableScissor(texBounds);
   if (!backing->IsInitialized()) {
     backing->MarkInitialized();
-    // If the backing texture is uninitialized, then clear the entire backing
-    // texture to initialize it.
-    DisableScissor();
+    // WebGL implicitly clears the backing texture the first time it is used.
   } else {
-    // Clear only the sub-texture.
-    EnableScissor(texBounds);
+    // Ensure the mask background is clear.
+    mWebgl->ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    mWebgl->Clear(LOCAL_GL_COLOR_BUFFER_BIT);
   }
-  // Ensure the mask background is clear.
-  mWebgl->ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  mWebgl->Clear(LOCAL_GL_COLOR_BUFFER_BIT);
 
   // Reset any blending when drawing the mask.
   SetBlendState(CompositionOp::OP_OVER);
@@ -3409,9 +3406,26 @@ bool SharedContextWebgl::DrawPathAccel(
     Maybe<WGR::VertexBuffer> wgrVB;
     Maybe<AAStroke::VertexBuffer> strokeVB;
     if (!aStrokeOptions) {
-      wgrVB = GeneratePathVertexBuffer(
-          entry->GetPath(), IntRect(-intBounds.TopLeft(), mViewportSize),
-          mRasterizationTruncates, outputBuffer, outputBufferCapacity);
+      if (aPath == mUnitCirclePath) {
+        auto scaleFactors = pathXform.ScaleFactors();
+        if (scaleFactors.AreScalesSame()) {
+          Point center = pathXform.GetTranslation() - quantBounds.TopLeft();
+          float radius = scaleFactors.xScale;
+          AAStroke::VertexBuffer vb = AAStroke::aa_stroke_filled_circle(
+              center.x, center.y, radius, (AAStroke::OutputVertex*)outputBuffer,
+              outputBufferCapacity);
+          if (!vb.len || (outputBuffer && vb.len > outputBufferCapacity)) {
+            AAStroke::aa_stroke_vertex_buffer_release(vb);
+          } else {
+            strokeVB = Some(vb);
+          }
+        }
+      }
+      if (!strokeVB) {
+        wgrVB = GeneratePathVertexBuffer(
+            entry->GetPath(), IntRect(-intBounds.TopLeft(), mViewportSize),
+            mRasterizationTruncates, outputBuffer, outputBufferCapacity);
+      }
     } else {
       if (mPathAAStroke &&
           SupportsAAStroke(aPattern, aOptions, *aStrokeOptions,
@@ -3493,7 +3507,7 @@ bool SharedContextWebgl::DrawPathAccel(
         } else {
           AAStroke::aa_stroke_vertex_buffer_release(strokeVB.ref());
         }
-        if (strokeVB &&
+        if (strokeVB && aStrokeOptions &&
             SupportsAAStroke(aPattern, aOptions, *aStrokeOptions,
                              aAllowStrokeAlpha) == AAStrokeMode::Mask) {
           // Attempt to generate a stroke mask for path.
@@ -3654,24 +3668,30 @@ void DrawTargetWebgl::DrawPath(const Path* aPath, const Pattern& aPattern,
   }
 }
 
-// DrawCircle is a more specialized version of DrawPath that attempts to cache
-// a unit circle.
+// DrawCircleAccel is a more specialized version of DrawPathAccel that attempts
+// to cache a unit circle.
+bool SharedContextWebgl::DrawCircleAccel(const Point& aCenter, float aRadius,
+                                         const Pattern& aPattern,
+                                         const DrawOptions& aOptions,
+                                         const StrokeOptions* aStrokeOptions) {
+  // Cache a unit circle and transform it to avoid creating a path repeatedly.
+  if (!mUnitCirclePath) {
+    mUnitCirclePath = MakePathForCircle(*mCurrentTarget, Point(0, 0), 1);
+  }
+  // Scale and translate the circle to the desired shape.
+  Matrix circleXform(aRadius, 0, 0, aRadius, aCenter.x, aCenter.y);
+  return DrawPathAccel(mUnitCirclePath, aPattern, aOptions, aStrokeOptions,
+                       true, nullptr, true, &circleXform);
+}
+
 void DrawTargetWebgl::DrawCircle(const Point& aOrigin, float aRadius,
                                  const Pattern& aPattern,
                                  const DrawOptions& aOptions,
                                  const StrokeOptions* aStrokeOptions) {
-  if (ShouldAccelPath(aOptions, aStrokeOptions)) {
-    // Cache a unit circle and transform it to avoid creating a path repeatedly.
-    if (!mUnitCirclePath) {
-      mUnitCirclePath = MakePathForCircle(*this, Point(0, 0), 1);
-    }
-    // Scale and translate the circle to the desired shape.
-    Matrix circleXform(aRadius, 0, 0, aRadius, aOrigin.x, aOrigin.y);
-    if (mSharedContext->DrawPathAccel(mUnitCirclePath, aPattern, aOptions,
-                                      aStrokeOptions, true, nullptr, true,
-                                      &circleXform)) {
-      return;
-    }
+  if (ShouldAccelPath(aOptions, aStrokeOptions) &&
+      mSharedContext->DrawCircleAccel(aOrigin, aRadius, aPattern, aOptions,
+                                      aStrokeOptions)) {
+    return;
   }
 
   MarkSkiaChanged(aOptions);

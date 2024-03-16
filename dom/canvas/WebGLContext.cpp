@@ -149,6 +149,7 @@ WebGLContext::WebGLContext(HostWebGLContext* host,
     host->mContext = this;
   }
   const FuncScope funcScope(*this, "<Create>");
+  WebGLMemoryTracker::EnsureRegistered();
 }
 
 WebGLContext::~WebGLContext() { DestroyResourcesAndContext(); }
@@ -1053,7 +1054,10 @@ void WebGLContext::Present(WebGLFramebuffer* const xrFb,
                            const bool webvr,
                            const webgl::SwapChainOptions& options) {
   const FuncScope funcScope(*this, "<Present>");
-  if (IsContextLost()) return;
+  if (IsContextLost()) {
+    EnsureContextLostRemoteTextureOwner(options);
+    return;
+  }
 
   auto swapChain = GetSwapChain(xrFb, webvr);
   const gl::MozFramebuffer* maybeFB = nullptr;
@@ -1068,6 +1072,7 @@ void WebGLContext::Present(WebGLFramebuffer* const xrFb,
   bool valid =
       maybeFB ? PresentIntoXR(*swapChain, *maybeFB) : PresentInto(*swapChain);
   if (!valid) {
+    EnsureContextLostRemoteTextureOwner(options);
     return;
   }
 
@@ -1075,6 +1080,17 @@ void WebGLContext::Present(WebGLFramebuffer* const xrFb,
                   options.remoteTextureId.IsValid();
   if (useAsync) {
     PushRemoteTexture(nullptr, *swapChain, swapChain->FrontBuffer(), options);
+  }
+}
+
+void WebGLContext::WaitForTxn(layers::RemoteTextureOwnerId ownerId,
+                              layers::RemoteTextureTxnType txnType,
+                              layers::RemoteTextureTxnId txnId) {
+  if (!ownerId.IsValid() || !txnType || !txnId) {
+    return;
+  }
+  if (mRemoteTextureOwner && mRemoteTextureOwner->IsRegistered(ownerId)) {
+    mRemoteTextureOwner->WaitForTxn(ownerId, txnType, txnId);
   }
 }
 
@@ -1272,6 +1288,30 @@ bool WebGLContext::PushRemoteTexture(
     }
   }
   return true;
+}
+
+void WebGLContext::EnsureContextLostRemoteTextureOwner(
+    const webgl::SwapChainOptions& options) {
+  if (!options.remoteTextureOwnerId.IsValid()) {
+    return;
+  }
+
+  if (!mRemoteTextureOwner) {
+    // Ensure we have a remote texture owner client for WebGLParent.
+    const auto* outOfProcess = mHost ? mHost->mOwnerData.outOfProcess : nullptr;
+    if (!outOfProcess) {
+      return;
+    }
+    auto pid = outOfProcess->OtherPid();
+    mRemoteTextureOwner = MakeRefPtr<layers::RemoteTextureOwnerClient>(pid);
+  }
+
+  layers::RemoteTextureOwnerId ownerId = options.remoteTextureOwnerId;
+
+  if (!mRemoteTextureOwner->IsRegistered(ownerId)) {
+    mRemoteTextureOwner->RegisterTextureOwner(ownerId);
+  }
+  mRemoteTextureOwner->NotifyContextLost();
 }
 
 void WebGLContext::EndOfFrame() {
