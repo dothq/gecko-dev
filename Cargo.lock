@@ -5,7 +5,7 @@ version = 3
 [[package]]
 name = "aa-stroke"
 version = "0.1.0"
-source = "git+https://github.com/FirefoxGraphics/aa-stroke?rev=96e66f91bb8e8efb80ff144eabd668002aa89650#96e66f91bb8e8efb80ff144eabd668002aa89650"
+source = "git+https://github.com/FirefoxGraphics/aa-stroke?rev=d94278ed9c7020f50232689a26d1277eb0eb74d2#d94278ed9c7020f50232689a26d1277eb0eb74d2"
 dependencies = [
  "euclid",
 ]
@@ -18,9 +18,9 @@ checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
 
 [[package]]
 name = "ahash"
-version = "0.7.6"
+version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcb51a0695d8f838b1ee009b3fbf66bda078cd64590202a864a8f3e8c4315c47"
+checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
 dependencies = [
  "getrandom",
  "once_cell",
@@ -646,11 +646,12 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.78"
+version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a20104e2335ce8a659d6dd92a51a767a0c062599c73b343fd152cb401e828c3d"
+checksum = "a0ba8f7aaa012f30d5b2861462f6708eccd49c3c39863fe083a308035f63d723"
 dependencies = [
  "jobserver",
+ "libc",
 ]
 
 [[package]]
@@ -1150,7 +1151,7 @@ dependencies = [
 [[package]]
 name = "d3d12"
 version = "0.19.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a#07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a"
+source = "git+https://github.com/gfx-rs/wgpu?rev=6040820099bc72b827a6a5f53d66dda3e301f944#6040820099bc72b827a6a5f53d66dda3e301f944"
 dependencies = [
  "bitflags 2.4.1",
  "libloading",
@@ -1420,6 +1421,15 @@ checksum = "c4d33be9473d06f75f58220f71f7a9317aca647dc061dbd3c361b0bef505fbea"
 dependencies = [
  "byteorder",
  "quick-error",
+]
+
+[[package]]
+name = "document-features"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef5282ad69563b5fc40319526ba27e0e7363d552a896f0297d54f767717f9b95"
+dependencies = [
+ "litrs",
 ]
 
 [[package]]
@@ -1696,6 +1706,7 @@ dependencies = [
  "nsstring",
  "once_cell",
  "serde",
+ "serde_json",
  "tempfile",
  "thin-vec",
  "uuid",
@@ -1841,15 +1852,19 @@ dependencies = [
 name = "fog_control"
 version = "0.1.0"
 dependencies = [
+ "bhttp",
  "cstr",
  "firefox-on-glean",
  "glean",
  "log",
+ "mozbuild",
  "nserror",
  "nsstring",
+ "ohttp",
  "once_cell",
  "static_prefs",
  "thin-vec",
+ "thiserror",
  "url",
  "viaduct",
  "xpcom",
@@ -2094,6 +2109,7 @@ dependencies = [
  "cstr",
  "dom",
  "gecko-profiler",
+ "lazy_static",
  "libc",
  "log",
  "malloc_size_of",
@@ -2291,29 +2307,22 @@ dependencies = [
 
 [[package]]
 name = "glean"
-version = "57.0.0"
+version = "58.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae5847ad58b7f925c984de7f4dffcad67d7d0befa59a5a888cf93741b5ef1e6a"
+checksum = "f58388f10d013e2d12bb58e6e76983ede120789956fe827913a3d2560c66d44d"
 dependencies = [
- "chrono",
- "crossbeam-channel",
  "glean-core",
  "inherent",
  "log",
  "once_cell",
- "serde",
- "serde_json",
- "thiserror",
- "time 0.1.45",
- "uuid",
  "whatsys",
 ]
 
 [[package]]
 name = "glean-core"
-version = "57.0.0"
+version = "58.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6831cadd28b625bc296732d71dc7c978f208ba27911cad072785f87f23b1e634"
+checksum = "ed9acc46fd38c5c995a0537e76364496addace660839dc279079e5957e3c1093"
 dependencies = [
  "android_logger",
  "bincode",
@@ -2357,9 +2366,9 @@ dependencies = [
 
 [[package]]
 name = "glslopt"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74a3f5c04450dfdadb4b08f6e5ee6f5110f674de1acbd6199bfec68392a8cbaf"
+checksum = "ee5be629003d587bab188f3e2e3b010aa2cde7c41ec967b3a244f388d4d81877"
 dependencies = [
  "cc",
 ]
@@ -3249,6 +3258,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9d642685b028806386b2b6e75685faadd3eb65a85fff7df711ce18446a422da"
 
 [[package]]
+name = "litrs"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ce301924b7887e9d637144fdade93f9dfff9b60981d4ac161db09720d39aa5"
+
+[[package]]
 name = "lmdb-rkv"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3672,7 +3687,6 @@ dependencies = [
  "mach2",
  "memoffset 0.8.999",
  "mozannotation_client",
- "nsstring",
  "thin-vec",
  "thiserror",
  "winapi",
@@ -3846,7 +3860,7 @@ checksum = "a2983372caf4480544083767bf2d27defafe32af49ab4df3a0b7fc90793a3664"
 [[package]]
 name = "naga"
 version = "0.19.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a#07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a"
+source = "git+https://github.com/gfx-rs/wgpu?rev=6040820099bc72b827a6a5f53d66dda3e301f944#6040820099bc72b827a6a5f53d66dda3e301f944"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -3866,12 +3880,11 @@ dependencies = [
 
 [[package]]
 name = "neqo-common"
-version = "0.7.0"
-source = "git+https://github.com/mozilla/neqo?tag=v0.7.0#9489511f7c82786f55bc9c713cddbff825507ed7"
+version = "0.7.2"
+source = "git+https://github.com/mozilla/neqo?tag=v0.7.2#ce5cbe4dfc2e38b238abb022c39eee4215058221"
 dependencies = [
  "enum-map",
  "env_logger",
- "lazy_static",
  "log",
  "qlog",
  "time 0.3.23",
@@ -3880,8 +3893,8 @@ dependencies = [
 
 [[package]]
 name = "neqo-crypto"
-version = "0.7.0"
-source = "git+https://github.com/mozilla/neqo?tag=v0.7.0#9489511f7c82786f55bc9c713cddbff825507ed7"
+version = "0.7.2"
+source = "git+https://github.com/mozilla/neqo?tag=v0.7.2#ce5cbe4dfc2e38b238abb022c39eee4215058221"
 dependencies = [
  "bindgen 0.69.4",
  "log",
@@ -3894,11 +3907,10 @@ dependencies = [
 
 [[package]]
 name = "neqo-http3"
-version = "0.7.0"
-source = "git+https://github.com/mozilla/neqo?tag=v0.7.0#9489511f7c82786f55bc9c713cddbff825507ed7"
+version = "0.7.2"
+source = "git+https://github.com/mozilla/neqo?tag=v0.7.2#ce5cbe4dfc2e38b238abb022c39eee4215058221"
 dependencies = [
  "enumset",
- "lazy_static",
  "log",
  "neqo-common",
  "neqo-crypto",
@@ -3912,10 +3924,9 @@ dependencies = [
 
 [[package]]
 name = "neqo-qpack"
-version = "0.7.0"
-source = "git+https://github.com/mozilla/neqo?tag=v0.7.0#9489511f7c82786f55bc9c713cddbff825507ed7"
+version = "0.7.2"
+source = "git+https://github.com/mozilla/neqo?tag=v0.7.2#ce5cbe4dfc2e38b238abb022c39eee4215058221"
 dependencies = [
- "lazy_static",
  "log",
  "neqo-common",
  "neqo-crypto",
@@ -3926,11 +3937,10 @@ dependencies = [
 
 [[package]]
 name = "neqo-transport"
-version = "0.7.0"
-source = "git+https://github.com/mozilla/neqo?tag=v0.7.0#9489511f7c82786f55bc9c713cddbff825507ed7"
+version = "0.7.2"
+source = "git+https://github.com/mozilla/neqo?tag=v0.7.2#ce5cbe4dfc2e38b238abb022c39eee4215058221"
 dependencies = [
  "indexmap 1.9.3",
- "lazy_static",
  "log",
  "neqo-common",
  "neqo-crypto",
@@ -4001,6 +4011,17 @@ dependencies = [
  "bitflags 2.4.1",
  "cfg-if 1.0.0",
  "libc",
+]
+
+[[package]]
+name = "nmhproxy"
+version = "0.1.0"
+dependencies = [
+ "mozbuild",
+ "mozilla-central-workspace-hack",
+ "serde",
+ "serde_json",
+ "url",
 ]
 
 [[package]]
@@ -4580,12 +4601,14 @@ name = "qcms"
 version = "0.3.0"
 dependencies = [
  "libc",
+ "version_check",
 ]
 
 [[package]]
 name = "qlog"
-version = "0.11.0"
-source = "git+https://github.com/cloudflare/quiche?rev=09ea4b244096a013071cfe2175bbf2945fb7f8d1#09ea4b244096a013071cfe2175bbf2945fb7f8d1"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c0407438c69b3d99714a796a135cbfb2d60744e4747fb2b46a87acd1c1fcd0e"
 dependencies = [
  "serde",
  "serde_derive",
@@ -4999,9 +5022,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.195"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63261df402c67811e9ac6def069e4786148c4563f4b50fd4bf30aa370d626b02"
+checksum = "3fb1c873e1b9b056a4dc4c0c198b24c3ffa059243875552b2bd0933b1aee4ce2"
 dependencies = [
  "serde_derive",
 ]
@@ -5027,9 +5050,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.195"
+version = "1.0.197"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46fe8f8603d81ba86327b23a2e9cdf49e1255fb94a4c5f297f6ee0547178ea2c"
+checksum = "7eb0b34b42edc17f6b7cac84a52a1c5f0e1bb2227e997ca9011ea3dd34e8610b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5193,9 +5216,9 @@ checksum = "75ce4f9dc4a41b4c3476cc925f1efb11b66df373a8fde5d4b8915fa91b5d995e"
 
 [[package]]
 name = "smallvec"
-version = "1.11.1"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
+checksum = "e6ecd384b10a64542d77071bd64bd7b231f4ed5940fba55e98c3de13824cf3d7"
 dependencies = [
  "serde",
 ]
@@ -5569,18 +5592,18 @@ checksum = "aac81b6fd6beb5884b0cf3321b8117e6e5d47ecb6fc89f414cfdcca8b2fe2dd8"
 
 [[package]]
 name = "thiserror"
-version = "1.0.56"
+version = "1.0.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d54378c645627613241d077a3a79db965db602882668f9136ac42af9ecb730ad"
+checksum = "1e45bcbe8ed29775f228095caf2cd67af7a4ccf756ebff23a306bf3e8b47b24b"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.56"
+version = "1.0.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa0faa943b50f3db30a20aa7e265dbc66076993efed8463e8de414e5d06d3471"
+checksum = "a953cb265bef375dae3de6663da4d3804eee9682ea80d8e2542529b73c531c81"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5857,8 +5880,10 @@ dependencies = [
 [[package]]
 name = "unicode-bidi"
 version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08f95100a766bf4f8f28f90d77e0a5461bbdb219042e7679bebe79004fed8d75"
+source = "git+https://github.com/servo/unicode-bidi?rev=ca612daf1c08c53abe07327cb3e6ef6e0a760f0c#ca612daf1c08c53abe07327cb3e6ef6e0a760f0c"
+dependencies = [
+ "smallvec",
+]
 
 [[package]]
 name = "unicode-bidi-ffi"
@@ -6472,13 +6497,14 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "0.19.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a#07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a"
+source = "git+https://github.com/gfx-rs/wgpu?rev=6040820099bc72b827a6a5f53d66dda3e301f944#6040820099bc72b827a6a5f53d66dda3e301f944"
 dependencies = [
  "arrayvec",
  "bit-vec",
  "bitflags 2.4.1",
  "cfg_aliases",
  "codespan-reporting",
+ "document-features",
  "indexmap 2.999.999",
  "log",
  "naga",
@@ -6498,7 +6524,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "0.19.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a#07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a"
+source = "git+https://github.com/gfx-rs/wgpu?rev=6040820099bc72b827a6a5f53d66dda3e301f944#6040820099bc72b827a6a5f53d66dda3e301f944"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -6537,7 +6563,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "0.19.0"
-source = "git+https://github.com/gfx-rs/wgpu?rev=07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a#07e59eb6fc7de3f682f1c401b9cf9f0da9ee4b4a"
+source = "git+https://github.com/gfx-rs/wgpu?rev=6040820099bc72b827a6a5f53d66dda3e301f944#6040820099bc72b827a6a5f53d66dda3e301f944"
 dependencies = [
  "bitflags 2.4.1",
  "js-sys",
@@ -6549,6 +6575,7 @@ dependencies = [
 name = "wgpu_bindings"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "bincode",
  "d3d12",
  "log",

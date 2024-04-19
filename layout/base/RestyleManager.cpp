@@ -2709,6 +2709,7 @@ enum class ServoPostTraversalFlags : uint32_t {
 
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(ServoPostTraversalFlags)
 
+#ifdef ACCESSIBILITY
 static bool IsVisibleForA11y(const ComputedStyle& aStyle) {
   return aStyle.StyleVisibility()->IsVisible() && !aStyle.StyleUI()->IsInert();
 }
@@ -2717,6 +2718,7 @@ static bool IsSubtreeVisibleForA11y(const ComputedStyle& aStyle) {
   return aStyle.StyleDisplay()->mContentVisibility !=
          StyleContentVisibility::Hidden;
 }
+#endif
 
 // Send proper accessibility notifications and return post traversal
 // flags for kids.
@@ -3450,11 +3452,8 @@ void RestyleManager::MaybeRestyleForNthOfState(ServoStyleSet& aStyleSet,
 
 static inline bool AttributeInfluencesOtherPseudoClassState(
     const Element& aElement, const nsAtom* aAttribute) {
-  // We must record some state for :-moz-browser-frame,
-  // :-moz-table-border-nonzero, and :-moz-select-list-box.
-  if (aAttribute == nsGkAtoms::mozbrowser) {
-    return aElement.IsAnyOfHTMLElements(nsGkAtoms::iframe, nsGkAtoms::frame);
-  }
+  // We must record some state for :-moz-table-border-nonzero and
+  // :-moz-select-list-box.
 
   if (aAttribute == nsGkAtoms::border) {
     return aElement.IsHTMLElement(nsGkAtoms::table);

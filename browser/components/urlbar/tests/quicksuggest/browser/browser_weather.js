@@ -11,6 +11,11 @@ ChromeUtils.defineESModuleGetters(this, {
   UrlbarProviderWeather: "resource:///modules/UrlbarProviderWeather.sys.mjs",
 });
 
+// This test takes a while and can time out in verify mode. Each task is run
+// twice, once with Rust enabled and once with it disabled. Once we remove the
+// JS backend this should improve a lot, but for now request a longer timeout.
+requestLongerTimeout(5);
+
 add_setup(async function () {
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
     remoteSettingsRecords: [
@@ -21,6 +26,15 @@ add_setup(async function () {
     ],
   });
   await MerinoTestUtils.initWeather();
+
+  // When `add_tasks_with_rust()` disables the Rust backend and forces sync, the
+  // JS backend will sync `Weather` with remote settings. Since keywords are
+  // present in remote settings at that point (we added them above), `Weather`
+  // will then start fetching. The fetch may or may not be done before our test
+  // task starts. To make sure it's done, queue another fetch and await it.
+  registerAddTasksWithRustSetup(async () => {
+    await QuickSuggest.weather._test_fetch();
+  });
 });
 
 // Basic checks of the row DOM.
@@ -341,11 +355,8 @@ async function doDismissTest(command) {
   await UrlbarTestUtils.promisePopupClose(window);
 
   // Enable the weather suggestion again and wait for it to be fetched.
-  let fetchPromise = QuickSuggest.weather.waitForFetches();
   UrlbarPrefs.clear("suggest.weather");
-  info("Waiting for weather fetch after re-enabling the suggestion");
-  await fetchPromise;
-  info("Got weather fetch");
+  await QuickSuggest.weather._test_fetch();
 
   // Wait for keywords to be re-synced from remote settings.
   await QuickSuggestTestUtils.forceSync();
@@ -395,6 +406,94 @@ async function doSessionOngoingCommandTest(command) {
   info("Doing dismissal");
   await doDismissTest("not_interested");
 }
+
+// Test for menu item to mange the suggest.
+add_tasks_with_rust(async function manage() {
+  await BrowserTestUtils.withNewTab({ gBrowser }, async browser => {
+    await UrlbarTestUtils.promiseAutocompleteResultPopup({
+      window,
+      value: MerinoTestUtils.WEATHER_KEYWORD,
+    });
+
+    let resultIndex = 1;
+    let details = await UrlbarTestUtils.getDetailsOfResultAt(
+      window,
+      resultIndex
+    );
+    assertIsWeatherResult(details.result, true);
+
+    const managePage = "about:preferences#search";
+    let onManagePageLoaded = BrowserTestUtils.browserLoaded(
+      browser,
+      false,
+      managePage
+    );
+    // Click the command.
+    await UrlbarTestUtils.openResultMenuAndClickItem(window, "manage", {
+      resultIndex,
+    });
+    await onManagePageLoaded;
+    Assert.equal(
+      browser.currentURI.spec,
+      managePage,
+      "The manage page is loaded"
+    );
+
+    await UrlbarTestUtils.promisePopupClose(window);
+  });
+});
+
+// Test for simple UI.
+add_tasks_with_rust(async function simpleUI() {
+  const testData = [
+    {
+      weatherSimpleUI: true,
+      expectedSummary:
+        MerinoTestUtils.WEATHER_SUGGESTION.current_conditions.summary,
+    },
+    {
+      weatherSimpleUI: false,
+      expectedSummary: `${MerinoTestUtils.WEATHER_SUGGESTION.current_conditions.summary}; ${MerinoTestUtils.WEATHER_SUGGESTION.forecast.summary}`,
+    },
+  ];
+
+  for (let { weatherSimpleUI, expectedSummary } of testData) {
+    let nimbusCleanup = await UrlbarTestUtils.initNimbusFeature({
+      weatherSimpleUI,
+    });
+
+    await UrlbarTestUtils.promiseAutocompleteResultPopup({
+      window,
+      value: MerinoTestUtils.WEATHER_KEYWORD,
+    });
+
+    let resultIndex = 1;
+    let details = await UrlbarTestUtils.getDetailsOfResultAt(
+      window,
+      resultIndex
+    );
+    assertIsWeatherResult(details.result, true);
+
+    let { row } = details.element;
+    let summary = row.querySelector(".urlbarView-dynamic-weather-summaryText");
+
+    // `getViewUpdate()` is allowed to be async and `UrlbarView` awaits it even
+    // though the `Weather` implementation is not async. That means the summary
+    // text content will be updated asyncly, so we need to wait for it.
+    await TestUtils.waitForCondition(
+      () => summary.textContent == expectedSummary,
+      "Waiting for the row's summary text to be updated"
+    );
+    Assert.equal(
+      summary.textContent,
+      expectedSummary,
+      "The summary text should be correct"
+    );
+
+    await UrlbarTestUtils.promisePopupClose(window);
+    await nimbusCleanup();
+  }
+});
 
 function assertIsWeatherResult(result, isWeatherResult) {
   let provider = UrlbarPrefs.get("quickSuggestRustEnabled")

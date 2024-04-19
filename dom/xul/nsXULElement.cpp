@@ -654,7 +654,7 @@ nsresult nsXULElement::BindToTree(BindContext& aContext, nsINode& aParent) {
   return rv;
 }
 
-void nsXULElement::UnbindFromTree(bool aNullParent) {
+void nsXULElement::UnbindFromTree(UnbindContext& aContext) {
   if (NodeInfo()->Equals(nsGkAtoms::keyset, kNameSpaceID_XUL)) {
     XULKeySetGlobalKeyListener::DetachKeyHandler(this);
   }
@@ -689,7 +689,7 @@ void nsXULElement::UnbindFromTree(bool aNullParent) {
     slots->mControllers = nullptr;
   }
 
-  nsStyledElement::UnbindFromTree(aNullParent);
+  nsStyledElement::UnbindFromTree(aContext);
 }
 
 void nsXULElement::DoneAddingChildren(bool aHaveNotified) {
@@ -1426,6 +1426,10 @@ nsresult nsXULPrototypeElement::SetAttrAt(uint32_t aPos,
     mAttributes[aPos].mValue.ParseAtom(aValue);
 
     return NS_OK;
+  } else if (mAttributes[aPos].mName.Equals(nsGkAtoms::aria_activedescendant)) {
+    mAttributes[aPos].mValue.ParseAtom(aValue);
+
+    return NS_OK;
   } else if (mAttributes[aPos].mName.Equals(nsGkAtoms::is)) {
     // Store is as atom.
     mAttributes[aPos].mValue.ParseAtom(aValue);
@@ -1839,9 +1843,8 @@ class ScriptCompileTask final : public Task {
       return;
     }
 
-    JS::CompilationStorage compileStorage;
-    mStencil = JS::CompileGlobalScriptToStencil(mFrontendContext, mOptions,
-                                                srcBuf, compileStorage);
+    mStencil =
+        JS::CompileGlobalScriptToStencil(mFrontendContext, mOptions, srcBuf);
 #ifdef DEBUG
     // Chrome-privileged code shouldn't have any compilation error.
     CheckErrorsAndWarnings(mFrontendContext, mOptions);

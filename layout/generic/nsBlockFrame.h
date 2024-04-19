@@ -492,6 +492,14 @@ class nsBlockFrame : public nsContainerFrame {
                            BlockReflowState& aState, ReflowOutput& aMetrics);
 
   /**
+   * Calculates the necessary shift to honor 'align-content' and applies it.
+   */
+  void AlignContent(BlockReflowState& aState, ReflowOutput& aMetrics,
+                    nscoord aBEndEdgeOfChildren);
+  // Stash the effective align-content shift value between reflows
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(AlignContentShift, nscoord)
+
+  /**
    * Helper method for Reflow(). Computes the overflow areas created by our
    * children, and includes them into aOverflowAreas.
    */
@@ -539,6 +547,16 @@ class nsBlockFrame : public nsContainerFrame {
    * @return whether the frame is a BIDI form control
    */
   bool IsVisualFormControl(nsPresContext* aPresContext);
+
+  /** Whether this block has an effective align-content property */
+  bool IsAligned() const {
+    return StylePosition()->mAlignContent.primary !=
+           mozilla::StyleAlignFlags::NORMAL;
+  }
+
+  nscoord GetAlignContentShift() const {
+    return IsAligned() ? GetProperty(AlignContentShift()) : 0;
+  }
 
   /**
    * For text-wrap:balance, we iteratively try reflowing with adjusted inline
@@ -849,12 +867,23 @@ class nsBlockFrame : public nsContainerFrame {
                                       bool* aKeepReflowGoing);
 
   /**
+   * Indicates if we need to compute a page name for the next page when pushing
+   * a truncated line.
+   *
+   * Using a value of No saves work when a new page name has already been set
+   * with nsCSSFrameConstructor::SetNextPageContentFramePageName.
+   */
+  enum class ComputeNewPageNameIfNeeded : uint8_t { Yes, No };
+
+  /**
    * Push aLine (and any after it), since it cannot be placed on this
    * page/column.  Set aKeepReflowGoing to false and set
    * flag aState.mReflowStatus as incomplete.
    */
   void PushTruncatedLine(BlockReflowState& aState, LineIterator aLine,
-                         bool* aKeepReflowGoing);
+                         bool* aKeepReflowGoing,
+                         ComputeNewPageNameIfNeeded aComputeNewPageName =
+                             ComputeNewPageNameIfNeeded::Yes);
 
   void SplitLine(BlockReflowState& aState, nsLineLayout& aLineLayout,
                  LineIterator aLine, nsIFrame* aFrame,

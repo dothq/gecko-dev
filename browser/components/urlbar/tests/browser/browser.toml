@@ -314,7 +314,6 @@ support-files = [
 ["browser_oneOffs_heuristicRestyle.js"]
 skip-if = [
   "os == 'linux' && bits == 64 && !debug", # Bug 1775811
-  "a11y_checks", # Bugs 1858041 and 1854661 to investigate intermittent a11y_checks results
 ]
 
 ["browser_oneOffs_keyModifiers.js"]
@@ -595,6 +594,8 @@ https_first_disabled = true
 
 ["browser_top_sites_private.js"]
 https_first_disabled = true
+
+["browser_top_sites_switchtab.js"]
 
 ["browser_typed_value.js"]
 

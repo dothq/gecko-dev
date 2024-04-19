@@ -23,7 +23,6 @@
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/dom/WindowContext.h"
 #include "mozilla/dom/WindowGlobalChild.h"
-#include "nsContentCID.h"
 #include "nsContentTypeParser.h"
 #include "nsContentUtils.h"
 #include "nsIScriptObjectPrincipal.h"
@@ -429,7 +428,8 @@ class MediaKeysGMPCrashHelper : public GMPCrashHelper {
 
 already_AddRefed<CDMProxy> MediaKeys::CreateCDMProxy() {
   const bool isHardwareDecryptionSupported =
-      IsHardwareDecryptionSupported(mConfig);
+      IsHardwareDecryptionSupported(mConfig) ||
+      DoesKeySystemSupportHardwareDecryption(mKeySystem);
   EME_LOG("MediaKeys[%p]::CreateCDMProxy(), isHardwareDecryptionSupported=%d",
           this, isHardwareDecryptionSupported);
   RefPtr<CDMProxy> proxy;
@@ -662,8 +662,12 @@ already_AddRefed<MediaKeySession> MediaKeys::CreateSession(
 
   EME_LOG("MediaKeys[%p] Creating session", this);
 
-  RefPtr<MediaKeySession> session = new MediaKeySession(
-      GetParentObject(), this, mKeySystem, aSessionType, aRv);
+  const bool isHardwareDecryption =
+      IsHardwareDecryptionSupported(mConfig) ||
+      DoesKeySystemSupportHardwareDecryption(mKeySystem);
+  RefPtr<MediaKeySession> session =
+      new MediaKeySession(GetParentObject(), this, mKeySystem, aSessionType,
+                          isHardwareDecryption, aRv);
 
   if (aRv.Failed()) {
     return nullptr;
@@ -792,8 +796,7 @@ void MediaKeys::GetSessionsInfo(nsString& sessionsInfo) {
       sessionsInfo.AppendLiteral("(kid=");
       sessionsInfo.Append(keyID);
       sessionsInfo.AppendLiteral(" status=");
-      sessionsInfo.AppendASCII(
-          MediaKeyStatusValues::GetString(keyStatusMap->GetValueAtIndex(i)));
+      sessionsInfo.AppendASCII(GetEnumString(keyStatusMap->GetValueAtIndex(i)));
       sessionsInfo.AppendLiteral(")");
     }
     sessionsInfo.AppendLiteral(")");
@@ -824,7 +827,7 @@ already_AddRefed<Promise> MediaKeys::GetStatusForPolicy(
   }
 
   EME_LOG("GetStatusForPolicy minHdcpVersion = %s.",
-          HDCPVersionValues::GetString(aPolicy.mMinHdcpVersion.Value()).data());
+          GetEnumString(aPolicy.mMinHdcpVersion.Value()).get());
   mProxy->GetStatusForPolicy(StorePromise(promise),
                              aPolicy.mMinHdcpVersion.Value());
   return promise.forget();

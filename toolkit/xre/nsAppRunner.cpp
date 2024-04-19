@@ -330,7 +330,7 @@ bool gIsGtest = false;
 bool gKioskMode = false;
 int gKioskMonitor = -1;
 
-bool gAllowContentAnalysis = false;
+bool gAllowContentAnalysisArgPresent = false;
 
 nsString gAbsoluteArgv0Path;
 
@@ -1024,6 +1024,12 @@ bool SessionHistoryInParent() {
              fission_disableSessionHistoryInParent_AtStartup_DoNotUseDirectly();
 }
 
+bool SessionStorePlatformCollection() {
+  return SessionHistoryInParent() &&
+         !StaticPrefs::
+             browser_sessionstore_disable_platform_collection_AtStartup_DoNotUseDirectly();
+}
+
 bool BFCacheInParent() {
   return SessionHistoryInParent() &&
          StaticPrefs::fission_bfcacheInParent_DoNotUseDirectly();
@@ -1429,6 +1435,12 @@ nsXULAppInfo::GetSessionHistoryInParent(bool* aResult) {
 }
 
 NS_IMETHODIMP
+nsXULAppInfo::GetSessionStorePlatformCollection(bool* aResult) {
+  *aResult = SessionStorePlatformCollection();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsXULAppInfo::GetBrowserTabsRemoteAutostart(bool* aResult) {
   *aResult = BrowserTabsRemoteAutostart();
   return NS_OK;
@@ -1797,7 +1809,8 @@ nsXULAppInfo::AnnotateCrashReport(const nsACString& key,
     return NS_ERROR_INVALID_ARG;
   }
 
-  return CrashReporter::AnnotateCrashReport(annotation, data);
+  CrashReporter::RecordAnnotationNSCString(annotation, data);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -1808,7 +1821,8 @@ nsXULAppInfo::RemoveCrashReportAnnotation(const nsACString& key) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  return CrashReporter::RemoveCrashReportAnnotation(annotation);
+  CrashReporter::UnrecordAnnotation(annotation);
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -2316,7 +2330,7 @@ static void SetupLauncherProcessPref() {
   if (enabledState.isOk()) {
     gLauncherProcessState = Some(enabledState.unwrap());
 
-    CrashReporter::AnnotateCrashReport(
+    CrashReporter::RecordAnnotationU32(
         CrashReporter::Annotation::LauncherProcessState,
         static_cast<uint32_t>(enabledState.unwrap()));
 
@@ -3846,7 +3860,7 @@ static void MaybeAddCPUMicrocodeCrashAnnotation() {
   }
 
   if (cpuUpdateRevision > 0) {
-    CrashReporter::AnnotateCrashReport(
+    CrashReporter::RecordAnnotationNSCString(
         CrashReporter::Annotation::CPUMicrocodeVersion,
         nsPrintfCString("0x%" PRIx32, cpuUpdateRevision));
   }
@@ -3984,8 +3998,9 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
     gKioskMonitor = atoi(kioskMonitorNumber);
   }
 
-  gAllowContentAnalysis = CheckArg("allow-content-analysis", nullptr,
-                                   CheckArgFlag::RemoveArg) == ARG_FOUND;
+  gAllowContentAnalysisArgPresent =
+      CheckArg("allow-content-analysis", nullptr, CheckArgFlag::RemoveArg) ==
+      ARG_FOUND;
 
   nsresult rv;
   ArgResult ar;
@@ -4106,46 +4121,52 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
     if (NS_SUCCEEDED(rv)) {
       CrashReporter::SetUserAppDataDirectory(file);
     }
-    if (mAppData->crashReporterURL)
+    if (mAppData->crashReporterURL) {
       CrashReporter::SetServerURL(
           nsDependentCString(mAppData->crashReporterURL));
+    }
 
     // We overwrite this once we finish starting up.
-    CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::StartupCrash,
-                                       true);
+    CrashReporter::RecordAnnotationBool(CrashReporter::Annotation::StartupCrash,
+                                        true);
 
     // pass some basic info from the app data
-    if (mAppData->vendor)
-      CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::Vendor,
-                                         nsDependentCString(mAppData->vendor));
-    if (mAppData->name)
-      CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::ProductName,
-                                         nsDependentCString(mAppData->name));
-    if (mAppData->ID)
-      CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::ProductID,
-                                         nsDependentCString(mAppData->ID));
-    if (mAppData->version)
-      CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::Version,
-                                         nsDependentCString(mAppData->version));
-    if (mAppData->buildID)
-      CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::BuildID,
-                                         nsDependentCString(mAppData->buildID));
+    if (mAppData->vendor) {
+      CrashReporter::RecordAnnotationCString(CrashReporter::Annotation::Vendor,
+                                             mAppData->vendor);
+    }
+    if (mAppData->name) {
+      CrashReporter::RecordAnnotationCString(
+          CrashReporter::Annotation::ProductName, mAppData->name);
+    }
+    if (mAppData->ID) {
+      CrashReporter::RecordAnnotationCString(
+          CrashReporter::Annotation::ProductID, mAppData->ID);
+    }
+    if (mAppData->version) {
+      CrashReporter::RecordAnnotationCString(CrashReporter::Annotation::Version,
+                                             mAppData->version);
+    }
+    if (mAppData->buildID) {
+      CrashReporter::RecordAnnotationCString(CrashReporter::Annotation::BuildID,
+                                             mAppData->buildID);
+    }
 
     nsDependentCString releaseChannel(MOZ_STRINGIFY(MOZ_UPDATE_CHANNEL));
-    CrashReporter::AnnotateCrashReport(
+    CrashReporter::RecordAnnotationNSCString(
         CrashReporter::Annotation::ReleaseChannel, releaseChannel);
 
 #ifdef XP_WIN
     nsAutoString appInitDLLs;
     if (widget::WinUtils::GetAppInitDLLs(appInitDLLs)) {
-      CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::AppInitDLLs,
-                                         NS_ConvertUTF16toUTF8(appInitDLLs));
+      CrashReporter::RecordAnnotationNSString(
+          CrashReporter::Annotation::AppInitDLLs, appInitDLLs);
     }
 
     nsString packageFamilyName = widget::WinUtils::GetPackageFamilyName();
     if (StringBeginsWith(packageFamilyName, u"Mozilla."_ns) ||
         StringBeginsWith(packageFamilyName, u"MozillaCorporation."_ns)) {
-      CrashReporter::AnnotateCrashReport(
+      CrashReporter::RecordAnnotationNSCString(
           CrashReporter::Annotation::WindowsPackageFamilyName,
           NS_ConvertUTF16toUTF8(packageFamilyName));
     }
@@ -4156,15 +4177,15 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
     Maybe<nsCString> backgroundTasks = BackgroundTasks::GetBackgroundTasks();
     if (backgroundTasks.isSome()) {
       isBackgroundTaskMode = true;
-      CrashReporter::AnnotateCrashReport(
+      CrashReporter::RecordAnnotationNSCString(
           CrashReporter::Annotation::BackgroundTaskName, backgroundTasks.ref());
     }
 #endif
-    CrashReporter::AnnotateCrashReport(
+    CrashReporter::RecordAnnotationBool(
         CrashReporter::Annotation::BackgroundTaskMode, isBackgroundTaskMode);
 
-    CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::HeadlessMode,
-                                       gfxPlatform::IsHeadless());
+    CrashReporter::RecordAnnotationBool(CrashReporter::Annotation::HeadlessMode,
+                                        gfxPlatform::IsHeadless());
 
     CrashReporter::SetRestartArgs(gArgc, gArgv);
 
@@ -4203,7 +4224,9 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
 
 #if defined(MOZ_SANDBOX) && defined(XP_WIN)
   if (mAppData->sandboxBrokerServices) {
-    SandboxBroker::Initialize(mAppData->sandboxBrokerServices);
+    nsAutoString binDirPath;
+    MOZ_ALWAYS_SUCCEEDS(xreBinDirectory->GetPath(binDirPath));
+    SandboxBroker::Initialize(mAppData->sandboxBrokerServices, binDirPath);
   } else {
 #  if defined(MOZ_SANDBOX)
     // If we're sandboxing content and we fail to initialize, then crashing here
@@ -4300,8 +4323,8 @@ int XREMain::XRE_mainInit(bool* aExitFlag) {
   gSafeMode = safeModeRequested.value();
 
   MaybeAddCPUMicrocodeCrashAnnotation();
-  CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::SafeMode,
-                                     gSafeMode);
+  CrashReporter::RegisterAnnotationBool(CrashReporter::Annotation::SafeMode,
+                                        &gSafeMode);
 
 #if defined(MOZ_HAS_REMOTE)
   // Handle --no-remote and --new-instance command line arguments. Setup
@@ -4747,37 +4770,55 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
       if (saveDisplayArg) {
         if (GdkIsX11Display(disp)) {
           SaveWordToEnv("DISPLAY", nsDependentCString(display_name));
-        }
-#  ifdef MOZ_WAYLAND
-        else if (GdkIsWaylandDisplay(disp)) {
+        } else if (GdkIsWaylandDisplay(disp)) {
           SaveWordToEnv("WAYLAND_DISPLAY", nsDependentCString(display_name));
         }
-#  endif
       }
-    }
-#  ifdef MOZ_WIDGET_GTK
-    else {
+    } else {
       gdk_display_manager_open_display(gdk_display_manager_get(), nullptr);
     }
-#  endif
-    // Check that Wayland only and X11 only builds
-    // use appropriate displays.
-#  if defined(MOZ_WAYLAND) && !defined(MOZ_X11)
-    if (!GdkIsWaylandDisplay()) {
-      Output(true, "Wayland only build is missig Wayland display!\n");
-    }
-#  endif
-#  if !defined(MOZ_WAYLAND) && defined(MOZ_X11)
-    if (!GdkIsX11Display()) {
-      Output(true, "X11 only build is missig X11 display!\n");
-    }
-#  endif
 #  if defined(MOZ_WAYLAND)
     // We want to use proxy for main connection only so
     // restore original Wayland display for next potential Wayland connections
     // from gfx probe code and so on.
     if (gWaylandProxy) {
       gWaylandProxy->RestoreWaylandDisplay();
+    }
+    if (waylandEnabled && PR_GetEnv("WAYLAND_DISPLAY") && GdkIsX11Display()) {
+      // Gtk somehow switched to X11 display but we want Wayland.
+      // It may happen if compositor response is missig or it's slow
+      // or WAYLAND_DISPLAY is wrong. In such case throw warning but
+      // run with X11.
+      Output(true,
+             "Error: Failed to open Wayland display, fallback to X11. "
+             "WAYLAND_DISPLAY='%s' DISPLAY='%s'\n",
+             PR_GetEnv("WAYLAND_DISPLAY"), PR_GetEnv("DISPLAY"));
+
+      // We need to unset WAYLAND_DISPLAY. Gfx probe code doesn't have fallback
+      // to X11 and we'll end with Browser running SW rendering only then.
+      g_unsetenv("WAYLAND_DISPLAY");
+      gWaylandProxy = nullptr;
+    }
+#  endif
+    if (!gdk_display_get_default()) {
+      Output(true,
+             "Error: we don't have any display, WAYLAND_DISPLAY='%s' "
+             "DISPLAY='%s'\n",
+             PR_GetEnv("WAYLAND_DISPLAY"), PR_GetEnv("DISPLAY"));
+      return 1;
+    }
+    // Check that Wayland only and X11 only builds
+    // use appropriate displays.
+#  if defined(MOZ_WAYLAND) && !defined(MOZ_X11)
+    if (!GdkIsWaylandDisplay()) {
+      Output(true, "Wayland only build is missig Wayland display!\n");
+      return 1;
+    }
+#  endif
+#  if !defined(MOZ_WAYLAND) && defined(MOZ_X11)
+    if (!GdkIsX11Display()) {
+      Output(true, "X11 only build is missig X11 display!\n");
+      return 1;
     }
 #  endif
   }
@@ -5145,7 +5186,7 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 
   bool lastStartupWasCrash = CheckLastStartupWasCrash();
 
-  CrashReporter::AnnotateCrashReport(
+  CrashReporter::RecordAnnotationBool(
       CrashReporter::Annotation::LastStartupWasCrash, lastStartupWasCrash);
 
   if (CheckArg("purgecaches") || PR_GetEnv("MOZ_PURGE_CACHES") ||
@@ -5153,7 +5194,7 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
     cachesOK = false;
   }
 
-  CrashReporter::AnnotateCrashReport(
+  CrashReporter::RecordAnnotationBool(
       CrashReporter::Annotation::StartupCacheValid, cachesOK && versionOK);
 
   // Every time a profile is loaded by a build with a different version,
@@ -5208,45 +5249,30 @@ int XREMain::XRE_mainStartup(bool* aExitFlag) {
 
 #if defined(MOZ_SANDBOX)
 void AddSandboxAnnotations() {
-  {
-    // Include the sandbox content level, regardless of platform
-    int level = GetEffectiveContentSandboxLevel();
-
-    nsAutoCString levelString;
-    levelString.AppendInt(level);
-
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::ContentSandboxLevel, levelString);
-  }
-
-  {
-    int level = GetEffectiveGpuSandboxLevel();
-
-    nsAutoCString levelString;
-    levelString.AppendInt(level);
-
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::GpuSandboxLevel, levelString);
-  }
+  CrashReporter::RecordAnnotationU32(
+      CrashReporter::Annotation::ContentSandboxLevel,
+      GetEffectiveContentSandboxLevel());
+  CrashReporter::RecordAnnotationU32(CrashReporter::Annotation::GpuSandboxLevel,
+                                     GetEffectiveGpuSandboxLevel());
 
   // Include whether or not this instance is capable of content sandboxing
-  bool sandboxCapable = false;
+  bool sSandboxCapable = false;
 
 #  if defined(XP_WIN)
   // All supported Windows versions support some level of content sandboxing
-  sandboxCapable = true;
+  sSandboxCapable = true;
 #  elif defined(XP_MACOSX)
   // All supported OS X versions are capable
-  sandboxCapable = true;
+  sSandboxCapable = true;
 #  elif defined(XP_LINUX)
-  sandboxCapable = SandboxInfo::Get().CanSandboxContent();
+  sSandboxCapable = SandboxInfo::Get().CanSandboxContent();
 #  elif defined(__OpenBSD__)
-  sandboxCapable = true;
+  sSandboxCapable = true;
   StartOpenBSDSandbox(GeckoProcessType_Default);
 #  endif
 
-  CrashReporter::AnnotateCrashReport(
-      CrashReporter::Annotation::ContentSandboxCapable, sandboxCapable);
+  CrashReporter::RecordAnnotationBool(
+      CrashReporter::Annotation::ContentSandboxCapable, sSandboxCapable);
 }
 #endif /* MOZ_SANDBOX */
 
@@ -5294,7 +5320,7 @@ nsresult XREMain::XRE_mainRun() {
         nsAutoCString sval;
         rv = defaultPrefBranch->GetCharPref("app.update.channel", sval);
         if (NS_SUCCEEDED(rv)) {
-          CrashReporter::AnnotateCrashReport(
+          CrashReporter::RecordAnnotationNSCString(
               CrashReporter::Annotation::ReleaseChannel, sval);
         }
       }
@@ -5486,7 +5512,7 @@ nsresult XREMain::XRE_mainRun() {
 
     nsCString userAgentLocale;
     LocaleService::GetInstance()->GetAppLocaleAsBCP47(userAgentLocale);
-    CrashReporter::AnnotateCrashReport(
+    CrashReporter::RecordAnnotationNSCString(
         CrashReporter::Annotation::useragent_locale, userAgentLocale);
 
     if (!AppShutdown::IsInOrBeyond(ShutdownPhase::AppShutdownConfirmed)) {
@@ -5624,7 +5650,7 @@ nsresult XREMain::XRE_mainRun() {
 
       (void)appStartup->DoneStartingUp();
 
-      CrashReporter::AnnotateCrashReport(
+      CrashReporter::RecordAnnotationBool(
           CrashReporter::Annotation::StartupCrash, false);
 
       AppShutdown::IsInOrBeyond(ShutdownPhase::AppShutdownConfirmed);
@@ -5677,11 +5703,10 @@ nsresult XREMain::XRE_mainRun() {
                           sandboxInfo.Test(SandboxInfo::kEnabledForContent));
     Telemetry::Accumulate(Telemetry::SANDBOX_MEDIA_ENABLED,
                           sandboxInfo.Test(SandboxInfo::kEnabledForMedia));
-    nsAutoCString flagsString;
-    flagsString.AppendInt(sandboxInfo.AsInteger());
 
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::ContentSandboxCapabilities, flagsString);
+    CrashReporter::RecordAnnotationU32(
+        CrashReporter::Annotation::ContentSandboxCapabilities,
+        sandboxInfo.AsInteger());
 #endif /* MOZ_SANDBOX && XP_LINUX */
 
 #if defined(XP_WIN)

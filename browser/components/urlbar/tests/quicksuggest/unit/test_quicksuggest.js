@@ -18,6 +18,8 @@ const HTTP_SEARCH_STRING = "http prefix";
 const HTTPS_SEARCH_STRING = "https prefix";
 const PREFIX_SUGGESTIONS_STRIPPED_URL = "example.com/prefix-test";
 
+const ONE_CHAR_SEARCH_STRINGS = ["x", "x ", " x", " x "];
+
 const { TIMESTAMP_TEMPLATE, TIMESTAMP_LENGTH } = QuickSuggest;
 const TIMESTAMP_SEARCH_STRING = "timestamp";
 const TIMESTAMP_SUGGESTION_URL = `http://example.com/timestamp-${TIMESTAMP_TEMPLATE}`;
@@ -69,6 +71,11 @@ const REMOTE_SETTINGS_RESULTS = [
     iab_category: "22 - Shopping",
     icon: "1234",
   },
+  QuickSuggestTestUtils.ampRemoteSettings({
+    keywords: [...ONE_CHAR_SEARCH_STRINGS, "12", "a longer keyword"],
+    title: "Suggestion with 1-char keyword",
+    url: "http://example.com/1-char-keyword",
+  }),
 ];
 
 function expectedNonSponsoredResult() {
@@ -751,10 +758,10 @@ async function doDedupeAgainstURLTest({
 }
 
 // Tests the remote settings latency histogram.
-add_task(
+add_tasks_with_rust(
   {
     // Not supported by the Rust backend.
-    skip_if: () => UrlbarPrefs.get("quickSuggestRustEnabled"),
+    skip_if_rust_enabled: true,
   },
   async function latencyTelemetry() {
     UrlbarPrefs.set("suggest.quicksuggest.nonsponsored", true);
@@ -791,10 +798,10 @@ add_task(
 
 // Tests setup and teardown of the remote settings client depending on whether
 // quick suggest is enabled.
-add_task(
+add_tasks_with_rust(
   {
     // Not supported by the Rust backend.
-    skip_if: () => UrlbarPrefs.get("quickSuggestRustEnabled"),
+    skip_if_rust_enabled: true,
   },
   async function setupAndTeardown() {
     Assert.ok(
@@ -885,7 +892,7 @@ add_task(
       "Remote settings backend is disabled after enabling the Rust backend"
     );
 
-    UrlbarPrefs.clear("quicksuggest.rustEnabled");
+    UrlbarPrefs.set("quicksuggest.rustEnabled", false);
     Assert.ok(
       QuickSuggest.jsBackend.rs,
       "Settings client is non-null after disabling the Rust backend"
@@ -898,6 +905,7 @@ add_task(
     // Leave the prefs in the same state as when the task started.
     UrlbarPrefs.clear("suggest.quicksuggest.nonsponsored");
     UrlbarPrefs.clear("suggest.quicksuggest.sponsored");
+    UrlbarPrefs.clear("quicksuggest.rustEnabled");
     UrlbarPrefs.set("quicksuggest.enabled", true);
     Assert.ok(
       !QuickSuggest.jsBackend.rs,
@@ -1349,10 +1357,10 @@ add_tasks_with_rust(async function block_timestamp() {
 
 // Makes sure remote settings data is fetched using the correct `type` based on
 // the value of the `quickSuggestRemoteSettingsDataType` Nimbus variable.
-add_task(
+add_tasks_with_rust(
   {
     // Not supported by the Rust backend.
-    skip_if: () => UrlbarPrefs.get("quickSuggestRustEnabled"),
+    skip_if_rust_enabled: true,
   },
   async function remoteSettingsDataType() {
     UrlbarPrefs.set("suggest.quicksuggest.sponsored", true);
@@ -1509,7 +1517,7 @@ add_tasks_with_rust(async function tabToSearch() {
       // search heuristic
       makeSearchResult(context, {
         engineName: Services.search.defaultEngine.name,
-        engineIconUri: Services.search.defaultEngine.getIconURL(),
+        engineIconUri: await Services.search.defaultEngine.getIconURL(),
         heuristic: true,
       }),
       // tab to search
@@ -1595,7 +1603,7 @@ add_tasks_with_rust(async function position() {
       // search heuristic
       makeSearchResult(context, {
         engineName: Services.search.defaultEngine.name,
-        engineIconUri: Services.search.defaultEngine.getIconURL(),
+        engineIconUri: await Services.search.defaultEngine.getIconURL(),
         heuristic: true,
       }),
       // best match whose backing suggestion has a `position`
@@ -1658,4 +1666,36 @@ add_task(async function rustProviders() {
       },
     ],
   });
+});
+
+// Tests the keyword/search-string-length threshold. Keywords/search strings
+// must be at least two characters long to be matched.
+add_tasks_with_rust(async function keywordLengthThreshold() {
+  UrlbarPrefs.set("suggest.quicksuggest.sponsored", true);
+  await QuickSuggestTestUtils.forceSync();
+
+  let tests = [
+    ...ONE_CHAR_SEARCH_STRINGS.map(keyword => ({ keyword, expected: false })),
+    { keyword: "12", expected: true },
+    { keyword: "a longer keyword", expected: true },
+  ];
+
+  for (let { keyword, expected } of tests) {
+    await check_results({
+      context: createContext(keyword, {
+        providers: [UrlbarProviderQuickSuggest.name],
+        isPrivate: false,
+      }),
+      matches: !expected
+        ? []
+        : [
+            makeAmpResult({
+              keyword,
+              title: "Suggestion with 1-char keyword",
+              url: "http://example.com/1-char-keyword",
+              originalUrl: "http://example.com/1-char-keyword",
+            }),
+          ],
+    });
+  }
 });

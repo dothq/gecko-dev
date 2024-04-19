@@ -71,6 +71,13 @@ user-id = 6741
 user-login = "Darksonn"
 user-name = "Alice Ryhl"
 
+[[publisher.cc]]
+version = "1.0.89"
+when = "2024-03-04"
+user-id = 2915
+user-login = "Amanieu"
+user-name = "Amanieu d'Antras"
+
 [[publisher.cexpr]]
 version = "0.6.0"
 when = "2021-10-11"
@@ -212,36 +219,22 @@ user-login = "jrmuizel"
 user-name = "Jeff Muizelaar"
 
 [[publisher.glean]]
-version = "56.1.0"
-when = "2024-01-17"
-user-id = 48
-user-login = "badboy"
-user-name = "Jan-Erik Rediger"
-
-[[publisher.glean]]
-version = "57.0.0"
-when = "2024-02-12"
-user-id = 66068
-user-login = "travis79"
-user-name = "Travis Long"
-
-[[publisher.glean-core]]
-version = "56.1.0"
-when = "2024-01-17"
+version = "58.1.0"
+when = "2024-03-12"
 user-id = 48
 user-login = "badboy"
 user-name = "Jan-Erik Rediger"
 
 [[publisher.glean-core]]
-version = "57.0.0"
-when = "2024-02-12"
-user-id = 66068
-user-login = "travis79"
-user-name = "Travis Long"
+version = "58.1.0"
+when = "2024-03-12"
+user-id = 48
+user-login = "badboy"
+user-name = "Jan-Erik Rediger"
 
 [[publisher.glslopt]]
-version = "0.1.9"
-when = "2021-03-17"
+version = "0.1.10"
+when = "2024-02-13"
 user-id = 84794
 user-login = "jamienicol"
 user-name = "Jamie Nicol"
@@ -483,8 +476,8 @@ user-login = "Amanieu"
 user-name = "Amanieu d'Antras"
 
 [[publisher.serde]]
-version = "1.0.195"
-when = "2024-01-06"
+version = "1.0.197"
+when = "2024-02-20"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -497,8 +490,8 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.serde_derive]]
-version = "1.0.195"
-when = "2024-01-06"
+version = "1.0.197"
+when = "2024-02-20"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -525,8 +518,8 @@ user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.smallvec]]
-version = "1.11.1"
-when = "2023-09-20"
+version = "1.13.1"
+when = "2024-01-19"
 user-id = 2017
 user-login = "mbrubeck"
 user-name = "Matt Brubeck"
@@ -546,15 +539,15 @@ user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
 [[publisher.thiserror]]
-version = "1.0.56"
-when = "2024-01-02"
+version = "1.0.57"
+when = "2024-02-11"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
 [[publisher.thiserror-impl]]
-version = "1.0.56"
-when = "2024-01-02"
+version = "1.0.57"
+when = "2024-02-11"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
@@ -859,12 +852,6 @@ who = "Pat Hickey <phickey@fastly.com>"
 criteria = "safe-to-deploy"
 version = "0.1.2"
 notes = "no build, no ambient capabilities, no unsafe"
-
-[[audits.bytecode-alliance.audits.cc]]
-who = "Alex Crichton <alex@alexcrichton.com>"
-criteria = "safe-to-deploy"
-version = "1.0.73"
-notes = "I am the author of this crate."
 
 [[audits.bytecode-alliance.audits.cfg-if]]
 who = "Alex Crichton <alex@alexcrichton.com>"
@@ -1205,6 +1192,15 @@ criteria = "safe-to-run"
 version = "0.14.20"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
 
+[[audits.google.audits.nom]]
+who = "danakj@chromium.org"
+criteria = "safe-to-deploy"
+version = "7.1.3"
+notes = """
+Reviewed in https://chromium-review.googlesource.com/c/chromium/src/+/5046153
+"""
+aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
+
 [[audits.google.audits.pin-project]]
 who = "ChromeOS"
 criteria = "safe-to-run"
@@ -1235,6 +1231,34 @@ who = "ChromeOS"
 criteria = "safe-to-run"
 version = "0.7.1"
 aggregated-from = "https://chromium.googlesource.com/chromiumos/third_party/rust_crates/+/refs/heads/main/cargo-vet/audits.toml?format=TEXT"
+
+[[audits.google.audits.static_assertions]]
+who = "Lukasz Anforowicz <lukasza@chromium.org>"
+criteria = "safe-to-deploy"
+version = "1.1.0"
+notes = """
+Grepped for `-i cipher`, `-i crypto`, `'\bfs\b'`, `'\bnet\b'`, `'\bunsafe\b'`
+and there were no hits except for one `unsafe`.
+
+The lambda where `unsafe` is used is never invoked (e.g. the `unsafe` code
+never runs) and is only introduced for some compile-time checks.  Additional
+unsafe review comments can be found in https://crrev.com/c/5353376.
+
+This crate has been added to Chromium in https://crrev.com/c/3736562.  The CL
+description contains a link to a document with an additional security review.
+"""
+aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
+
+[[audits.google.audits.strsim]]
+who = "danakj@chromium.org"
+criteria = "safe-to-deploy"
+version = "0.10.0"
+notes = """
+Reviewed in https://crrev.com/c/5171063
+
+Previously reviewed during security review and the audit is grandparented in.
+"""
+aggregated-from = "https://chromium.googlesource.com/chromium/src/+/main/third_party/rust/chromium_crates_io/supply-chain/audits.toml?format=TEXT"
 
 [[audits.google.audits.tokio]]
 who = "Vovo Yang <vovoy@google.com>"
@@ -1296,7 +1320,7 @@ who = "David Cook <dcook@divviup.org>"
 criteria = "safe-to-deploy"
 user-id = 213776 # divviup-github-automation
 start = "2020-09-28"
-end = "2024-03-23"
+end = "2025-02-12"
 
 [[audits.isrg.audits.base64]]
 who = "Tim Geoghegan <timg@letsencrypt.org>"

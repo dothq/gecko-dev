@@ -113,6 +113,7 @@ class CurrentX11TimeGetter;
 #endif
 
 namespace widget {
+class DBusMenuBar;
 class Screen;
 }  // namespace widget
 }  // namespace mozilla
@@ -372,6 +373,10 @@ class nsWindow final : public nsBaseWidget {
   LayoutDeviceIntRect GetTitlebarRect();
   void UpdateWindowDraggingRegion(
       const LayoutDeviceIntRegion& aRegion) override;
+
+#ifdef MOZ_ENABLE_DBUS
+  void SetDBusMenuBar(RefPtr<mozilla::widget::DBusMenuBar> aDbusMenuBar);
+#endif
 
   // HiDPI scale conversion
   gint GdkCeiledScaleFactor();
@@ -654,6 +659,7 @@ class nsWindow final : public nsBaseWidget {
   bool mIsDragPopup : 1;
   bool mCompositedScreen : 1;
   bool mIsAccelerated : 1;
+  bool mIsAlert : 1;
   bool mWindowShouldStartDragging : 1;
   bool mHasMappedToplevel : 1;
   bool mRetryPointerGrab : 1;
@@ -903,6 +909,10 @@ class nsWindow final : public nsBaseWidget {
   // Next/Previous popups in Wayland popup hierarchy.
   RefPtr<nsWindow> mWaylandPopupNext;
   RefPtr<nsWindow> mWaylandPopupPrev;
+
+#ifdef MOZ_ENABLE_DBUS
+  RefPtr<mozilla::widget::DBusMenuBar> mDBusMenuBar;
+#endif
 
   // When popup is resized by Gtk by move-to-rect callback,
   // we store final popup size here. Then we use mMoveToRectPopupSize size

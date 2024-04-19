@@ -5,10 +5,12 @@
 
 #include "mozilla/layers/NativeLayerCA.h"
 
-#import <AppKit/NSAnimationContext.h>
-#import <AppKit/NSColor.h>
+#ifdef XP_MACOSX
+#  import <AppKit/NSAnimationContext.h>
+#  import <AppKit/NSColor.h>
+#  import <OpenGL/gl.h>
+#endif
 #import <AVFoundation/AVFoundation.h>
-#import <OpenGL/gl.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
@@ -19,7 +21,11 @@
 
 #include "gfxUtils.h"
 #include "GLBlitHelper.h"
-#include "GLContextCGL.h"
+#ifdef XP_MACOSX
+#  include "GLContextCGL.h"
+#else
+#  include "GLContextEAGL.h"
+#endif
 #include "GLContextProvider.h"
 #include "MozFramebuffer.h"
 #include "mozilla/gfx/Swizzle.h"
@@ -45,7 +51,9 @@ using gfx::IntSize;
 using gfx::Matrix4x4;
 using gfx::SurfaceFormat;
 using gl::GLContext;
+#ifdef XP_MACOSX
 using gl::GLContextCGL;
+#endif
 
 static Maybe<Telemetry::LABELS_GFX_MACOS_VIDEO_LOW_POWER>
 VideoLowPowerTypeToTelemetryType(VideoLowPowerType aVideoLowPower) {
@@ -150,13 +158,23 @@ class AsyncReadbackBufferNLRS
 // protection, see bug 1585523.
 struct MOZ_STACK_CLASS AutoCATransaction final {
   AutoCATransaction() {
+#ifdef XP_MACOSX
     [NSAnimationContext beginGrouping];
+#else
+    [CATransaction begin];
+#endif
     // By default, mutating a CALayer property triggers an animation which
     // smoothly transitions the property to the new value. We don't need these
     // animations, and this call turns them off:
     [CATransaction setDisableActions:YES];
   }
-  ~AutoCATransaction() { [NSAnimationContext endGrouping]; }
+  ~AutoCATransaction() {
+#ifdef XP_MACOSX
+    [NSAnimationContext endGrouping];
+#else
+    [CATransaction commit];
+#endif
+  }
 };
 
 /* static */ already_AddRefed<NativeLayerRootCA>
@@ -178,9 +196,9 @@ static CALayer* MakeOffscreenRootCALayer() {
   // down).
   AutoCATransaction transaction;
   CALayer* layer = [CALayer layer];
-  layer.position = NSZeroPoint;
-  layer.bounds = NSZeroRect;
-  layer.anchorPoint = NSZeroPoint;
+  layer.position = CGPointZero;
+  layer.bounds = CGRectZero;
+  layer.anchorPoint = CGPointZero;
   layer.contentsGravity = kCAGravityTopLeft;
   layer.masksToBounds = YES;
   layer.geometryFlipped = YES;
@@ -226,6 +244,7 @@ void NativeLayerRootCA::AppendLayer(NativeLayer* aLayer) {
 
   mSublayers.AppendElement(layerCA);
   layerCA->SetBackingScale(mBackingScale);
+  layerCA->SetRootWindowIsFullscreen(mWindowIsFullscreen);
   ForAllRepresentations(
       [&](Representation& r) { r.mMutatedLayerStructure = true; });
 }
@@ -257,6 +276,7 @@ void NativeLayerRootCA::SetLayers(
     RefPtr<NativeLayerCA> layerCA = layer->AsNativeLayerCA();
     MOZ_RELEASE_ASSERT(layerCA);
     layerCA->SetBackingScale(mBackingScale);
+    layerCA->SetRootWindowIsFullscreen(mWindowIsFullscreen);
     layersCA.AppendElement(std::move(layerCA));
   }
 
@@ -306,47 +326,48 @@ bool NativeLayerRootCA::CommitToScreen() {
       return false;
     }
 
-    mOnscreenRepresentation.Commit(WhichRepresentation::ONSCREEN, mSublayers);
+    mOnscreenRepresentation.Commit(WhichRepresentation::ONSCREEN, mSublayers,
+                                   mWindowIsFullscreen);
 
     mCommitPending = false;
+  }
 
-    if (StaticPrefs::gfx_webrender_debug_dump_native_layer_tree_to_file()) {
-      static uint32_t sFrameID = 0;
-      uint32_t frameID = sFrameID++;
+  if (StaticPrefs::gfx_webrender_debug_dump_native_layer_tree_to_file()) {
+    static uint32_t sFrameID = 0;
+    uint32_t frameID = sFrameID++;
 
-      NSString* dirPath =
-          [NSString stringWithFormat:@"%@/Desktop/nativelayerdumps-%d",
-                                     NSHomeDirectory(), getpid()];
-      if ([NSFileManager.defaultManager createDirectoryAtPath:dirPath
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:nullptr]) {
-        NSString* filename =
-            [NSString stringWithFormat:@"frame-%d.html", frameID];
-        NSString* filePath = [dirPath stringByAppendingPathComponent:filename];
-        DumpLayerTreeToFile([filePath UTF8String]);
-      } else {
-        NSLog(@"Failed to create directory %@", dirPath);
-      }
+    NSString* dirPath =
+        [NSString stringWithFormat:@"%@/Desktop/nativelayerdumps-%d",
+                                   NSHomeDirectory(), getpid()];
+    if ([NSFileManager.defaultManager createDirectoryAtPath:dirPath
+                                withIntermediateDirectories:YES
+                                                 attributes:nil
+                                                      error:nullptr]) {
+      NSString* filename =
+          [NSString stringWithFormat:@"frame-%d.html", frameID];
+      NSString* filePath = [dirPath stringByAppendingPathComponent:filename];
+      DumpLayerTreeToFile([filePath UTF8String]);
+    } else {
+      NSLog(@"Failed to create directory %@", dirPath);
     }
+  }
 
-    // Decide if we are going to emit telemetry about video low power on this
-    // commit.
-    static const int32_t TELEMETRY_COMMIT_PERIOD =
-        StaticPrefs::gfx_core_animation_low_power_telemetry_frames_AtStartup();
-    mTelemetryCommitCount =
-        (mTelemetryCommitCount + 1) % TELEMETRY_COMMIT_PERIOD;
-    if (mTelemetryCommitCount == 0) {
-      // Figure out if we are hitting video low power mode.
-      VideoLowPowerType videoLowPower = CheckVideoLowPower(lock);
-      EmitTelemetryForVideoLowPower(videoLowPower);
-    }
+  // Decide if we are going to emit telemetry about video low power on this
+  // commit.
+  static const int32_t TELEMETRY_COMMIT_PERIOD =
+      StaticPrefs::gfx_core_animation_low_power_telemetry_frames_AtStartup();
+  mTelemetryCommitCount = (mTelemetryCommitCount + 1) % TELEMETRY_COMMIT_PERIOD;
+  if (mTelemetryCommitCount == 0) {
+    // Figure out if we are hitting video low power mode.
+    VideoLowPowerType videoLowPower = CheckVideoLowPower();
+    EmitTelemetryForVideoLowPower(videoLowPower);
   }
 
   return true;
 }
 
 UniquePtr<NativeLayerRootSnapshotter> NativeLayerRootCA::CreateSnapshotter() {
+#ifdef XP_MACOSX
   MutexAutoLock lock(mMutex);
   MOZ_RELEASE_ASSERT(!mWeakSnapshotter,
                      "No NativeLayerRootSnapshotter for this NativeLayerRoot "
@@ -358,18 +379,24 @@ UniquePtr<NativeLayerRootSnapshotter> NativeLayerRootCA::CreateSnapshotter() {
     mWeakSnapshotter = cr.get();
   }
   return cr;
+#else
+  return nullptr;
+#endif
 }
 
+#ifdef XP_MACOSX
 void NativeLayerRootCA::OnNativeLayerRootSnapshotterDestroyed(
     NativeLayerRootSnapshotterCA* aNativeLayerRootSnapshotter) {
   MutexAutoLock lock(mMutex);
   MOZ_RELEASE_ASSERT(mWeakSnapshotter == aNativeLayerRootSnapshotter);
   mWeakSnapshotter = nullptr;
 }
+#endif
 
 void NativeLayerRootCA::CommitOffscreen() {
   MutexAutoLock lock(mMutex);
-  mOffscreenRepresentation.Commit(WhichRepresentation::OFFSCREEN, mSublayers);
+  mOffscreenRepresentation.Commit(WhichRepresentation::OFFSCREEN, mSublayers,
+                                  mWindowIsFullscreen);
 }
 
 template <typename F>
@@ -394,7 +421,8 @@ NativeLayerRootCA::Representation::~Representation() {
 
 void NativeLayerRootCA::Representation::Commit(
     WhichRepresentation aRepresentation,
-    const nsTArray<RefPtr<NativeLayerCA>>& aSublayers) {
+    const nsTArray<RefPtr<NativeLayerCA>>& aSublayers,
+    bool aWindowIsFullscreen) {
   bool mustRebuild = mMutatedLayerStructure;
   if (!mustRebuild) {
     // Check which type of update we need to do, if any.
@@ -439,7 +467,7 @@ void NativeLayerRootCA::Representation::Commit(
     mustRebuild |= layer->WillUpdateAffectLayers(aRepresentation);
     layer->ApplyChanges(aRepresentation, NativeLayerCA::UpdateType::All);
     CALayer* caLayer = layer->UnderlyingCALayer(aRepresentation);
-    if (!caLayer.masksToBounds || !NSIsEmptyRect(caLayer.bounds)) {
+    if (!caLayer.masksToBounds || !CGRectIsEmpty(caLayer.bounds)) {
       // This layer has an extent. If it didn't before, we need to rebuild.
       mustRebuild |= !layer->HasExtent();
       layer->SetHasExtent(true);
@@ -472,6 +500,7 @@ void NativeLayerRootCA::Representation::Commit(
   mMutatedLayerStructure = false;
 }
 
+#ifdef XP_MACOSX
 /* static */ UniquePtr<NativeLayerRootSnapshotterCA>
 NativeLayerRootSnapshotterCA::Create(NativeLayerRootCA* aLayerRoot,
                                      CALayer* aRootCALayer) {
@@ -498,6 +527,7 @@ NativeLayerRootSnapshotterCA::Create(NativeLayerRootCA* aLayerRoot,
       new NativeLayerRootSnapshotterCA(aLayerRoot, std::move(gl),
                                        aRootCALayer));
 }
+#endif
 
 void NativeLayerRootCA::DumpLayerTreeToFile(const char* aPath) {
   MutexAutoLock lock(mMutex);
@@ -519,7 +549,15 @@ void NativeLayerRootCA::DumpLayerTreeToFile(const char* aPath) {
 }
 
 void NativeLayerRootCA::SetWindowIsFullscreen(bool aFullscreen) {
-  mWindowIsFullscreen = aFullscreen;
+  MutexAutoLock lock(mMutex);
+
+  if (mWindowIsFullscreen != aFullscreen) {
+    mWindowIsFullscreen = aFullscreen;
+
+    for (auto layer : mSublayers) {
+      layer->SetRootWindowIsFullscreen(mWindowIsFullscreen);
+    }
+  }
 }
 
 /* static */ bool IsCGColorOpaqueBlack(CGColorRef aColor) {
@@ -541,8 +579,7 @@ void NativeLayerRootCA::SetWindowIsFullscreen(bool aFullscreen) {
   return components[componentCount - 1] >= 1.0f;
 }
 
-VideoLowPowerType NativeLayerRootCA::CheckVideoLowPower(
-    const MutexAutoLock& aProofOfLock) {
+VideoLowPowerType NativeLayerRootCA::CheckVideoLowPower() {
   // This deteremines whether the current layer contents qualify for the
   // macOS Core Animation video low power mode. Those requirements are
   // summarized at
@@ -572,7 +609,7 @@ VideoLowPowerType NativeLayerRootCA::CheckVideoLowPower(
 
       secondCALayer = topCALayer;
       topCALayer = topLayer->UnderlyingCALayer(WhichRepresentation::ONSCREEN);
-      topLayerIsVideo = topLayer->IsVideo(aProofOfLock);
+      topLayerIsVideo = topLayer->IsVideo();
       if (topLayerIsVideo) {
         ++videoLayerCount;
       }
@@ -641,6 +678,7 @@ VideoLowPowerType NativeLayerRootCA::CheckVideoLowPower(
   return VideoLowPowerType::LowPower;
 }
 
+#ifdef XP_MACOSX
 NativeLayerRootSnapshotterCA::NativeLayerRootSnapshotterCA(
     NativeLayerRootCA* aLayerRoot, RefPtr<GLContext>&& aGL,
     CALayer* aRootCALayer)
@@ -779,6 +817,7 @@ NativeLayerRootSnapshotterCA::CreateAsyncReadbackBuffer(const IntSize& aSize) {
                    LOCAL_GL_STREAM_READ);
   return MakeAndAddRef<AsyncReadbackBufferNLRS>(mGL, aSize, bufferHandle);
 }
+#endif
 
 NativeLayerCA::NativeLayerCA(const IntSize& aSize, bool aIsOpaque,
                              SurfacePoolHandleCA* aSurfacePoolHandle)
@@ -796,8 +835,9 @@ NativeLayerCA::NativeLayerCA(bool aIsOpaque)
       mIsOpaque(aIsOpaque) {
 #ifdef NIGHTLY_BUILD
   if (StaticPrefs::gfx_core_animation_specialize_video_log()) {
-    NSLog(@"VIDEO_LOG: NativeLayerCA: %p is being created to host an external "
-          @"image, which may force a video layer rebuild.",
+    NSLog(@"VIDEO_LOG: NativeLayerCA: %p is being created to host video, which "
+          @"will force a video "
+          @"layer rebuild.",
           this);
   }
 #endif
@@ -824,7 +864,7 @@ NativeLayerCA::~NativeLayerCA() {
   if (mHasEverAttachExternalImage &&
       StaticPrefs::gfx_core_animation_specialize_video_log()) {
     NSLog(@"VIDEO_LOG: ~NativeLayerCA: %p is being destroyed after hosting "
-          @"an external image.",
+          @"video.",
           this);
   }
 #endif
@@ -862,9 +902,6 @@ void NativeLayerCA::AttachExternalImage(wr::RenderTextureHost* aExternalImage) {
     return;
   }
 
-  // Determine if TextureHost is a video surface.
-  mIsTextureHostVideo = gfx::Info(mTextureHost->GetFormat())->isYuv;
-
   gfx::IntSize oldSize = mSize;
   mSize = texture->GetSize(0);
   bool changedSizeAndDisplayRect = (mSize != oldSize);
@@ -896,15 +933,18 @@ void NativeLayerCA::AttachExternalImage(wr::RenderTextureHost* aExternalImage) {
   });
 }
 
-bool NativeLayerCA::IsVideo(const MutexAutoLock& aProofOfLock) {
-  // If we have a texture host, we've checked to see if it's providing video.
-  // And if we don't have a texture host, it isn't video, so we just check
-  // the value we've computed.
-  return mIsTextureHostVideo;
+bool NativeLayerCA::IsVideo() {
+  // Anything with a texture host is considered a video source.
+  return mTextureHost;
+}
+
+bool NativeLayerCA::IsVideoAndLocked(const MutexAutoLock& aProofOfLock) {
+  // Anything with a texture host is considered a video source.
+  return mTextureHost;
 }
 
 bool NativeLayerCA::ShouldSpecializeVideo(const MutexAutoLock& aProofOfLock) {
-  if (!IsVideo(aProofOfLock)) {
+  if (!IsVideoAndLocked(aProofOfLock)) {
     // Only videos are eligible.
     return false;
   }
@@ -934,7 +974,49 @@ bool NativeLayerCA::ShouldSpecializeVideo(const MutexAutoLock& aProofOfLock) {
     return true;
   }
 
-  return StaticPrefs::gfx_core_animation_specialize_video();
+  // Beyond this point, we return true if-and-only-if we think we can achieve
+  // the power-saving "detached mode" of the macOS compositor.
+
+  if (!StaticPrefs::gfx_core_animation_specialize_video()) {
+    // Pref must be set.
+    return false;
+  }
+
+  if (pixelFormat != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+      pixelFormat != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
+    // The video is not in one of the formats that qualifies for detachment.
+    return false;
+  }
+
+  // It will only detach if we're fullscreen.
+  return mRootWindowIsFullscreen;
+}
+
+void NativeLayerCA::SetRootWindowIsFullscreen(bool aFullscreen) {
+  if (mRootWindowIsFullscreen == aFullscreen) {
+    return;
+  }
+
+  MutexAutoLock lock(mMutex);
+
+  mRootWindowIsFullscreen = aFullscreen;
+
+  bool oldSpecializeVideo = mSpecializeVideo;
+  mSpecializeVideo = ShouldSpecializeVideo(lock);
+  bool changedSpecializeVideo = (mSpecializeVideo != oldSpecializeVideo);
+
+  if (changedSpecializeVideo) {
+#ifdef NIGHTLY_BUILD
+    if (StaticPrefs::gfx_core_animation_specialize_video_log()) {
+      NSLog(@"VIDEO_LOG: SetRootWindowIsFullscreen: %p is forcing a video "
+            @"layer rebuild.",
+            this);
+    }
+#endif
+
+    ForAllRepresentations(
+        [&](Representation& r) { r.mMutatedSpecializeVideo = true; });
+  }
 }
 
 void NativeLayerCA::SetSurfaceIsFlipped(bool aIsFlipped) {
@@ -1328,8 +1410,6 @@ void NativeLayerCA::NotifySurfaceReady() {
       mInProgressSurface,
       "NotifySurfaceReady called without preceding call to NextSurface");
 
-  mIsTextureHostVideo = false;
-
   if (mInProgressLockedIOSurface) {
     mInProgressLockedIOSurface->Unlock(false);
     mInProgressLockedIOSurface = nullptr;
@@ -1385,7 +1465,7 @@ void NativeLayerCA::ForAllRepresentations(F aFn) {
 NativeLayerCA::UpdateType NativeLayerCA::HasUpdate(
     WhichRepresentation aRepresentation) {
   MutexAutoLock lock(mMutex);
-  return GetRepresentation(aRepresentation).HasUpdate(IsVideo(lock));
+  return GetRepresentation(aRepresentation).HasUpdate(IsVideoAndLocked(lock));
 }
 
 /* static */
@@ -1430,7 +1510,7 @@ bool NativeLayerCA::ApplyChanges(WhichRepresentation aRepresentation,
       .ApplyChanges(aUpdate, mSize, mIsOpaque, mPosition, mTransform,
                     mDisplayRect, mClipRect, mBackingScale, mSurfaceIsFlipped,
                     mSamplingFilter, mSpecializeVideo, surface, mColor, mIsDRM,
-                    IsVideo(lock));
+                    IsVideo());
 }
 
 CALayer* NativeLayerCA::UnderlyingCALayer(WhichRepresentation aRepresentation) {
@@ -1457,8 +1537,10 @@ static NSString* NSStringForOSType(OSType type) {
   CFRelease(surfaceValues);
 
   if (aBuffer) {
+#ifdef XP_MACOSX
     CGColorSpaceRef colorSpace = CVImageBufferGetColorSpace(aBuffer);
     NSLog(@"ColorSpace is %@.\n", colorSpace);
+#endif
 
     CFDictionaryRef bufferAttachments =
         CVBufferGetAttachments(aBuffer, kCVAttachmentMode_ShouldPropagate);
@@ -1512,7 +1594,7 @@ bool NativeLayerCA::Representation::EnqueueSurface(IOSurfaceRef aSurfaceRef) {
     return false;
   }
 
-#ifdef NIGHTLY_BUILD
+#if defined(NIGHTLY_BUILD) && defined(XP_MACOSX)
   if (StaticPrefs::gfx_core_animation_specialize_video_check_color_space()) {
     // Ensure the resulting pixel buffer has a color space. If it doesn't, then
     // modify the surface and create the buffer again.
@@ -1764,10 +1846,10 @@ bool NativeLayerCA::Representation::ApplyChanges(
     mOpaquenessTintLayer.contentsGravity = kCAGravityTopLeft;
     if (aIsOpaque) {
       mOpaquenessTintLayer.backgroundColor =
-          [[[NSColor greenColor] colorWithAlphaComponent:0.5] CGColor];
+          CGColorCreateGenericRGB(0, 1, 0, 0.5);
     } else {
       mOpaquenessTintLayer.backgroundColor =
-          [[[NSColor redColor] colorWithAlphaComponent:0.5] CGColor];
+          CGColorCreateGenericRGB(1, 0, 0, 0.5);
     }
     [mWrappingCALayer addSublayer:mOpaquenessTintLayer];
   } else if (!shouldTintOpaqueness && mOpaquenessTintLayer) {

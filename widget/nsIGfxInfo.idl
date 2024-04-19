@@ -19,6 +19,8 @@ interface nsIGfxInfo : nsISupports
   readonly attribute AString AzureCanvasBackend;
   readonly attribute AString AzureContentBackend;
   readonly attribute boolean usingGPUProcess;
+  readonly attribute boolean usingRemoteCanvas;
+  readonly attribute boolean usingAcceleratedCanvas;
   readonly attribute boolean hasBattery;
   readonly attribute AString DWriteVersion;
   readonly attribute AString cleartypeParameters;
@@ -215,8 +217,12 @@ interface nsIGfxInfo : nsISupports
   const long FEATURE_VIDEO_SOFTWARE_OVERLAY = 46;
   /* Whether WebGL is allowed to use hardware rendering, otherwise software fallbacks. */
   const long FEATURE_WEBGL_USE_HARDWARE = 47;
+  /* Whether overlay is allowed to VideoProcessor-HDR on SDR content */
+  const long FEATURE_OVERLAY_VP_AUTO_HDR = 48;
+  /* Whether overlay is allowed to VideoProcessor Super Resolution */
+  const long FEATURE_OVERLAY_VP_SUPER_RESOLUTION = 49;
   /* the maximum feature value. */
-  const long FEATURE_MAX_VALUE = FEATURE_WEBGL_USE_HARDWARE;
+  const long FEATURE_MAX_VALUE = FEATURE_OVERLAY_VP_SUPER_RESOLUTION;
 
   /*
    * A set of return values from GetFeatureStatus

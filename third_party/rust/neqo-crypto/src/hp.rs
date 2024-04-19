@@ -6,7 +6,6 @@
 
 use std::{
     cell::RefCell,
-    convert::TryFrom,
     fmt::{self, Debug},
     os::raw::{c_char, c_int, c_uint},
     ptr::{addr_of_mut, null, null_mut},
@@ -46,7 +45,7 @@ pub enum HpKey {
     /// track references using `Rc`.  `PK11Context` can't be used with `PK11_CloneContext`
     /// as that is not supported for these contexts.
     Aes(Rc<RefCell<Context>>),
-    /// The ChaCha20 mask has to invoke a new PK11_Encrypt every time as it needs to
+    /// The `ChaCha20` mask has to invoke a new `PK11_Encrypt` every time as it needs to
     /// change the counter and nonce on each invocation.
     Chacha(SymKey),
 }
@@ -76,7 +75,6 @@ impl HpKey {
         let l = label.as_bytes();
         let mut secret: *mut PK11SymKey = null_mut();
 
-        #[allow(clippy::useless_conversion)] // TODO: Remove when we bump the MSRV to 1.74.0.
         let (mech, key_size) = match cipher {
             TLS_AES_128_GCM_SHA256 => (CK_MECHANISM_TYPE::from(CKM_AES_ECB), 16),
             TLS_AES_256_GCM_SHA384 => (CK_MECHANISM_TYPE::from(CKM_AES_ECB), 32),
@@ -104,8 +102,6 @@ impl HpKey {
 
         let res = match cipher {
             TLS_AES_128_GCM_SHA256 | TLS_AES_256_GCM_SHA384 => {
-                // TODO: Remove when we bump the MSRV to 1.74.0.
-                #[allow(clippy::useless_conversion)]
                 let context_ptr = unsafe {
                     PK11_CreateContextBySymKey(
                         mech,
@@ -181,8 +177,6 @@ impl HpKey {
                 };
                 let mut output_len: c_uint = 0;
                 let mut param_item = Item::wrap_struct(&params);
-                // TODO: Remove when we bump the MSRV to 1.74.0.
-                #[allow(clippy::useless_conversion)]
                 secstatus_to_res(unsafe {
                     PK11_Encrypt(
                         **key,

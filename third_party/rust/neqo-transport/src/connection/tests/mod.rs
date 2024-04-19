@@ -4,12 +4,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![deny(clippy::pedantic)]
-
 use std::{
     cell::RefCell,
     cmp::min,
-    convert::TryFrom,
     mem,
     rc::Rc,
     time::{Duration, Instant},
@@ -18,7 +15,7 @@ use std::{
 use enum_map::enum_map;
 use neqo_common::{event::Provider, qdebug, qtrace, Datagram, Decoder, Role};
 use neqo_crypto::{random, AllowZeroRtt, AuthenticationStatus, ResumptionToken};
-use test_fixture::{self, addr, fixture_init, new_neqo_qlog, now};
+use test_fixture::{fixture_init, new_neqo_qlog, now, DEFAULT_ADDR};
 
 use super::{Connection, ConnectionError, ConnectionId, Output, State};
 use crate::{
@@ -79,7 +76,7 @@ impl ConnectionIdDecoder for CountingConnectionIdGenerator {
 
 impl ConnectionIdGenerator for CountingConnectionIdGenerator {
     fn generate_cid(&mut self) -> Option<ConnectionId> {
-        let mut r = random(20);
+        let mut r = random::<20>();
         r[0] = 8;
         r[1] = u8::try_from(self.counter >> 24).unwrap();
         r[2] = u8::try_from((self.counter >> 16) & 0xff).unwrap();
@@ -107,8 +104,8 @@ pub fn new_client(params: ConnectionParameters) -> Connection {
         test_fixture::DEFAULT_SERVER_NAME,
         test_fixture::DEFAULT_ALPN,
         Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
-        addr(),
-        addr(),
+        DEFAULT_ADDR,
+        DEFAULT_ADDR,
         params,
         now(),
     )
@@ -278,7 +275,7 @@ fn exchange_ticket(
 ) -> ResumptionToken {
     let validation = AddressValidation::new(now, ValidateAddress::NoToken).unwrap();
     let validation = Rc::new(RefCell::new(validation));
-    server.set_validation(Rc::clone(&validation));
+    server.set_validation(&validation);
     server.send_ticket(now, &[]).expect("can send ticket");
     let ticket = server.process_output(now).dgram();
     assert!(ticket.is_some());

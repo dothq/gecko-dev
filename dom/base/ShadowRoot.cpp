@@ -4,7 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/Preferences.h"
 #include "mozilla/dom/BindContext.h"
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/dom/DocumentFragment.h"
@@ -17,8 +16,10 @@
 #include "mozilla/dom/HTMLDetailsElement.h"
 #include "mozilla/dom/HTMLSlotElement.h"
 #include "mozilla/dom/HTMLSummaryElement.h"
+#include "mozilla/dom/MutationObservers.h"
 #include "mozilla/dom/Text.h"
 #include "mozilla/dom/TreeOrderedArrayInlines.h"
+#include "mozilla/dom/UnbindContext.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/IdentifierMapEntry.h"
 #include "mozilla/PresShell.h"
@@ -26,7 +27,6 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/ServoStyleRuleMap.h"
 #include "mozilla/StyleSheet.h"
-#include "mozilla/StyleSheetInlines.h"
 #include "mozilla/dom/StyleSheetList.h"
 
 using namespace mozilla;
@@ -184,10 +184,13 @@ void ShadowRoot::Unbind() {
     OwnerDoc()->RemoveComposedDocShadowRoot(*this);
   }
 
+  UnbindContext context(*this);
   for (nsIContent* child = GetFirstChild(); child;
        child = child->GetNextSibling()) {
-    child->UnbindFromTree(false);
+    child->UnbindFromTree(context);
   }
+
+  MutationObservers::NotifyParentChainChanged(this);
 }
 
 void ShadowRoot::Unattach() {

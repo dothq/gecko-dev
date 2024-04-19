@@ -13604,36 +13604,32 @@ if (IsCSSPropertyPrefEnabled("layout.css.backdrop-filter.enabled")) {
   };
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.math-depth.enabled")) {
-  gCSSProperties["math-depth"] = {
-    domProp: "mathDepth",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: ["0"],
-    other_values: [
-      // auto-add cannot be tested here because it has no effect when the
-      // inherited math-style is equal to the default (normal).
-      "123",
-      "-123",
-      "add(123)",
-      "add(-123)",
-      "calc(1 + 2*3)",
-      "add(calc(4 - 2/3))",
-    ],
-    invalid_values: ["auto", "1,23", "1.23", "add(1,23)", "add(1.23)"],
-  };
-}
+gCSSProperties["math-depth"] = {
+  domProp: "mathDepth",
+  inherited: true,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: ["0"],
+  other_values: [
+    // auto-add cannot be tested here because it has no effect when the
+    // inherited math-style is equal to the default (normal).
+    "123",
+    "-123",
+    "add(123)",
+    "add(-123)",
+    "calc(1 + 2*3)",
+    "add(calc(4 - 2/3))",
+  ],
+  invalid_values: ["auto", "1,23", "1.23", "add(1,23)", "add(1.23)"],
+};
 
-if (IsCSSPropertyPrefEnabled("layout.css.math-style.enabled")) {
-  gCSSProperties["math-style"] = {
-    domProp: "mathStyle",
-    inherited: true,
-    type: CSS_TYPE_LONGHAND,
-    initial_values: ["normal"],
-    other_values: ["compact"],
-    invalid_values: [],
-  };
-}
+gCSSProperties["math-style"] = {
+  domProp: "mathStyle",
+  inherited: true,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: ["normal"],
+  other_values: ["compact"],
+  invalid_values: [],
+};
 
 if (IsCSSPropertyPrefEnabled("layout.css.forced-color-adjust.enabled")) {
   gCSSProperties["forced-color-adjust"] = {
@@ -14086,6 +14082,36 @@ if (IsCSSPropertyPrefEnabled("layout.css.prefixes.transitions")) {
       subproperties: ["transition-timing-function"],
     },
   });
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.transition-behavior.enabled")) {
+  Object.assign(gCSSProperties, {
+    "transition-behavior": {
+      domProp: "transitionBehavior",
+      inherited: false,
+      type: CSS_TYPE_LONGHAND,
+      applies_to_marker: true,
+      initial_values: ["normal"],
+      other_values: ["allow-discrete"],
+      invalid_values: ["none", "auto", "discrete"],
+    },
+  });
+
+  gCSSProperties["transition"].subproperties.push("transition-behavior");
+  gCSSProperties["transition"].initial_values.push("normal");
+  gCSSProperties["transition"].other_values.push(
+    "allow-discrete",
+    "width allow-discrete",
+    "1s allow-discrete",
+    "linear allow-discrete"
+  );
+  gCSSProperties["-webkit-transition"].subproperties.push(
+    "transition-behavior"
+  );
+
+  if (IsCSSPropertyPrefEnabled("layout.css.prefixes.transitions")) {
+    gCSSProperties["-moz-transition"].subproperties.push("transition-behavior");
+  }
 }
 
 // Copy aliased properties' fields from their alias targets. Keep this logic

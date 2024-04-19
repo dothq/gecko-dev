@@ -2167,8 +2167,8 @@ class CreateDependentString {
     NotInlineString,
     Count
   };
-  mozilla::EnumeratedArray<FallbackKind, FallbackKind::Count, Label> fallbacks_,
-      joins_;
+  mozilla::EnumeratedArray<FallbackKind, Label, size_t(FallbackKind::Count)>
+      fallbacks_, joins_;
 
  public:
   CreateDependentString(CharEncoding encoding, Register string, Register temp1,
@@ -4629,6 +4629,17 @@ void CodeGenerator::visitGuardIsFixedLengthTypedArray(
   Label bail;
   masm.loadObjClassUnsafe(obj, temp);
   masm.branchIfClassIsNotFixedLengthTypedArray(temp, &bail);
+  bailoutFrom(&bail, guard->snapshot());
+}
+
+void CodeGenerator::visitGuardIsResizableTypedArray(
+    LGuardIsResizableTypedArray* guard) {
+  Register obj = ToRegister(guard->input());
+  Register temp = ToRegister(guard->temp0());
+
+  Label bail;
+  masm.loadObjClassUnsafe(obj, temp);
+  masm.branchIfClassIsNotResizableTypedArray(temp, &bail);
   bailoutFrom(&bail, guard->snapshot());
 }
 
@@ -9658,6 +9669,68 @@ void CodeGenerator::visitTypedArrayElementSize(LTypedArrayElementSize* lir) {
   Register out = ToRegister(lir->output());
 
   masm.typedArrayElementSize(obj, out);
+}
+
+void CodeGenerator::visitResizableTypedArrayByteOffsetMaybeOutOfBounds(
+    LResizableTypedArrayByteOffsetMaybeOutOfBounds* lir) {
+  Register obj = ToRegister(lir->object());
+  Register out = ToRegister(lir->output());
+  Register temp = ToRegister(lir->temp0());
+
+  masm.loadResizableTypedArrayByteOffsetMaybeOutOfBoundsIntPtr(obj, out, temp);
+}
+
+void CodeGenerator::visitResizableTypedArrayLength(
+    LResizableTypedArrayLength* lir) {
+  Register obj = ToRegister(lir->object());
+  Register out = ToRegister(lir->output());
+  Register temp = ToRegister(lir->temp0());
+
+  masm.loadResizableTypedArrayLengthIntPtr(lir->synchronization(), obj, out,
+                                           temp);
+}
+
+void CodeGenerator::visitResizableDataViewByteLength(
+    LResizableDataViewByteLength* lir) {
+  Register obj = ToRegister(lir->object());
+  Register out = ToRegister(lir->output());
+  Register temp = ToRegister(lir->temp0());
+
+  masm.loadResizableDataViewByteLengthIntPtr(lir->synchronization(), obj, out,
+                                             temp);
+}
+
+void CodeGenerator::visitGrowableSharedArrayBufferByteLength(
+    LGrowableSharedArrayBufferByteLength* lir) {
+  Register obj = ToRegister(lir->object());
+  Register out = ToRegister(lir->output());
+
+  // Explicit |byteLength| accesses are seq-consistent atomic loads.
+  auto sync = Synchronization::Load();
+
+  masm.loadGrowableSharedArrayBufferByteLengthIntPtr(sync, obj, out);
+}
+
+void CodeGenerator::visitGuardResizableArrayBufferViewInBounds(
+    LGuardResizableArrayBufferViewInBounds* lir) {
+  Register obj = ToRegister(lir->object());
+  Register temp = ToRegister(lir->temp0());
+
+  Label bail;
+  masm.branchIfResizableArrayBufferViewOutOfBounds(obj, temp, &bail);
+  bailoutFrom(&bail, lir->snapshot());
+}
+
+void CodeGenerator::visitGuardResizableArrayBufferViewInBoundsOrDetached(
+    LGuardResizableArrayBufferViewInBoundsOrDetached* lir) {
+  Register obj = ToRegister(lir->object());
+  Register temp = ToRegister(lir->temp0());
+
+  Label done, bail;
+  masm.branchIfResizableArrayBufferViewInBounds(obj, temp, &done);
+  masm.branchIfHasAttachedArrayBuffer(obj, temp, &bail);
+  masm.bind(&done);
+  bailoutFrom(&bail, lir->snapshot());
 }
 
 void CodeGenerator::visitGuardHasAttachedArrayBuffer(
@@ -15039,15 +15112,19 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
   // REG DUMP AREA, if any.
   size_t regDumpWords = 0;
   const LiveGeneralRegisterSet wasmAnyRefRegs = safepoint.wasmAnyRefRegs();
-  GeneralRegisterForwardIterator wasmAnyRefRegsIter(wasmAnyRefRegs);
+  const LiveGeneralRegisterSet slotsOrElementsRegs =
+      safepoint.slotsOrElementsRegs();
+  const LiveGeneralRegisterSet refRegs(GeneralRegisterSet::Union(
+      wasmAnyRefRegs.set(), slotsOrElementsRegs.set()));
+  GeneralRegisterForwardIterator refRegsIter(refRegs);
   switch (safepoint.wasmSafepointKind()) {
     case WasmSafepointKind::LirCall:
     case WasmSafepointKind::CodegenCall: {
       size_t spilledNumWords = nRegisterDumpBytes / sizeof(void*);
       regDumpWords += spilledNumWords;
 
-      for (; wasmAnyRefRegsIter.more(); ++wasmAnyRefRegsIter) {
-        Register reg = *wasmAnyRefRegsIter;
+      for (; refRegsIter.more(); ++refRegsIter) {
+        Register reg = *refRegsIter;
         size_t offsetFromSpillBase =
             safepoint.liveRegs().gprs().offsetOfPushedRegister(reg) /
             sizeof(void*);
@@ -15055,9 +15132,13 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
                    offsetFromSpillBase <= spilledNumWords);
         size_t index = spilledNumWords - offsetFromSpillBase;
 
-        stackMap->set(index, wasm::StackMap::AnyRef);
+        if (wasmAnyRefRegs.has(reg)) {
+          stackMap->set(index, wasm::StackMap::AnyRef);
+        } else {
+          MOZ_ASSERT(slotsOrElementsRegs.has(reg));
+          stackMap->set(index, wasm::StackMap::ArrayDataPointer);
+        }
       }
-
       // Float and vector registers do not have to be handled; they cannot
       // contain wasm anyrefs, and they are spilled after general-purpose
       // registers. Gprs are therefore closest to the spill base and thus their
@@ -15066,8 +15147,8 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
     case WasmSafepointKind::Trap: {
       regDumpWords += trapExitLayoutNumWords;
 
-      for (; wasmAnyRefRegsIter.more(); ++wasmAnyRefRegsIter) {
-        Register reg = *wasmAnyRefRegsIter;
+      for (; refRegsIter.more(); ++refRegsIter) {
+        Register reg = *refRegsIter;
         size_t offsetFromTop = trapExitLayout.getOffset(reg);
 
         // If this doesn't hold, the associated register wasn't saved by
@@ -15080,7 +15161,12 @@ static bool CreateStackMapFromLSafepoint(LSafepoint& safepoint,
         // offset up from the bottom of the (integer register) save area.
         size_t offsetFromBottom = trapExitLayoutNumWords - 1 - offsetFromTop;
 
-        stackMap->set(offsetFromBottom, wasm::StackMap::AnyRef);
+        if (wasmAnyRefRegs.has(reg)) {
+          stackMap->set(offsetFromBottom, wasm::StackMap::AnyRef);
+        } else {
+          MOZ_ASSERT(slotsOrElementsRegs.has(reg));
+          stackMap->set(offsetFromBottom, wasm::StackMap::ArrayDataPointer);
+        }
       }
     } break;
     default:
@@ -17263,25 +17349,20 @@ void CodeGenerator::visitLoadDataViewElement(LLoadDataViewElement* lir) {
 
 void CodeGenerator::visitLoadTypedArrayElementHole(
     LLoadTypedArrayElementHole* lir) {
-  Register object = ToRegister(lir->object());
+  Register elements = ToRegister(lir->elements());
+  Register index = ToRegister(lir->index());
+  Register length = ToRegister(lir->length());
   const ValueOperand out = ToOutValue(lir);
 
-  // Load the length.
   Register scratch = out.scratchReg();
-  Register scratch2 = ToRegister(lir->temp0());
-  Register index = ToRegister(lir->index());
-  masm.loadArrayBufferViewLengthIntPtr(object, scratch);
 
   // Load undefined if index >= length.
   Label outOfBounds, done;
-  masm.spectreBoundsCheckPtr(index, scratch, scratch2, &outOfBounds);
-
-  // Load the elements vector.
-  masm.loadPtr(Address(object, ArrayBufferViewObject::dataOffset()), scratch);
+  masm.spectreBoundsCheckPtr(index, length, scratch, &outOfBounds);
 
   Scalar::Type arrayType = lir->mir()->arrayType();
   Label fail;
-  BaseIndex source(scratch, index, ScaleFromScalarType(arrayType));
+  BaseIndex source(elements, index, ScaleFromScalarType(arrayType));
   MacroAssembler::Uint32Mode uint32Mode =
       lir->mir()->forceDouble() ? MacroAssembler::Uint32Mode::ForceDouble
                                 : MacroAssembler::Uint32Mode::FailOnDouble;
@@ -17301,37 +17382,38 @@ void CodeGenerator::visitLoadTypedArrayElementHole(
 
 void CodeGenerator::visitLoadTypedArrayElementHoleBigInt(
     LLoadTypedArrayElementHoleBigInt* lir) {
-  Register object = ToRegister(lir->object());
+  Register elements = ToRegister(lir->elements());
+  Register index = ToRegister(lir->index());
+  Register length = ToRegister(lir->length());
   const ValueOperand out = ToOutValue(lir);
 
-  // On x86 there are not enough registers. In that case reuse the output's
-  // type register as temporary.
-#ifdef JS_CODEGEN_X86
-  MOZ_ASSERT(lir->temp()->isBogusTemp());
-  Register temp = out.typeReg();
-#else
   Register temp = ToRegister(lir->temp());
-#endif
-  Register64 temp64 = ToRegister64(lir->temp64());
 
-  // Load the length.
-  Register scratch = out.scratchReg();
-  Register index = ToRegister(lir->index());
-  masm.loadArrayBufferViewLengthIntPtr(object, scratch);
+  // On x86 there are not enough registers. In that case reuse the output
+  // registers as temporaries.
+#ifdef JS_CODEGEN_X86
+  MOZ_ASSERT(lir->temp64().isBogusTemp());
+  Register64 temp64 = out.toRegister64();
+#else
+  Register64 temp64 = ToRegister64(lir->temp64());
+#endif
 
   // Load undefined if index >= length.
   Label outOfBounds, done;
-  masm.spectreBoundsCheckPtr(index, scratch, temp, &outOfBounds);
-
-  // Load the elements vector.
-  masm.loadPtr(Address(object, ArrayBufferViewObject::dataOffset()), scratch);
+  masm.spectreBoundsCheckPtr(index, length, temp, &outOfBounds);
 
   Scalar::Type arrayType = lir->mir()->arrayType();
-  BaseIndex source(scratch, index, ScaleFromScalarType(arrayType));
+  BaseIndex source(elements, index, ScaleFromScalarType(arrayType));
   masm.load64(source, temp64);
 
+#ifdef JS_CODEGEN_X86
+  Register bigInt = temp;
+  Register maybeTemp = InvalidReg;
+#else
   Register bigInt = out.scratchReg();
-  emitCreateBigInt(lir, arrayType, temp64, bigInt, temp);
+  Register maybeTemp = temp;
+#endif
+  emitCreateBigInt(lir, arrayType, temp64, bigInt, maybeTemp);
 
   masm.tagValue(JSVAL_TYPE_BIGINT, bigInt, out);
   masm.jump(&done);
@@ -17677,6 +17759,10 @@ void CodeGenerator::visitStoreTypedArrayElementHoleBigInt(
   masm.storeToTypedBigIntArray(arrayType, temp, dest);
 
   masm.bind(&skip);
+}
+
+void CodeGenerator::visitMemoryBarrier(LMemoryBarrier* ins) {
+  masm.memoryBarrier(ins->type());
 }
 
 void CodeGenerator::visitAtomicIsLockFree(LAtomicIsLockFree* lir) {
@@ -18447,6 +18533,24 @@ void CodeGenerator::visitGuardToClass(LGuardToClass* ins) {
   Label notEqual;
 
   masm.branchTestObjClass(Assembler::NotEqual, lhs, ins->mir()->getClass(),
+                          temp, spectreRegToZero, &notEqual);
+
+  // Can't return null-return here, so bail.
+  bailoutFrom(&notEqual, ins->snapshot());
+}
+
+void CodeGenerator::visitGuardToEitherClass(LGuardToEitherClass* ins) {
+  Register lhs = ToRegister(ins->lhs());
+  Register temp = ToRegister(ins->temp0());
+
+  // branchTestObjClass may zero the object register on speculative paths
+  // (we should have a defineReuseInput allocation in this case).
+  Register spectreRegToZero = lhs;
+
+  Label notEqual;
+
+  masm.branchTestObjClass(Assembler::NotEqual, lhs,
+                          {ins->mir()->getClass1(), ins->mir()->getClass2()},
                           temp, spectreRegToZero, &notEqual);
 
   // Can't return null-return here, so bail.
@@ -20133,7 +20237,8 @@ void CodeGenerator::visitToHashableString(LToHashableString* ins) {
                     Address(input, JSString::offsetOfFlags()),
                     Imm32(JSString::ATOM_BIT), &isAtom);
 
-  masm.lookupStringInAtomCacheLastLookups(input, output, ool->entry());
+  masm.lookupStringInAtomCacheLastLookups(input, output, output, ool->entry());
+  masm.jump(ool->rejoin());
   masm.bind(&isAtom);
   masm.movePtr(input, output);
   masm.bind(ool->rejoin());

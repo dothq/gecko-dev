@@ -8,7 +8,7 @@
 # documentation and how to modify this file.
 repo: mozilla-central
 created_at: '2021-10-14T12:50:40.073465'
-updated_at: '2024-02-12T11:38:43.189353'
+updated_at: '2024-03-14T15:35:01.373042'
 export:
   path: ./docs/mots/index.rst
   format: rst
@@ -279,6 +279,10 @@ people:
     bmo_id: 713270
     name: DJ
     nick: dwalker
+  - &edenchuang
+    bmo_id: 516138
+    name: Eden Chuang
+    nick: edenchuang
   - &edgar
     bmo_id: 455480
     name: Edgar Chen
@@ -1152,22 +1156,6 @@ modules:
       - *hiro
       - *mstange
     machine_name: core_apz_graphics_submodule
-
-  - name: 'Core: Browser WebAPI'
-    description: Web API for rendering apps, browser windows and widgets.
-    includes:
-      - dom/browser-element/**/*
-    meta:
-      owners_emeritus:
-        - Kan-Ru Chen
-      peers_emeritus:
-        - Fabrice Desré
-      group: dev-webapi
-      components:
-        - Core::DOM
-    owners:
-      - *smaug
-    machine_name: core_browser_webapi
 
   - name: 'Core: Build and Release Tools'
     description: Tools related to build and release automation and configuration of
@@ -2229,10 +2217,10 @@ modules:
         - Core::Networking
         - 'Core::Networking: Cache'
         - 'Core::Networking: Cookies'
-        - 'Core::Networking: FTP'
         - 'Core::Networking: File'
         - 'Core::Networking: HTTP'
         - 'Core::Networking: JAR'
+        - 'Core::Networking: Proxy'
         - 'Core::Networking: Websockets'
         - 'Core::DOM: Networking'
     owners:
@@ -2744,10 +2732,12 @@ modules:
   - name: 'Core: Web Workers'
     description: ''
     includes:
+      - dom/serviceworkers/**/*
       - dom/workers/**/*
     meta:
       owners_emeritus:
         - Ben Turner
+        - Andrea Marchesini
       peers_emeritus:
         - Blake Kaplan
         - Jonas Sicking
@@ -2762,7 +2752,9 @@ modules:
     owners:
       - *asuth
     peers:
-      - *baku
+      - *edenchuang
+      - *jstutte
+      - *smaug
     machine_name: core_web_workers
 
   - name: 'Core: WebGPU (Graphics submodule)'
@@ -2928,6 +2920,7 @@ modules:
       - *karlt
     peers:
       - *stransky
+      - *emilio
     machine_name: core_widget_gtk
 
   - name: 'Core: Widget - Headless'
@@ -3513,9 +3506,9 @@ modules:
             - Firefox::Screenshots
         owners:
           - *sfoster
+          - *niklas
         peers:
           - *jhirsch
-          - *niklas
         machine_name: screenshots
 
       - name: Search and Address Bar
@@ -4223,5 +4216,5 @@ modules:
         - Ryan Tilder
       group: dev-platform
 hashes:
-  config: 308df3f31d4c18ad2b33ff42089ec56cca1566a1
-  export: de95c24371652728c9a29fb28c859cc845d9e04a
+  config: cec20e47a95bf2ea38346eeb20e43a6eb6833db5
+  export: 7c6ef1934e027eccd9c43ea3968f29427b9459f9

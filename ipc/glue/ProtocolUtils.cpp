@@ -73,23 +73,28 @@ IPCResult IPCResult::FailImpl(NotNull<IProtocol*> actor, const char* where,
 #endif
 }
 
+/* static */
+IPCResult IPCResult::FailForTesting(NotNull<IProtocol*> actor,
+                                    const char* where, const char* why) {
+  return IPCResult(false);
+}
+
 void AnnotateSystemError() {
-  int64_t error = 0;
+  uint32_t error = 0;
 #if defined(XP_WIN)
   error = ::GetLastError();
 #else
   error = errno;
 #endif
   if (error) {
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::IPCSystemError,
-        nsPrintfCString("%" PRId64, error));
+    CrashReporter::RecordAnnotationU32(
+        CrashReporter::Annotation::IPCSystemError, error);
   }
 }
 
 #if defined(XP_MACOSX)
 void AnnotateCrashReportWithErrno(CrashReporter::Annotation tag, int error) {
-  CrashReporter::AnnotateCrashReport(tag, error);
+  CrashReporter::RecordAnnotationU32(tag, static_cast<uint32_t>(error));
 }
 #endif  // defined(XP_MACOSX)
 
@@ -191,8 +196,8 @@ void FatalError(const char* aMsg, bool aIsParent) {
     // this process if we're off the main thread.
     formattedMessage.AppendLiteral("\". Intentionally crashing.");
     NS_ERROR(formattedMessage.get());
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::IPCFatalErrorMsg, nsDependentCString(aMsg));
+    CrashReporter::RecordAnnotationCString(
+        CrashReporter::Annotation::IPCFatalErrorMsg, aMsg);
     AnnotateSystemError();
 #ifndef FUZZING
     MOZ_CRASH("IPC FatalError in the parent process!");

@@ -19,7 +19,6 @@
 #include "mozilla/TextControlState.h"
 #include "nsAttrValueInlines.h"
 #include "nsBaseCommandController.h"
-#include "nsContentCID.h"
 #include "nsContentCreatorFunctions.h"
 #include "nsError.h"
 #include "nsFocusManager.h"
@@ -772,8 +771,8 @@ nsresult HTMLTextAreaElement::BindToTree(BindContext& aContext,
   return rv;
 }
 
-void HTMLTextAreaElement::UnbindFromTree(bool aNullParent) {
-  nsGenericHTMLFormControlElementWithState::UnbindFromTree(aNullParent);
+void HTMLTextAreaElement::UnbindFromTree(UnbindContext& aContext) {
+  nsGenericHTMLFormControlElementWithState::UnbindFromTree(aContext);
 
   // We might be no longer disabled because of parent chain changed.
   UpdateValueMissingValidityState();

@@ -110,7 +110,7 @@ void HTMLLinkElement::LinkAdded() {
   CreateAndDispatchEvent(u"DOMLinkAdded"_ns);
 }
 
-void HTMLLinkElement::UnbindFromTree(bool aNullParent) {
+void HTMLLinkElement::UnbindFromTree(UnbindContext& aContext) {
   CancelDNSPrefetch(*this);
   CancelPrefetchOrPreload();
 
@@ -130,7 +130,7 @@ void HTMLLinkElement::UnbindFromTree(bool aNullParent) {
     }
   }
 
-  nsGenericHTMLElement::UnbindFromTree(aNullParent);
+  nsGenericHTMLElement::UnbindFromTree(aContext);
 
   Unused << UpdateStyleSheetInternal(oldDoc, oldShadowRoot);
 }
@@ -162,6 +162,12 @@ bool HTMLLinkElement::ParseAttribute(int32_t aNamespaceID, nsAtom* aAttribute,
 
     if (aAttribute == nsGkAtoms::fetchpriority) {
       ParseFetchPriority(aValue, aResult);
+      return true;
+    }
+
+    if (aAttribute == nsGkAtoms::blocking &&
+        StaticPrefs::dom_element_blocking_enabled()) {
+      aResult.ParseAtomArray(aValue);
       return true;
     }
   }
@@ -701,6 +707,16 @@ nsDOMTokenList* HTMLLinkElement::Blocking() {
         new nsDOMTokenList(this, nsGkAtoms::blocking, sSupportedBlockingValues);
   }
   return mBlocking;
+}
+
+bool HTMLLinkElement::IsPotentiallyRenderBlocking() {
+  return BlockingContainsRender();
+
+  // TODO: handle implicitly potentially render blocking
+  // https://html.spec.whatwg.org/#implicitly-potentially-render-blocking
+  // The default type for resources given by the stylesheet keyword is text/css.
+  // A link element of this type is implicitly potentially render-blocking if
+  // the element was created by its node document's parser.
 }
 
 }  // namespace mozilla::dom

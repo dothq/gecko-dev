@@ -429,6 +429,8 @@ export var SearchTestUtils = {
    *
    * @param {object} [options]
    *   The options for the manifest.
+   * @param {object} [options.icons]
+   *   The icons to use for the WebExtension.
    * @param {string} [options.id]
    *   The id to use for the WebExtension.
    * @param {string} [options.name]
@@ -477,6 +479,10 @@ export var SearchTestUtils = {
         },
       },
     };
+
+    if (options.icons) {
+      manifest.icons = options.icons;
+    }
 
     if (options.default_locale) {
       manifest.default_locale = options.default_locale;
@@ -541,11 +547,11 @@ export var SearchTestUtils = {
     QueryInterface: ChromeUtils.generateQI(["nsIUserIdleService"]),
     idleTime: 19999,
 
-    addIdleObserver(observer, time) {
+    addIdleObserver(observer) {
       this._observers.add(observer);
     },
 
-    removeIdleObserver(observer, time) {
+    removeIdleObserver(observer) {
       this._observers.delete(observer);
     },
   },

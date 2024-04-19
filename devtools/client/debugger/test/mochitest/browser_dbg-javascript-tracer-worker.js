@@ -41,7 +41,7 @@ add_task(async function testTracingWorker() {
   info("Enable tracing on all threads");
   await clickElement(dbg, "trace");
   info("Wait for tracing to be enabled for the worker");
-  await waitForState(dbg, state => {
+  await waitForState(dbg, () => {
     return dbg.selectors.getIsThreadCurrentlyTracing(
       workerTarget.threadFront.actorID
     );
@@ -56,7 +56,7 @@ add_task(async function testTracingWorker() {
     content.worker.postMessage("foo");
   });
 
-  await hasConsoleMessage(dbg, "DOM(message)");
+  await hasConsoleMessage(dbg, "DOM | message");
   await hasConsoleMessage(dbg, "λ onmessage");
 
   await dbg.toolbox.closeToolbox();

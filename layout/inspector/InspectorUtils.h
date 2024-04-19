@@ -78,9 +78,9 @@ class InspectorUtils {
   static bool HasRulesModifiedByCSSOM(GlobalObject& aGlobal,
                                       StyleSheet& aSheet);
 
-  static void GetAllStyleSheetCSSStyleRules(
+  static void GetStyleSheetRuleCountAndAtRules(
       GlobalObject& aGlobal, StyleSheet& aSheet,
-      nsTArray<RefPtr<css::Rule>>& aResult);
+      InspectorStyleSheetRuleCountAndAtRulesResult& aResult);
 
   // Utilities for working with CSS properties
   //
@@ -117,6 +117,11 @@ class InspectorUtils {
   static void ColorToRGBA(GlobalObject&, const nsACString& aColorString,
                           const Document*,
                           Nullable<InspectorRGBATuple>& aResult);
+
+  // Convert a given CSS color string to another color space.
+  static void ColorTo(GlobalObject&, const nsACString& aFromColor,
+                      const nsACString& aToColorSpace,
+                      Nullable<InspectorColorToResult>& aResult);
 
   // Check whether a given color is a valid CSS color.
   static bool IsValidCSSColor(GlobalObject& aGlobal,
@@ -263,6 +268,13 @@ class InspectorUtils {
   static void GetCSSRegisteredProperties(
       GlobalObject& aGlobal, Document& aDocument,
       nsTArray<InspectorCSSPropertyDefinition>& aResult);
+
+  /**
+   * Get the rule body text start and end offsets within aInitialText
+   */
+  static void GetRuleBodyTextOffsets(
+      GlobalObject&, const nsACString& aInitialText,
+      Nullable<InspectorGetRuleBodyTextResult>& aResult);
 };
 
 }  // namespace mozilla::dom

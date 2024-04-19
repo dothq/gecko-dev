@@ -20,6 +20,7 @@
 #endif
 #include "mozilla/AppShutdown.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
+#include "mozilla/dom/BindingIPCUtils.h"
 #include "mozilla/dom/BrowserHost.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/dom/BrowserParent.h"
@@ -96,23 +97,17 @@ namespace IPC {
 // Allow serialization and deserialization of OrientationType over IPC
 template <>
 struct ParamTraits<mozilla::dom::OrientationType>
-    : public ContiguousEnumSerializer<
-          mozilla::dom::OrientationType,
-          mozilla::dom::OrientationType::Portrait_primary,
-          mozilla::dom::OrientationType::EndGuard_> {};
+    : public mozilla::dom::WebIDLEnumSerializer<mozilla::dom::OrientationType> {
+};
 
 template <>
 struct ParamTraits<mozilla::dom::DisplayMode>
-    : public ContiguousEnumSerializer<mozilla::dom::DisplayMode,
-                                      mozilla::dom::DisplayMode::Browser,
-                                      mozilla::dom::DisplayMode::EndGuard_> {};
+    : public mozilla::dom::WebIDLEnumSerializer<mozilla::dom::DisplayMode> {};
 
 template <>
 struct ParamTraits<mozilla::dom::PrefersColorSchemeOverride>
-    : public ContiguousEnumSerializer<
-          mozilla::dom::PrefersColorSchemeOverride,
-          mozilla::dom::PrefersColorSchemeOverride::None,
-          mozilla::dom::PrefersColorSchemeOverride::EndGuard_> {};
+    : public mozilla::dom::WebIDLEnumSerializer<
+          mozilla::dom::PrefersColorSchemeOverride> {};
 
 template <>
 struct ParamTraits<mozilla::dom::ExplicitActiveStatus>
@@ -124,10 +119,8 @@ struct ParamTraits<mozilla::dom::ExplicitActiveStatus>
 // Allow serialization and deserialization of TouchEventsOverride over IPC
 template <>
 struct ParamTraits<mozilla::dom::TouchEventsOverride>
-    : public ContiguousEnumSerializer<
-          mozilla::dom::TouchEventsOverride,
-          mozilla::dom::TouchEventsOverride::Disabled,
-          mozilla::dom::TouchEventsOverride::EndGuard_> {};
+    : public mozilla::dom::WebIDLEnumSerializer<
+          mozilla::dom::TouchEventsOverride> {};
 
 template <>
 struct ParamTraits<mozilla::dom::EmbedderColorSchemes> {
@@ -167,6 +160,9 @@ typedef nsTHashMap<nsUint64HashKey, BrowsingContext*> BrowsingContextMap;
 static StaticAutoPtr<BrowsingContextMap> sBrowsingContexts;
 // Top-level Content BrowsingContexts only, indexed by BrowserId instead of Id
 static StaticAutoPtr<BrowsingContextMap> sCurrentTopByBrowserId;
+
+static bool gIPCEnabledAnnotation = false;
+static bool gFissionEnabledAnnotation = false;
 
 static void UnregisterBrowserId(BrowsingContext* aBrowsingContext) {
   if (!aBrowsingContext->IsTopContent() || !sCurrentTopByBrowserId) {
@@ -255,6 +251,11 @@ void BrowsingContext::Init() {
     sCurrentTopByBrowserId = new BrowsingContextMap();
     ClearOnShutdown(&sBrowsingContexts);
     ClearOnShutdown(&sCurrentTopByBrowserId);
+    CrashReporter::RegisterAnnotationBool(
+        CrashReporter::Annotation::DOMIPCEnabled, &gIPCEnabledAnnotation);
+    CrashReporter::RegisterAnnotationBool(
+        CrashReporter::Annotation::DOMFissionEnabled,
+        &gFissionEnabledAnnotation);
   }
 }
 
@@ -1665,11 +1666,8 @@ NS_IMETHODIMP BrowsingContext::SetRemoteTabs(bool aUseRemoteTabs) {
     return NS_ERROR_FAILURE;
   }
 
-  static bool annotated = false;
-  if (aUseRemoteTabs && !annotated) {
-    annotated = true;
-    CrashReporter::AnnotateCrashReport(CrashReporter::Annotation::DOMIPCEnabled,
-                                       true);
+  if (aUseRemoteTabs && !gIPCEnabledAnnotation) {
+    gIPCEnabledAnnotation = true;
   }
 
   // Don't allow non-remote tabs with remote subframes.
@@ -1693,11 +1691,8 @@ NS_IMETHODIMP BrowsingContext::SetRemoteSubframes(bool aUseRemoteSubframes) {
     return NS_ERROR_FAILURE;
   }
 
-  static bool annotated = false;
-  if (aUseRemoteSubframes && !annotated) {
-    annotated = true;
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::DOMFissionEnabled, true);
+  if (aUseRemoteSubframes && !gFissionEnabledAnnotation) {
+    gFissionEnabledAnnotation = true;
   }
 
   // Don't allow non-remote tabs with remote subframes.

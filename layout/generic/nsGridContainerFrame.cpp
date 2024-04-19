@@ -28,6 +28,7 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsDisplayList.h"
 #include "nsFieldSetFrame.h"
+#include "nsGfxScrollFrame.h"
 #include "nsHashKeys.h"
 #include "nsIFrameInlines.h"  // for nsIFrame::GetLogicalNormalPosition (don't remove)
 #include "nsLayoutUtils.h"
@@ -3685,7 +3686,8 @@ static Subgrid* SubgridComputeMarginBorderPadding(
       sz.ComputedLogicalMargin(cbWM) + sz.ComputedLogicalBorderPadding(cbWM);
 
   if (aGridItem.mFrame != subgridFrame) {
-    nsIScrollableFrame* scrollFrame = aGridItem.mFrame->GetScrollTargetFrame();
+    nsHTMLScrollFrame* scrollFrame =
+        do_QueryFrame(aGridItem.mFrame->GetScrollTargetFrame());
     if (scrollFrame) {
       MOZ_ASSERT(
           sz.ComputedLogicalMargin(cbWM) == LogicalMargin(cbWM) &&
@@ -3699,7 +3701,7 @@ static Subgrid* SubgridComputeMarginBorderPadding(
           szScrollFrame.ComputedLogicalMargin(cbWM) +
           szScrollFrame.ComputedLogicalBorder(cbWM);
 
-      nsMargin ssz = scrollFrame->GetActualScrollbarSizes();
+      nsMargin ssz = scrollFrame->IntrinsicScrollbarGutterSize();
       subgrid->mMarginBorderPadding += LogicalMargin(cbWM, ssz);
     }
 
@@ -4032,16 +4034,6 @@ static void AlignSelf(const nsGridContainerFrame::GridItemInfo& aGridItem,
       aAlignSelf == StyleAlignFlags::LAST_BASELINE) {
     aAlignSelf = aGridItem.GetSelfBaseline(aAlignSelf, eLogicalAxisBlock,
                                            &baselineAdjust);
-    // Adjust the baseline alignment value if the baseline affects the opposite
-    // side of what AlignJustifySelf expects.
-    auto state = aGridItem.mState[eLogicalAxisBlock];
-    if (aAlignSelf == StyleAlignFlags::LAST_BASELINE &&
-        !GridItemInfo::BaselineAlignmentAffectsEndSide(state)) {
-      aAlignSelf = StyleAlignFlags::BASELINE;
-    } else if (aAlignSelf == StyleAlignFlags::BASELINE &&
-               GridItemInfo::BaselineAlignmentAffectsEndSide(state)) {
-      aAlignSelf = StyleAlignFlags::LAST_BASELINE;
-    }
   }
 
   bool isOrthogonal = aCBWM.IsOrthogonalTo(childWM);
@@ -4083,16 +4075,6 @@ static void JustifySelf(const nsGridContainerFrame::GridItemInfo& aGridItem,
              aJustifySelf == StyleAlignFlags::LAST_BASELINE) {
     aJustifySelf = aGridItem.GetSelfBaseline(aJustifySelf, eLogicalAxisInline,
                                              &baselineAdjust);
-    // Adjust the baseline alignment value if the baseline affects the opposite
-    // side of what AlignJustifySelf expects.
-    auto state = aGridItem.mState[eLogicalAxisInline];
-    if (aJustifySelf == StyleAlignFlags::LAST_BASELINE &&
-        !GridItemInfo::BaselineAlignmentAffectsEndSide(state)) {
-      aJustifySelf = StyleAlignFlags::BASELINE;
-    } else if (aJustifySelf == StyleAlignFlags::BASELINE &&
-               GridItemInfo::BaselineAlignmentAffectsEndSide(state)) {
-      aJustifySelf = StyleAlignFlags::LAST_BASELINE;
-    }
   }
 
   bool isOrthogonal = aCBWM.IsOrthogonalTo(childWM);
@@ -6006,6 +5988,12 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
   const WritingMode containerWM = aState.mWM;
   ComputedStyle* containerStyle = aState.mFrame->Style();
 
+  // The physical side of the container's block start side.  We use it to match
+  // against the physical block start side of the child to determine its
+  // baseline sharing group.
+  auto containerBlockStartSide =
+      containerWM.PhysicalSide(MakeLogicalSide(mAxis, eLogicalEdgeStart));
+
   for (GridItemInfo& gridItem : aGridItems) {
     if (gridItem.IsSubgrid(mAxis)) {
       // A subgrid itself is never baseline-aligned.
@@ -6101,6 +6089,27 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
     }
 
     if (state & ItemState::eIsBaselineAligned) {
+      // The item is baseline aligned, so calculate the baseline sharing group.
+      // <https://drafts.csswg.org/css-align-3/#baseline-terms>
+      BaselineSharingGroup baselineAlignment =
+          (state & ItemState::eFirstBaseline) ? BaselineSharingGroup::First
+                                              : BaselineSharingGroup::Last;
+
+      BaselineSharingGroup baselineSharingGroup = [&]() {
+        {
+          auto childAxis = isOrthogonal ? GetOrthogonalAxis(mAxis) : mAxis;
+          auto childBlockStartSide = childWM.PhysicalSide(
+              MakeLogicalSide(childAxis, eLogicalEdgeStart));
+          bool isFirstBaseline = (state & ItemState::eFirstBaseline) != 0;
+          const bool containerAndChildHasEqualBaselineSide =
+              containerBlockStartSide == childBlockStartSide;
+
+          return isFirstBaseline == containerAndChildHasEqualBaselineSide
+                     ? BaselineSharingGroup::First
+                     : BaselineSharingGroup::Last;
+        }
+      }();
+
       // XXXmats if |child| is a descendant of a subgrid then the metrics
       // below needs to account for the accumulated MPB somehow...
 
@@ -6128,16 +6137,13 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
                                     : margin.BStartEnd(containerWM));
 
       Maybe<nscoord> baseline;
-      auto baselineSharingGroup = state & ItemState::eFirstBaseline
-                                      ? BaselineSharingGroup::First
-                                      : BaselineSharingGroup::Last;
       if (grid) {
         baseline.emplace((isOrthogonal == isInlineAxis)
-                             ? grid->GetBBaseline(baselineSharingGroup)
-                             : grid->GetIBaseline(baselineSharingGroup));
+                             ? grid->GetBBaseline(baselineAlignment)
+                             : grid->GetIBaseline(baselineAlignment));
       } else {
         baseline = child->GetNaturalBaselineBOffset(
-            childWM, baselineSharingGroup, BaselineExportContext::Other);
+            childWM, baselineAlignment, BaselineExportContext::Other);
 
         if (!baseline) {
           // If baseline alignment is specified on a grid item whose size in
@@ -6162,7 +6168,7 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
           if (!isTrackAutoSize ||
               !gridItem.IsBSizeDependentOnContainerSize(containerWM)) {
             baseline.emplace(Baseline::SynthesizeBOffsetFromBorderBox(
-                child, containerWM, baselineSharingGroup));
+                child, containerWM, baselineAlignment));
           }
         }
       }
@@ -6172,15 +6178,19 @@ void nsGridContainerFrame::Tracks::InitializeItemBaselines(
         NS_ASSERTION(finalBaseline != NS_INTRINSIC_ISIZE_UNKNOWN,
                      "about to use an unknown baseline");
 
+        nscoord marginAdjust = 0;
         if (baselineSharingGroup == BaselineSharingGroup::First) {
-          finalBaseline += isInlineAxis ? margin.IStart(containerWM)
-                                        : margin.BStart(containerWM);
-
+          marginAdjust = isInlineAxis ? margin.IStart(containerWM)
+                                      : margin.BStart(containerWM);
         } else {
-          finalBaseline += isInlineAxis ? margin.IEnd(containerWM)
-                                        : margin.BEnd(containerWM);
-          state |= ItemState::eEndSideBaseline;
+          marginAdjust = isInlineAxis ? margin.IEnd(containerWM)
+                                      : margin.BEnd(containerWM);
+
+          // This flag is used in ::AlignSelf(...) to check whether the item is
+          // last baseline aligned, but this flag should go away.
+          state |= GridItemInfo::eEndSideBaseline;
         }
+        finalBaseline += marginAdjust;
 
         auto& baselineItems =
             (baselineSharingGroup == BaselineSharingGroup::First)
@@ -7602,7 +7612,12 @@ void nsGridContainerFrame::ReflowInFlowChild(
         // This happens when the subtree overflows its track.
         // XXX spec issue? it's unclear how to handle this.
         baselineAdjust = nscoord(0);
-      } else if (GridItemInfo::BaselineAlignmentAffectsEndSide(state)) {
+      } else if (state & ItemState::eLastBaseline) {
+        // FIXME: We're not setting the ItemState::eEndSideBaseline flag any
+        // more as the new baseline sharing group calculation handles most of
+        // the cases we need.  For non-masonry grids this flag was always set
+        // for LAST_BASELINE items, so we're just mimicking that behavior here.
+        // That said, masonry grids might not work 100% any more..
         baselineAdjust = -baselineAdjust;
       }
       if (baselineAdjust != nscoord(0)) {

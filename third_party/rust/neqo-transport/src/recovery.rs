@@ -6,12 +6,9 @@
 
 // Tracking of sent packets and detecting their loss.
 
-#![deny(clippy::pedantic)]
-
 use std::{
     cmp::{max, min},
     collections::BTreeMap,
-    convert::TryFrom,
     mem,
     ops::RangeInclusive,
     time::{Duration, Instant},
@@ -1020,14 +1017,13 @@ impl ::std::fmt::Display for LossRecovery {
 mod tests {
     use std::{
         cell::RefCell,
-        convert::TryInto,
         ops::{Deref, DerefMut, RangeInclusive},
         rc::Rc,
         time::{Duration, Instant},
     };
 
     use neqo_common::qlog::NeqoQlog;
-    use test_fixture::{addr, now};
+    use test_fixture::{now, DEFAULT_ADDR};
 
     use super::{
         LossRecovery, LossRecoverySpace, PacketNumberSpace, SendProfile, SentPacket, FAST_PTO_SCALE,
@@ -1105,7 +1101,14 @@ mod tests {
     impl Default for Fixture {
         fn default() -> Self {
             const CC: CongestionControlAlgorithm = CongestionControlAlgorithm::NewReno;
-            let mut path = Path::temporary(addr(), addr(), CC, true, NeqoQlog::default(), now());
+            let mut path = Path::temporary(
+                DEFAULT_ADDR,
+                DEFAULT_ADDR,
+                CC,
+                true,
+                NeqoQlog::default(),
+                now(),
+            );
             path.make_permanent(
                 None,
                 ConnectionIdEntry::new(0, ConnectionId::from(&[1, 2, 3]), [0; 16]),

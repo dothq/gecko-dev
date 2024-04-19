@@ -19,8 +19,6 @@
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/gfx/PathSkia.h"
 #include "mozilla/gfx/Swizzle.h"
-#include "mozilla/layers/CanvasRenderer.h"
-#include "mozilla/layers/ImageBridgeChild.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/RemoteTextureMap.h"
 #include "skia/include/core/SkPixmap.h"
@@ -467,9 +465,13 @@ bool SharedContextWebgl::Initialize() {
 
   const bool resistFingerprinting = nsContentUtils::ShouldResistFingerprinting(
       "Fallback", RFPTarget::WebGLRenderCapability);
-  const auto initDesc =
-      webgl::InitContextDesc{/*isWebgl2*/ true, resistFingerprinting,
-                             /*size*/ {1, 1}, options, /*principalKey*/ 0};
+  const auto initDesc = webgl::InitContextDesc{
+      .isWebgl2 = true,
+      .resistFingerprinting = resistFingerprinting,
+      .principalKey = 0,
+      .size = {1, 1},
+      .options = options,
+  };
 
   webgl::InitContextResult initResult;
   mWebgl = WebGLContext::Create(nullptr, initDesc, &initResult);
@@ -621,13 +623,14 @@ bool SharedContextWebgl::SetNoClipMask() {
   }
   mWebgl->ActiveTexture(1);
   mWebgl->BindTexture(LOCAL_GL_TEXTURE_2D, mNoClipMask);
-  static const uint8_t solidMask[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-  mWebgl->TexImage(
-      0, LOCAL_GL_RGBA8, {0, 0, 0}, {LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE},
-      {LOCAL_GL_TEXTURE_2D,
-       {1, 1, 1},
-       gfxAlphaType::NonPremult,
-       Some(RawBuffer(Range<const uint8_t>(solidMask, sizeof(solidMask))))});
+  static const auto solidMask =
+      std::array<const uint8_t, 4>{0xFF, 0xFF, 0xFF, 0xFF};
+  mWebgl->TexImage(0, LOCAL_GL_RGBA8, {0, 0, 0},
+                   {LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE},
+                   {LOCAL_GL_TEXTURE_2D,
+                    {1, 1, 1},
+                    gfxAlphaType::NonPremult,
+                    Some(Span{solidMask})});
   InitTexParameters(mNoClipMask, false);
   mWebgl->ActiveTexture(0);
   mLastClipMask = mNoClipMask;
@@ -1916,11 +1919,11 @@ bool SharedContextWebgl::UploadSurface(DataSourceSurface* aData,
     int32_t bpp = BytesPerPixel(aFormat);
     // Get the data pointer range considering the sampling rect offset and
     // size.
-    Range<const uint8_t> range(
+    Span<const uint8_t> range(
         map.GetData() + aSrcRect.y * size_t(stride) + aSrcRect.x * bpp,
         std::max(aSrcRect.height - 1, 0) * size_t(stride) +
             aSrcRect.width * bpp);
-    texDesc.cpuData = Some(RawBuffer(range));
+    texDesc.cpuData = Some(range);
     // If the stride happens to be 4 byte aligned, assume that is the
     // desired alignment regardless of format (even A8). Otherwise, we
     // default to byte alignment.
@@ -4724,7 +4727,8 @@ void DrawTargetWebgl::EndFrame() {
 }
 
 bool DrawTargetWebgl::CopyToSwapChain(
-    layers::RemoteTextureId aId, layers::RemoteTextureOwnerId aOwnerId,
+    layers::TextureType aTextureType, layers::RemoteTextureId aId,
+    layers::RemoteTextureOwnerId aOwnerId,
     layers::RemoteTextureOwnerClient* aOwnerClient) {
   if (!mWebglValid && !FlushFromSkia()) {
     return false;
@@ -4739,11 +4743,8 @@ bool DrawTargetWebgl::CopyToSwapChain(
       StaticPrefs::gfx_canvas_accelerated_async_present();
   options.remoteTextureId = aId;
   options.remoteTextureOwnerId = aOwnerId;
-  const RefPtr<layers::ImageBridgeChild> imageBridge =
-      layers::ImageBridgeChild::GetSingleton();
-  auto texType = layers::TexTypeForWebgl(imageBridge);
-  return mSharedContext->mWebgl->CopyToSwapChain(mFramebuffer, texType, options,
-                                                 aOwnerClient);
+  return mSharedContext->mWebgl->CopyToSwapChain(mFramebuffer, aTextureType,
+                                                 options, aOwnerClient);
 }
 
 already_AddRefed<DrawTarget> DrawTargetWebgl::CreateSimilarDrawTarget(

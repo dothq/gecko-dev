@@ -207,13 +207,13 @@ void SetTaskbarGroupId(const nsString& aId) {
 #if defined(MOZ_SANDBOX)
 void AddContentSandboxLevelAnnotation() {
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    int level = GetEffectiveContentSandboxLevel();
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::ContentSandboxLevel, level);
+    uint32_t contentSandboxLevel = GetEffectiveContentSandboxLevel();
+    CrashReporter::RecordAnnotationU32(
+        CrashReporter::Annotation::ContentSandboxLevel, contentSandboxLevel);
   } else if (XRE_GetProcessType() == GeckoProcessType_GPU) {
-    int level = GetEffectiveGpuSandboxLevel();
-    CrashReporter::AnnotateCrashReport(
-        CrashReporter::Annotation::GpuSandboxLevel, level);
+    uint32_t gpuSandboxLevel = GetEffectiveGpuSandboxLevel();
+    CrashReporter::RecordAnnotationU32(
+        CrashReporter::Annotation::GpuSandboxLevel, gpuSandboxLevel);
   }
 }
 #endif /* MOZ_SANDBOX */
@@ -525,7 +525,7 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
 #if defined(XP_WIN)
 #  if defined(MOZ_SANDBOX)
   if (aChildData->sandboxBrokerServices) {
-    SandboxBroker::Initialize(aChildData->sandboxBrokerServices);
+    SandboxBroker::Initialize(aChildData->sandboxBrokerServices, u""_ns);
     SandboxBroker::GeckoDependentInitialize();
   }
 #  endif  // defined(MOZ_SANDBOX)

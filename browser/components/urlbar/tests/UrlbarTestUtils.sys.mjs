@@ -545,6 +545,7 @@ export var UrlbarTestUtils = {
     details.title = result.title;
     details.tags = "tags" in result.payload ? result.payload.tags : [];
     details.isSponsored = result.payload.isSponsored;
+    details.userContextId = result.payload.userContextId;
     let actions = element.getElementsByClassName("urlbarView-action");
     let urls = element.getElementsByClassName("urlbarView-url");
     let typeIcon = element.querySelector(".urlbarView-type-icon");
@@ -1536,11 +1537,11 @@ class TestProvider extends UrlbarProvider {
     return this._type;
   }
 
-  getPriority(context) {
+  getPriority(_context) {
     return this.priority;
   }
 
-  isActive(context) {
+  isActive(_context) {
     return true;
   }
 
@@ -1565,7 +1566,7 @@ class TestProvider extends UrlbarProvider {
     }
   }
 
-  cancelQuery(context) {
+  cancelQuery(_context) {
     this._onCancel?.();
   }
 

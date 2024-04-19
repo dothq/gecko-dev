@@ -19,7 +19,7 @@ function streamListener(aExpectedContentType) {
 }
 streamListener.prototype = {
   onStartRequest() {},
-  onStopRequest(aRequest, aContext, aStatusCode) {
+  onStopRequest(aRequest) {
     let channel = aRequest.QueryInterface(Ci.nsIChannel);
     Assert.equal(
       channel.contentType,
@@ -28,7 +28,7 @@ streamListener.prototype = {
     );
     this.done.resolve();
   },
-  onDataAvailable(aRequest, aInputStream, aOffset, aCount) {
+  onDataAvailable(aRequest) {
     aRequest.cancel(Cr.NS_ERROR_ABORT);
     throw Components.Exception("", Cr.NS_ERROR_ABORT);
   },
@@ -85,4 +85,60 @@ add_task(async function () {
   let listener = new streamListener("image/png");
   channel.asyncOpen(listener);
   await listener.done.promise;
+
+  await PlacesUtils.history.clear();
+});
+
+add_task(async function test_userpass() {
+  info("Test whether can get favicon content regardless of user pass");
+
+  const PAGE_NORMAL = uri("http://mozilla.org/");
+  const PAGE_USERPASS = uri("http://user:pass@mozilla.org/");
+  const ICON_NORMAL = uri("http://mozilla.org/favicon.png");
+  const ICON_USERPASS = uri("http://user:pass@mozilla.org/favicon.png");
+  const CACHED_ICON_NORMAL = "cached-favicon:http://mozilla.org/favicon.png";
+  const CACHED_ICON_USERPASS =
+    "cached-favicon:http://user:pass@mozilla.org/favicon.png";
+
+  const testData = [
+    {
+      pageURI: PAGE_USERPASS,
+      iconURI: ICON_NORMAL,
+    },
+    {
+      pageURI: PAGE_NORMAL,
+      iconURI: ICON_USERPASS,
+    },
+    {
+      pageURI: PAGE_USERPASS,
+      iconURI: ICON_USERPASS,
+    },
+  ];
+
+  for (const { pageURI, iconURI } of testData) {
+    for (const loadingIconURISpec of [
+      CACHED_ICON_NORMAL,
+      CACHED_ICON_USERPASS,
+    ]) {
+      PlacesUtils.favicons.replaceFaviconDataFromDataURL(
+        iconURI,
+        testFaviconData,
+        0,
+        systemPrincipal
+      );
+      await PlacesTestUtils.addVisits(pageURI);
+      await setFaviconForPage(pageURI, iconURI);
+
+      // Open the channel
+      let channel = NetUtil.newChannel({
+        uri: loadingIconURISpec,
+        loadUsingSystemPrincipal: true,
+        contentPolicyType: Ci.nsIContentPolicy.TYPE_INTERNAL_IMAGE_FAVICON,
+      });
+      let listener = new streamListener("image/png");
+      channel.asyncOpen(listener);
+      await listener.done.promise;
+      await PlacesUtils.history.clear();
+    }
+  }
 });

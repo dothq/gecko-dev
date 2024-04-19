@@ -8,13 +8,13 @@
 
 #include "jsfriendapi.h"
 #include "MediaData.h"
+#include "KeySystemConfig.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/dom/KeySystemNames.h"
 #include "mozilla/dom/UnionTypes.h"
 
 #ifdef MOZ_WMF_CDM
 #  include "mozilla/PMFCDM.h"
-#  include "KeySystemConfig.h"
 #endif
 
 namespace mozilla {
@@ -143,22 +143,35 @@ const char* ToMediaKeyStatusStr(dom::MediaKeyStatus aStatus) {
 
 bool IsHardwareDecryptionSupported(
     const dom::MediaKeySystemConfiguration& aConfig) {
-  bool supportHardwareDecryption = false;
   for (const auto& capabilities : aConfig.mAudioCapabilities) {
     if (capabilities.mRobustness.EqualsLiteral("HW_SECURE_ALL")) {
-      supportHardwareDecryption = true;
-      break;
+      return true;
     }
   }
   for (const auto& capabilities : aConfig.mVideoCapabilities) {
     if (capabilities.mRobustness.EqualsLiteral("3000") ||
         capabilities.mRobustness.EqualsLiteral("HW_SECURE_ALL") ||
         capabilities.mRobustness.EqualsLiteral("HW_SECURE_DECODE")) {
-      supportHardwareDecryption = true;
-      break;
+      return true;
     }
   }
-  return supportHardwareDecryption;
+  return false;
+}
+
+bool IsHardwareDecryptionSupported(const KeySystemConfig& aConfig) {
+  for (const auto& robustness : aConfig.mAudioRobustness) {
+    if (robustness.EqualsLiteral("HW_SECURE_ALL")) {
+      return true;
+    }
+  }
+  for (const auto& robustness : aConfig.mVideoRobustness) {
+    if (robustness.EqualsLiteral("3000") ||
+        robustness.EqualsLiteral("HW_SECURE_ALL") ||
+        robustness.EqualsLiteral("HW_SECURE_DECODE")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const char* EncryptionSchemeStr(const CryptoScheme& aScheme) {
@@ -243,6 +256,18 @@ bool CheckIfHarewareDRMConfigExists(
     }
   }
   return foundHWDRMconfig;
+}
+
+bool DoesKeySystemSupportHardwareDecryption(const nsAString& aKeySystem) {
+#ifdef MOZ_WMF_CDM
+  if (aKeySystem.EqualsLiteral(kPlayReadyKeySystemHardware) ||
+      aKeySystem.EqualsLiteral(kPlayReadyHardwareClearLeadKeySystemName) ||
+      aKeySystem.EqualsLiteral(kWidevineExperimentKeySystemName) ||
+      aKeySystem.EqualsLiteral(kWidevineExperiment2KeySystemName)) {
+    return true;
+  }
+#endif
+  return false;
 }
 
 }  // namespace mozilla

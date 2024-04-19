@@ -18,6 +18,14 @@
  *   require-atomic-updates - bug 1551829.
  *     - This generates too many false positives that are not easy to work
  *       around, and false positives seem to be inherent in the rule.
+ *   no-inner-declarations - bug 1487642.
+ *     - Would be interested if this could apply to just vars, but at the moment
+ *       it doesn't.
+ *   max-depth
+ *      - Don't enforce the maximum depth that blocks can be nested. The
+ *        complexity rule is a better rule to check this.
+ *   no-useless-escape - bug 1881262.
+ *     - This doesn't reveal any actual errors, and is a lot of work to address.
  */
 module.exports = {
   env: {
@@ -42,7 +50,7 @@ module.exports = {
       // environment for them.
       env: {
         browser: false,
-        "mozilla/jsm": true,
+        "mozilla/sysmjs": true,
       },
       files: ["**/*.sys.mjs", "**/*.jsm"],
       rules: {
@@ -149,10 +157,6 @@ module.exports = {
     // Functions must always return something or nothing
     "consistent-return": "error",
 
-    // XXX This rule line should be removed to enable it. See bug 1487642.
-    // Require super() calls in constructors
-    "constructor-super": "off",
-
     // Require braces around blocks that start a new line
     curly: ["error", "all"],
 
@@ -162,14 +166,6 @@ module.exports = {
     // XXX This rule should be enabled, see Bug 1557040
     // No credentials submitted with fetch calls
     "fetch-options/no-fetch-credentials": "off",
-
-    // XXX This rule line should be removed to enable it. See bug 1487642.
-    // Enforce return statements in getters
-    "getter-return": "off",
-
-    // Don't enforce the maximum depth that blocks can be nested. The complexity
-    // rule is a better rule to check this.
-    "max-depth": "off",
 
     // Maximum depth callbacks can be nested.
     "max-nested-callbacks": ["error", 10],
@@ -212,27 +208,23 @@ module.exports = {
     // Disallow use of arguments.caller or arguments.callee.
     "no-caller": "error",
 
-    // XXX Bug 1487642 - decide if we want to enable this or not.
-    // Disallow lexical declarations in case clauses
-    "no-case-declarations": "off",
-
-    // XXX Bug 1487642 - decide if we want to enable this or not.
-    // Disallow the use of console
-    "no-console": "off",
+    // Disallow the use of console, except for errors and warnings.
+    "no-console": ["error", { allow: ["createInstance", "error", "warn"] }],
 
     // Disallows expressions where the operation doesn't affect the value.
     // TODO: This is enabled by default in ESLint's v9 recommended configuration.
     "no-constant-binary-expression": "error",
-
-    // XXX Bug 1487642 - decide if we want to enable this or not.
-    // Disallow constant expressions in conditions
-    "no-constant-condition": "off",
 
     // If an if block ends with a return no need for an else block
     "no-else-return": "error",
 
     // No empty statements
     "no-empty": ["error", { allowEmptyCatch: true }],
+
+    // Disallow empty static blocks.
+    // This rule will be a recommended rule in ESLint v9 so may be removed
+    // when we upgrade to that.
+    "no-empty-static-block": "error",
 
     // Disallow eval and setInteral/setTimeout with strings
     "no-eval": "error",
@@ -256,8 +248,7 @@ module.exports = {
     // Disallow eval and setInteral/setTimeout with strings
     "no-implied-eval": "error",
 
-    // This has been superseded since we're using ES6.
-    // Disallow variable or function declarations in nested blocks
+    // See explicit decisions at top of file.
     "no-inner-declarations": "off",
 
     // Disallow the use of the __iterator__ property
@@ -274,6 +265,11 @@ module.exports = {
 
     // Nested ternary statements are confusing
     "no-nested-ternary": "error",
+
+    // Disallow new operators with global non-constructor functions.
+    // This rule will be a recommended rule in ESLint v9 so may be removed
+    // when we upgrade to that.
+    "no-new-native-nonconstructor": "error",
 
     // Disallow use of new wrappers
     "no-new-wrappers": "error",
@@ -312,6 +308,11 @@ module.exports = {
     "no-unsanitized/method": "error",
     "no-unsanitized/property": "error",
 
+    // Disallow unused private class members.
+    // This rule will be a recommended rule in ESLint v9 so may be removed
+    // when we upgrade to that.
+    "no-unused-private-class-members": "error",
+
     // No declaring variables that are never used
     "no-unused-vars": [
       "error",
@@ -331,8 +332,7 @@ module.exports = {
     // lines)
     "no-useless-concat": "error",
 
-    // XXX Bug 1487642 - decide if we want to enable this or not.
-    // Disallow unnecessary escape characters
+    // See explicit decisions at top of file.
     "no-useless-escape": "off",
 
     // Disallow redundant return statements
@@ -343,9 +343,5 @@ module.exports = {
 
     // This may conflict with prettier, so turn it off.
     "prefer-arrow-callback": "off",
-
-    // XXX Bug 1487642 - decide if we want to enable this or not.
-    // Require generator functions to contain yield
-    "require-yield": "off",
   },
 };

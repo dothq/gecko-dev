@@ -430,7 +430,7 @@ void nsLineLayout::BeginSpan(nsIFrame* aFrame,
   psd->mIStart = aIStart;
   psd->mICoord = aIStart;
   psd->mIEnd = aIEnd;
-  psd->mInset = mCurrentSpan->mInset;
+  psd->mInset = 0;  // inset applies only to the root span
   psd->mBaseline = aBaseline;
 
   nsIFrame* frame = aSpanReflowInput->mFrame;
@@ -735,8 +735,7 @@ static bool IsPercentageAware(const nsIFrame* aFrame, WritingMode aWM) {
           disp->DisplayInside() == StyleDisplayInside::Table)) ||
         fType == LayoutFrameType::HTMLButtonControl ||
         fType == LayoutFrameType::GfxButtonControl ||
-        fType == LayoutFrameType::FieldSet ||
-        fType == LayoutFrameType::ComboboxDisplay) {
+        fType == LayoutFrameType::FieldSet) {
       return true;
     }
 

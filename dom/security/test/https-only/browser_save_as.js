@@ -14,7 +14,7 @@ const TEST_PATH =
   "http://example.com/browser/dom/security/test/https-only/file_save_as.html";
 
 let MockFilePicker = SpecialPowers.MockFilePicker;
-MockFilePicker.init(window);
+MockFilePicker.init(window.browsingContext);
 const tempDir = createTemporarySaveDirectory();
 MockFilePicker.displayDirectory = tempDir;
 
@@ -78,7 +78,7 @@ function createPromiseForTransferComplete() {
 }
 
 function createPromiseForConsoleError(message) {
-  return new Promise((resolve, reject) => {
+  return new Promise(resolve => {
     function listener(msgObj) {
       let text = msgObj.message;
       if (text.includes(message)) {

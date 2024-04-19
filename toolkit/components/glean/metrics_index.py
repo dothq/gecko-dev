@@ -22,6 +22,7 @@ gecko_metrics = [
     "dom/media/webrtc/metrics.yaml",
     "dom/metrics.yaml",
     "dom/performance/metrics.yaml",
+    "dom/security/metrics.yaml",
     "gfx/metrics.yaml",
     "image/decoders/metrics.yaml",
     "js/xpconnect/metrics.yaml",
@@ -50,6 +51,7 @@ gecko_metrics = [
 # Metrics that are sent by Firefox Desktop
 # Order is lexicographical, enforced by t/c/glean/tests/pytest/test_yaml_indices.py
 firefox_desktop_metrics = [
+    "browser/components/backup/metrics.yaml",
     "browser/components/metrics.yaml",
     "browser/components/migration/metrics.yaml",
     "browser/components/newtab/metrics.yaml",
@@ -124,6 +126,7 @@ firefox_desktop_pings = [
     "browser/components/search/pings.yaml",
     "browser/components/urlbar/pings.yaml",
     "toolkit/components/crashes/pings.yaml",
+    "toolkit/components/resistfingerprinting/pings.yaml",
     "toolkit/components/telemetry/pings.yaml",
     "toolkit/modules/pings.yaml",
 ]

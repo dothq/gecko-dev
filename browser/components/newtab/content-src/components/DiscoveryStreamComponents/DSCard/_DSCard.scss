@@ -118,6 +118,16 @@ $ds-card-image-gradient-solid: rgba(0, 0, 0, 100%);
         transform: scale(1);
       }
     }
+
+    header {
+      color: var(--newtab-primary-action-background);
+    }
+  }
+
+  &:active {
+    header {
+      color: var(--newtab-primary-element-active-color);
+    }
   }
 
   .img {
@@ -131,31 +141,15 @@ $ds-card-image-gradient-solid: rgba(0, 0, 0, 100%);
   }
 
   .ds-card-link {
+    position: absolute;
     height: 100%;
-    display: flex;
-    flex-direction: column;
+    width: 100%;
     text-decoration: none;
-
-    &:hover {
-      header {
-        color: var(--newtab-primary-action-background);
-      }
-    }
 
     &:focus {
       @include ds-focus;
 
       transition: none;
-
-      header {
-        color: var(--newtab-primary-action-background);
-      }
-    }
-
-    &:active {
-      header {
-        color: var(--newtab-primary-element-active-color);
-      }
     }
   }
 
@@ -255,7 +249,7 @@ $ds-card-image-gradient-solid: rgba(0, 0, 0, 100%);
       flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
-      column-gap: var(--space-small);
+      gap: 0 var(--space-small);
       margin-top: 0;
     }
 

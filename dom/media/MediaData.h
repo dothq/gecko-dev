@@ -97,8 +97,16 @@ class AlignedBuffer {
   }
 
   AlignedBuffer& operator=(AlignedBuffer&& aOther) noexcept {
-    this->~AlignedBuffer();
-    new (this) AlignedBuffer(std::move(aOther));
+    if (&aOther == this) {
+      return *this;
+    }
+    mData = aOther.mData;
+    mLength = aOther.mLength;
+    mBuffer = std::move(aOther.mBuffer);
+    mCapacity = aOther.mCapacity;
+    aOther.mData = nullptr;
+    aOther.mLength = 0;
+    aOther.mCapacity = 0;
     return *this;
   }
 
@@ -268,7 +276,7 @@ class InflatableShortBuffer {
     // capacity, and the loop goes backward.
     float* output = reinterpret_cast<float*>(mBuffer.mData);
     for (size_t i = Length(); i--;) {
-      output[i] = AudioSampleToFloat(mBuffer.mData[i]);
+      output[i] = ConvertAudioSample<float>(mBuffer.mData[i]);
     }
     AlignedFloatBuffer rv;
     rv.mBuffer = std::move(mBuffer.mBuffer);

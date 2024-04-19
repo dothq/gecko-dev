@@ -41,16 +41,16 @@ class BlockReflowState {
           mCanHaveOverflowMarkers(false) {}
 
     // Set in the BlockReflowState constructor when reflowing a "block margin
-    // root" frame (i.e. a frame with any of the NS_BLOCK_BFC_STATE_BITS flag
-    // set, for which margins apply by default).
+    // root" frame (i.e. a frame with any of the NS_BLOCK_BFC flag set, for
+    // which margins apply by default).
     //
     // The flag is also set when reflowing a frame whose computed BStart border
     // padding is non-zero.
     bool mIsBStartMarginRoot : 1;
 
     // Set in the BlockReflowState constructor when reflowing a "block margin
-    // root" frame (i.e. a frame with any of the NS_BLOCK_BFC_STATE_BITS flag
-    // set, for which margins apply by default).
+    // root" frame (i.e. a frame with any of the NS_BLOCK_BFC flag set, for
+    // which margins apply by default).
     //
     // The flag is also set when reflowing a frame whose computed BEnd border
     // padding is non-zero.
@@ -100,6 +100,13 @@ class BlockReflowState {
                    const nscoord aConsumedBSize,
                    const nscoord aEffectiveContentBoxBSize,
                    const nscoord aInset = 0);
+
+  /**
+   * Unshifts coords, restores availableBSize to reality.
+   * (Constructor applies any cached shift before reflow
+   *  so that frames are reflowed with cached shift)
+   */
+  void UndoAlignContentShift();
 
   /**
    * Get the available reflow space (the area not occupied by floats)
@@ -406,6 +413,11 @@ class BlockReflowState {
   // The amount of computed content block-size "consumed" by our previous
   // continuations.
   const nscoord mConsumedBSize;
+
+  // The amount of block-axis alignment shift to assume during reflow.
+  // Cached between reflows in the AlignContentShift property.
+  // (This system optimizes reflow for not changing the shift.)
+  nscoord mAlignContentShift;
 
   // Cache the current line's BSize if nsBlockFrame::PlaceLine() fails to
   // place the line. When redoing the line, it will be used to query the

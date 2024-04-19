@@ -2491,7 +2491,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
     "alert_emails": ["seceng-telemetry@mozilla.com"],
-    "expires_in_version": "126",
+    "expires_in_version": "132",
     "keyed": true,
     "keys": ["known_text", "unknown"],
     "kind": "enumerated",
@@ -2504,7 +2504,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox", "fennec"],
     "alert_emails": ["seceng-telemetry@mozilla.com"],
-    "expires_in_version": "126",
+    "expires_in_version": "132",
     "kind": "boolean",
     "releaseChannelCollection": "opt-out",
     "description": "Whether a probable font fingerprinting attempt was detected",
@@ -2935,19 +2935,6 @@
     "bug_numbers": [1675503],
     "keyed": true,
     "description": "The time between navigationStart and the first contentful paint of a foreground http or https root content document, in milliseconds. The contentful paint timestamp is taken during display list building and does not include rasterization or compositing of that paint. This is collected only on page load where the main document uses or suppports HTTP3"
-  },
-  "HTTPS_RR_OPEN_TO_FIRST_SENT": {
-    "alert_emails": ["necko@mozilla.com", "kershaw@mozilla.com"],
-    "record_in_processes": ["main", "content"],
-    "products": ["firefox"],
-    "bug_numbers": [1697480],
-    "expires_in_version": "126",
-    "releaseChannelCollection": "opt-out",
-    "kind": "exponential",
-    "high": 30000,
-    "n_buckets": 50,
-    "keyed": true,
-    "description": "HTTP channel(keys: uses_https_rr_page, uses_https_rr_sub, no_https_rr_page, no_https_rr_sub): Open -> first byte of request sent (ms)"
   },
   "H3P_PERF_PAGE_LOAD_TIME_MS": {
     "record_in_processes": ["content"],
@@ -3984,25 +3971,12 @@
     "n_values": 16,
     "description": "SSL Handshake Key Exchange Algorithm for resumed handshake (null=0, rsa=1, dh=2, fortezza=3, ecdh=4)"
   },
-  "OCSP_AGE_AT_CRLITE_OVERRIDE": {
-    "record_in_processes": ["main", "socket"],
-    "products": ["firefox"],
-    "alert_emails": ["seceng-telemetry@mozilla.com", "jschanck@mozilla.com"],
-    "bug_numbers": [1794479, 1817101, 1846897],
-    "expires_in_version": "125",
-    "kind": "linear",
-    "releaseChannelCollection": "opt-out",
-    "low": 1,
-    "high": 240,
-    "n_buckets": 20,
-    "description": "When OCSP and CRLite differ, how old is the OCSP response (in hours)?"
-  },
   "CRLITE_VS_OCSP_RESULT": {
     "record_in_processes": ["main", "socket"],
     "products": ["firefox"],
     "alert_emails": ["seceng-telemetry@mozilla.com", "dkeeler@mozilla.com"],
-    "bug_numbers": [1675655, 1758827, 1817102, 1846898],
-    "expires_in_version": "125",
+    "bug_numbers": [1675655, 1758827, 1817102, 1846898, 1876443],
+    "expires_in_version": "131",
     "kind": "categorical",
     "releaseChannelCollection": "opt-out",
     "description": "Does CRLite and OCSP fetching agree when a certificate is revoked?",
@@ -4023,8 +3997,8 @@
     "record_in_processes": ["main", "socket"],
     "products": ["firefox"],
     "alert_emails": ["seceng-telemetry@mozilla.com", "jschanck@mozilla.com"],
-    "bug_numbers": [1794450, 1817101, 1846897],
-    "expires_in_version": "125",
+    "bug_numbers": [1794450, 1817101, 1846897, 1876442],
+    "expires_in_version": "never",
     "kind": "categorical",
     "releaseChannelCollection": "opt-out",
     "description": "Which revocation checking mechanisms were used?",
@@ -7037,7 +7011,7 @@
     "n_values": 50,
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [353804],
-    "description": "Update: background update check result code except for no updates found (after we already have an update ready). Possible codes are enumerated by constants starting with CHK_ in toolkit/mozapps/update/UpdateTelemetry.jsm"
+    "description": "Update: background update check result code except for no updates found (after we already have an update ready). Possible codes are enumerated by constants starting with CHK_ in toolkit/mozapps/update/UpdateTelemetry.sys.mjs"
   },
   "UPDATE_CHECK_EXTENDED_ERROR_EXTERNAL": {
     "record_in_processes": ["main"],
@@ -7783,7 +7757,7 @@
     "n_values": 30,
     "releaseChannelCollection": "opt-out",
     "bug_numbers": [1137447],
-    "description": "Update: the update wizard page displayed when the UI was closed (mapped in toolkit/mozapps/update/UpdateTelemetry.jsm)"
+    "description": "Update: the update wizard page displayed when the UI was closed (mapped in toolkit/mozapps/update/UpdateTelemetry.sys.mjs)"
   },
   "UPDATE_NOTIFICATION_SHOWN": {
     "record_in_processes": ["main"],
@@ -8348,7 +8322,7 @@
     "kind": "enumerated",
     "n_values": 15,
     "releaseChannelCollection": "opt-out",
-    "description": "The browser that data is pulled from. The values correspond to the internal browser ID (see MigrationUtils.jsm)"
+    "description": "The browser that data is pulled from. The values correspond to the internal browser ID (see MigrationUtils.sys.mjs)"
   },
   "FX_MIGRATION_ERRORS": {
     "record_in_processes": ["main"],
@@ -8428,7 +8402,7 @@
     "high": 60000,
     "releaseChannelCollection": "opt-out",
     "keyed": true,
-    "description": "Accumulated timer delay (variance between when the timer was expected to fire and when it actually fired) in milliseconds as an indicator for decreased main-thread responsiveness while importing bookmarks from another browser, keyed by the name of the browser (see gAvailableMigratorKeys in MigrationUtils.jsm). The import is happening on a background thread and should ideally not affect the UI noticeably."
+    "description": "Accumulated timer delay (variance between when the timer was expected to fire and when it actually fired) in milliseconds as an indicator for decreased main-thread responsiveness while importing bookmarks from another browser, keyed by the name of the browser (see gAvailableMigratorKeys in MigrationUtils.sys.mjs). The import is happening on a background thread and should ideally not affect the UI noticeably."
   },
   "FX_MIGRATION_HISTORY_JANK_MS": {
     "record_in_processes": ["main"],
@@ -8441,7 +8415,7 @@
     "high": 60000,
     "releaseChannelCollection": "opt-out",
     "keyed": true,
-    "description": "Accumulated timer delay (variance between when the timer was expected to fire and when it actually fired) in milliseconds as an indicator for decreased main-thread responsiveness while importing history from another browser, keyed by the name of the browser (see gAvailableMigratorKeys in MigrationUtils.jsm). The import is happening on a background thread and should ideally not affect the UI noticeably."
+    "description": "Accumulated timer delay (variance between when the timer was expected to fire and when it actually fired) in milliseconds as an indicator for decreased main-thread responsiveness while importing history from another browser, keyed by the name of the browser (see gAvailableMigratorKeys in MigrationUtils.sys.mjs). The import is happening on a background thread and should ideally not affect the UI noticeably."
   },
   "FX_MIGRATION_LOGINS_JANK_MS": {
     "record_in_processes": ["main"],
@@ -8454,7 +8428,7 @@
     "high": 60000,
     "releaseChannelCollection": "opt-out",
     "keyed": true,
-    "description": "Accumulated timer delay (variance between when the timer was expected to fire and when it actually fired) in milliseconds as an indicator for decreased main-thread responsiveness while importing logins / passwords from another browser, keyed by the name of the browser (see gAvailableMigratorKeys in MigrationUtils.jsm). The import is happening on a background thread and should ideally not affect the UI noticeably. The time with the blocking Keychain dialog on macOS can skew this data."
+    "description": "Accumulated timer delay (variance between when the timer was expected to fire and when it actually fired) in milliseconds as an indicator for decreased main-thread responsiveness while importing logins / passwords from another browser, keyed by the name of the browser (see gAvailableMigratorKeys in MigrationUtils.sys.mjs). The import is happening on a background thread and should ideally not affect the UI noticeably. The time with the blocking Keychain dialog on macOS can skew this data."
   },
   "FX_MIGRATION_BOOKMARKS_QUANTITY": {
     "record_in_processes": ["main"],
@@ -12278,7 +12252,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "operating_systems": ["windows"],
-    "expires_in_version": "126",
+    "expires_in_version": "never",
     "kind": "categorical",
     "labels": [
       "Success",
@@ -12294,7 +12268,7 @@
       "ErrBuild"
     ],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1805509],
+    "bug_numbers": [1805509, 1883466],
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "description": "Result of each attempt to set the default browser with SetDefaultExtensionHandlersUserChoice() for pdf extension"
   },
@@ -12302,7 +12276,7 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "operating_systems": ["windows"],
-    "expires_in_version": "126",
+    "expires_in_version": "never",
     "kind": "categorical",
     "labels": [
       "Success",
@@ -12318,7 +12292,7 @@
       "ErrBuild"
     ],
     "releaseChannelCollection": "opt-out",
-    "bug_numbers": [1703578, 1736631, 1791928],
+    "bug_numbers": [1703578, 1736631, 1791928, 1881397],
     "alert_emails": ["application-update-telemetry-alerts@mozilla.com"],
     "description": "Result of each attempt to set the default browser with SetDefaultBrowserUserChoice()"
   },
@@ -12505,7 +12479,7 @@
     "expires_in_version": "default",
     "kind": "enumerated",
     "n_values": 10,
-    "description": "BACKGROUND THUMBNAILS: Reason the capture completed (see TEL_CAPTURE_DONE_* constants in BackgroundPageThumbs.jsm)"
+    "description": "BACKGROUND THUMBNAILS: Reason the capture completed (see TEL_CAPTURE_DONE_* constants in BackgroundPageThumbs.sys.mjs)"
   },
   "FX_THUMBNAILS_BG_CAPTURE_PAGE_LOAD_TIME_MS": {
     "record_in_processes": ["main", "content"],
@@ -15990,8 +15964,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
-    "bug_numbers": [1803363, 1850890],
-    "expires_in_version": "126",
+    "bug_numbers": [1803363, 1850890, 1881406],
+    "expires_in_version": "138",
     "kind": "exponential",
     "releaseChannelCollection": "opt-out",
     "high": 100000,
@@ -16002,8 +15976,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
-    "bug_numbers": [1803363, 1850890],
-    "expires_in_version": "126",
+    "bug_numbers": [1803363, 1850890, 1881406],
+    "expires_in_version": "138",
     "kind": "exponential",
     "high": 50000000,
     "n_buckets": 50,
@@ -16013,8 +15987,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
-    "bug_numbers": [1803363, 1850890],
-    "expires_in_version": "126",
+    "bug_numbers": [1803363, 1850890, 1881406],
+    "expires_in_version": "138",
     "kind": "exponential",
     "releaseChannelCollection": "opt-out",
     "high": 100000,
@@ -16025,8 +15999,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
-    "bug_numbers": [1803363, 1850890],
-    "expires_in_version": "126",
+    "bug_numbers": [1803363, 1850890, 1881406],
+    "expires_in_version": "138",
     "kind": "exponential",
     "high": 50000000,
     "n_buckets": 50,
@@ -16036,8 +16010,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
-    "bug_numbers": [1803363, 1850890],
-    "expires_in_version": "126",
+    "bug_numbers": [1803363, 1850890, 1881406],
+    "expires_in_version": "138",
     "kind": "exponential",
     "releaseChannelCollection": "opt-out",
     "high": 100000,
@@ -16048,8 +16022,8 @@
     "record_in_processes": ["main"],
     "products": ["firefox"],
     "alert_emails": ["addons-dev-internal@mozilla.com"],
-    "bug_numbers": [1803363, 1850890],
-    "expires_in_version": "126",
+    "bug_numbers": [1803363, 1850890, 1881406],
+    "expires_in_version": "138",
     "kind": "exponential",
     "releaseChannelCollection": "opt-out",
     "high": 100000,

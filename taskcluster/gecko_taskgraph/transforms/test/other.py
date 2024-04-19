@@ -16,6 +16,7 @@ from taskgraph.util.taskcluster import get_artifact_path, get_index_url
 from voluptuous import Any, Optional, Required
 
 from gecko_taskgraph.transforms.test.variant import TEST_VARIANTS
+from gecko_taskgraph.util.perftest import is_external_browser
 from gecko_taskgraph.util.platforms import platform_family
 from gecko_taskgraph.util.templates import merge
 
@@ -260,6 +261,20 @@ def handle_keyed_by(config, tasks):
 
 
 @transforms.add
+def setup_raptor_external_browser_platforms(config, tasks):
+    for task in tasks:
+        if task["suite"] != "raptor":
+            yield task
+            continue
+
+        if is_external_browser(task["try-name"]):
+            task["build-platform"] = "linux64/opt"
+            task["build-label"] = "build-linux64/opt"
+
+        yield task
+
+
+@transforms.add
 def set_target(config, tasks):
     for task in tasks:
         build_platform = task["build-platform"]
@@ -308,25 +323,25 @@ def setup_browsertime(config, tasks):
 
         ts = {
             "by-test-platform": {
-                "android.*": ["browsertime", "linux64-geckodriver", "linux64-node-16"],
-                "linux.*": ["browsertime", "linux64-geckodriver", "linux64-node-16"],
+                "android.*": ["browsertime", "linux64-geckodriver", "linux64-node"],
+                "linux.*": ["browsertime", "linux64-geckodriver", "linux64-node"],
                 "macosx1015.*": [
                     "browsertime",
                     "macosx64-geckodriver",
-                    "macosx64-node-16",
+                    "macosx64-node",
                 ],
                 "macosx1400.*": [
                     "browsertime",
                     "macosx64-aarch64-geckodriver",
-                    "macosx64-aarch64-node-16",
+                    "macosx64-aarch64-node",
                 ],
                 "windows.*aarch64.*": [
                     "browsertime",
                     "win32-geckodriver",
-                    "win32-node-16",
+                    "win32-node",
                 ],
-                "windows.*-32.*": ["browsertime", "win32-geckodriver", "win32-node-16"],
-                "windows.*-64.*": ["browsertime", "win64-geckodriver", "win64-node-16"],
+                "windows.*-32.*": ["browsertime", "win32-geckodriver", "win32-node"],
+                "windows.*-64.*": ["browsertime", "win64-geckodriver", "win64-node"],
             },
         }
 

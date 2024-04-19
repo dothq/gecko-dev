@@ -165,10 +165,6 @@ notes = "This is a first-party crate which is entirely unrelated to the crates.i
 audit-as-crates-io = true
 notes = "This is a first-party crate which is also published to crates.io, but we should publish audits for it for the benefit of the ecosystem."
 
-[policy.qlog]
-audit-as-crates-io = true
-notes = "Use this revision (09ea4b244096a013071cfe2175bbf2945fb7f8d1) of qlog temporarily."
-
 [policy.rure]
 audit-as-crates-io = true
 notes = "Identical to upstream, but with cdylib and staticlib targets disabled to avoid unnecessary build artifacts and linker errors."
@@ -192,6 +188,9 @@ notes = "This is a first-party crate which is entirely unrelated to the crates.i
 [policy.tabs]
 audit-as-crates-io = false
 notes = "This is a first-party crate, maintained by the appservices team, which is entirely unrelated to the crates.io package of the same name."
+
+[policy.unicode-bidi]
+audit-as-crates-io = true
 
 [policy.viaduct]
 audit-as-crates-io = false
@@ -599,10 +598,6 @@ criteria = "safe-to-run"
 version = "0.15.0"
 criteria = "safe-to-deploy"
 
-[[exemptions.nom]]
-version = "7.1.1"
-criteria = "safe-to-deploy"
-
 [[exemptions.objc]]
 version = "0.2.7"
 criteria = "safe-to-deploy"
@@ -753,14 +748,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.stable_deref_trait]]
 version = "1.2.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.static_assertions]]
-version = "1.1.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.strsim]]
-version = "0.10.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.tempfile]]

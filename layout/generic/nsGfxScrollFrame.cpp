@@ -1172,10 +1172,16 @@ void nsHTMLScrollFrame::PlaceScrollArea(ScrollReflowInput& aState,
       scrolledArea, ReflowChildFlags::Default);
 }
 
-nscoord nsHTMLScrollFrame::IntrinsicScrollbarGutterSizeAtInlineEdges() {
-  const bool isVerticalWM = GetWritingMode().IsVertical();
+nscoord nsHTMLScrollFrame::IntrinsicScrollbarGutterSizeAtInlineEdges() const {
+  const auto wm = GetWritingMode();
+  const LogicalMargin gutter(wm, IntrinsicScrollbarGutterSize());
+  return gutter.IStartEnd(wm);
+}
+
+nsMargin nsHTMLScrollFrame::IntrinsicScrollbarGutterSize() const {
   if (PresContext()->UseOverlayScrollbars()) {
-    return 0;
+    // Overlay scrollbars do not consume space per spec.
+    return {};
   }
 
   const auto* styleForScrollbar = nsLayoutUtils::StyleForScrollbar(this);
@@ -1183,28 +1189,30 @@ nscoord nsHTMLScrollFrame::IntrinsicScrollbarGutterSizeAtInlineEdges() {
       styleForScrollbar->StyleUIReset()->ScrollbarWidth();
   if (styleScrollbarWidth == StyleScrollbarWidth::None) {
     // Scrollbar shouldn't appear at all with "scrollbar-width: none".
-    return 0;
+    return {};
   }
 
   const auto& styleScrollbarGutter =
       styleForScrollbar->StyleDisplay()->mScrollbarGutter;
-  ScrollStyles ss = GetScrollStyles();
-  const StyleOverflow& inlineEndStyleOverflow =
-      isVerticalWM ? ss.mHorizontal : ss.mVertical;
-
-  // Return the scrollbar-gutter size only if we have "overflow:scroll" or
-  // non-auto "scrollbar-gutter", so early-return here if the conditions aren't
-  // satisfied.
-  if (inlineEndStyleOverflow != StyleOverflow::Scroll &&
-      styleScrollbarGutter == StyleScrollbarGutter::AUTO) {
-    return 0;
+  nsMargin gutter =
+      ComputeStableScrollbarGutter(styleScrollbarWidth, styleScrollbarGutter);
+  if (gutter.LeftRight() == 0 || gutter.TopBottom() == 0) {
+    // If there is no stable scrollbar-gutter at vertical or horizontal
+    // dimension, check if a scrollbar is always shown at that dimension.
+    ScrollStyles scrollStyles = GetScrollStyles();
+    const nscoord scrollbarSize =
+        GetNonOverlayScrollbarSize(PresContext(), styleScrollbarWidth);
+    if (gutter.LeftRight() == 0 &&
+        scrollStyles.mVertical == StyleOverflow::Scroll) {
+      (IsScrollbarOnRight() ? gutter.right : gutter.left) = scrollbarSize;
+    }
+    if (gutter.TopBottom() == 0 &&
+        scrollStyles.mHorizontal == StyleOverflow::Scroll) {
+      // The horizontal scrollbar is always at the bottom side.
+      gutter.bottom = scrollbarSize;
+    }
   }
-
-  const nscoord scrollbarSize =
-      GetNonOverlayScrollbarSize(PresContext(), styleScrollbarWidth);
-  const auto bothEdges =
-      bool(styleScrollbarGutter & StyleScrollbarGutter::BOTH_EDGES);
-  return bothEdges ? scrollbarSize * 2 : scrollbarSize;
+  return gutter;
 }
 
 nsMargin nsHTMLScrollFrame::ComputeStableScrollbarGutter(
@@ -2040,8 +2048,13 @@ class nsHTMLScrollFrame::AsyncSmoothMSDScroll final
    * Should be used at most once during the lifetime of this object.
    */
   void SetRefreshObserver(nsHTMLScrollFrame* aCallee) {
-    NS_ASSERTION(aCallee && !mCallee,
-                 "AsyncSmoothMSDScroll::SetRefreshObserver - Invalid usage.");
+    MOZ_ASSERT(aCallee,
+               "AsyncSmoothMSDScroll::SetRefreshObserver needs "
+               "a non-null aCallee in order to get a refresh driver");
+    MOZ_RELEASE_ASSERT(!mCallee,
+                       "AsyncSmoothMSDScroll::SetRefreshObserver "
+                       "shouldn't be called if we're already registered with "
+                       "a refresh driver, via a preexisting mCallee");
 
     RefreshDriver(aCallee)->AddRefreshObserver(this, FlushType::Style,
                                                "Smooth scroll (MSD) animation");
@@ -2168,8 +2181,13 @@ class nsHTMLScrollFrame::AsyncScroll final : public nsARefreshObserver {
    * Should be used at most once during the lifetime of this object.
    */
   void SetRefreshObserver(nsHTMLScrollFrame* aCallee) {
-    NS_ASSERTION(aCallee && !mCallee,
-                 "AsyncScroll::SetRefreshObserver - Invalid usage.");
+    MOZ_ASSERT(aCallee,
+               "AsyncScroll::SetRefreshObserver needs "
+               "a non-null aCallee in order to get a refresh driver");
+    MOZ_RELEASE_ASSERT(!mCallee,
+                       "AsyncScroll::SetRefreshObserver "
+                       "shouldn't be called if we're already registered with "
+                       "a refresh driver, via a preexisting mCallee");
 
     RefreshDriver(aCallee)->AddRefreshObserver(this, FlushType::Style,
                                                "Smooth scroll animation");
@@ -2235,12 +2253,7 @@ void nsHTMLScrollFrame::AsyncScroll::InitSmoothScroll(
     case ScrollOrigin::Apz:
       // Likewise we should never get APZ-triggered scrolls here, and if that
       // changes something is likely broken somewhere.
-      MOZ_ASSERT_UNREACHABLE(
-          "APZ scroll position updates should never be smooth");
-      break;
-    case ScrollOrigin::AnchorAdjustment:
-      MOZ_ASSERT_UNREACHABLE(
-          "scroll anchor adjustments should never be smooth");
+      MOZ_ASSERT(false);
       break;
     default:
       break;
@@ -3016,7 +3029,6 @@ void nsHTMLScrollFrame::ScrollToImpl(
       (mLastScrollOrigin != ScrollOrigin::None &&
        mLastScrollOrigin != ScrollOrigin::NotSpecified &&
        mLastScrollOrigin != ScrollOrigin::Relative &&
-       mLastScrollOrigin != ScrollOrigin::AnchorAdjustment &&
        mLastScrollOrigin != ScrollOrigin::Apz)) {
     aOrigin = ScrollOrigin::Other;
   }
@@ -3069,10 +3081,8 @@ void nsHTMLScrollFrame::ScrollToImpl(
     // may simplify this a bit and should be fine from the APZ side.
     if (mApzSmoothScrollDestination && aOrigin != ScrollOrigin::Clamp) {
       if (aOrigin == ScrollOrigin::Relative) {
-        AppendScrollUpdate(ScrollPositionUpdate::NewRelativeScroll(
-            // Clamp |mApzScrollPos| here. See the comment for this clamping
-            // reason below NewRelativeScroll call.
-            GetLayoutScrollRange().ClampPoint(mApzScrollPos), pt));
+        AppendScrollUpdate(
+            ScrollPositionUpdate::NewRelativeScroll(mApzScrollPos, pt));
         mApzScrollPos = pt;
       } else if (aOrigin != ScrollOrigin::Apz) {
         ScrollOrigin origin =
@@ -3159,15 +3169,8 @@ void nsHTMLScrollFrame::ScrollToImpl(
   if (aOrigin == ScrollOrigin::Relative) {
     MOZ_ASSERT(!isScrollOriginDowngrade);
     MOZ_ASSERT(mLastScrollOrigin == ScrollOrigin::Relative);
-    AppendScrollUpdate(ScrollPositionUpdate::NewRelativeScroll(
-        // It's possible that |mApzScrollPos| is no longer within the scroll
-        // range, we need to clamp it to the current scroll range, otherwise
-        // calculating a relative scroll distance from the outside point will
-        // result a point far from the desired point.
-        GetLayoutScrollRange().ClampPoint(mApzScrollPos), pt));
-    mApzScrollPos = pt;
-  } else if (aOrigin == ScrollOrigin::AnchorAdjustment) {
-    AppendScrollUpdate(ScrollPositionUpdate::NewMergeableScroll(aOrigin, pt));
+    AppendScrollUpdate(
+        ScrollPositionUpdate::NewRelativeScroll(mApzScrollPos, pt));
     mApzScrollPos = pt;
   } else if (aOrigin != ScrollOrigin::Apz) {
     AppendScrollUpdate(ScrollPositionUpdate::NewScroll(mLastScrollOrigin, pt));

@@ -1155,19 +1155,20 @@ nsresult Connection::initialize(nsIFileURL* aFileURL) {
   bool hasKey = false;
   bool hasDirectoryLockId = false;
 
-  MOZ_ALWAYS_TRUE(URLParams::Parse(
-      query, [&hasKey, &hasDirectoryLockId](const nsAString& aName,
-                                            const nsAString& aValue) {
-        if (aName.EqualsLiteral("key")) {
-          hasKey = true;
-          return true;
-        }
-        if (aName.EqualsLiteral("directoryLockId")) {
-          hasDirectoryLockId = true;
-          return true;
-        }
-        return true;
-      }));
+  MOZ_ALWAYS_TRUE(
+      URLParams::Parse(query, true,
+                       [&hasKey, &hasDirectoryLockId](const nsAString& aName,
+                                                      const nsAString& aValue) {
+                         if (aName.EqualsLiteral("key")) {
+                           hasKey = true;
+                           return true;
+                         }
+                         if (aName.EqualsLiteral("directoryLockId")) {
+                           hasDirectoryLockId = true;
+                           return true;
+                         }
+                         return true;
+                       }));
 
   bool exclusive = StaticPrefs::storage_sqlite_exclusiveLock_enabled();
 
@@ -2465,6 +2466,18 @@ Connection::GetVariableLimit(int32_t* _limit) {
     return NS_ERROR_UNEXPECTED;
   }
   *_limit = limit;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+Connection::SetVariableLimit(int32_t limit) {
+  if (!connectionReady()) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+  int oldLimit = ::sqlite3_limit(mDBConn, SQLITE_LIMIT_VARIABLE_NUMBER, limit);
+  if (oldLimit < 0) {
+    return NS_ERROR_UNEXPECTED;
+  }
   return NS_OK;
 }
 

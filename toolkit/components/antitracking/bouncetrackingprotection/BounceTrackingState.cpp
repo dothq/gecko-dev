@@ -143,10 +143,11 @@ nsresult BounceTrackingState::Init(
 }
 
 void BounceTrackingState::ResetBounceTrackingRecord() {
-  mBounceTrackingRecord = nullptr;
+  mBounceTrackingRecord = Nothing();
 }
 
-BounceTrackingRecord* BounceTrackingState::GetBounceTrackingRecord() {
+const Maybe<BounceTrackingRecord>&
+BounceTrackingState::GetBounceTrackingRecord() {
   return mBounceTrackingRecord;
 }
 
@@ -452,7 +453,7 @@ nsresult BounceTrackingState::OnStartNavigation(
   // tracking record to a new bounce tracking record with initial host set to
   // initialHost.
   if (!mBounceTrackingRecord) {
-    mBounceTrackingRecord = new BounceTrackingRecord();
+    mBounceTrackingRecord = Some(BounceTrackingRecord());
     mBounceTrackingRecord->SetInitialHost(siteHost);
 
     MOZ_LOG(gBounceTrackingProtectionLog, LogLevel::Debug,
@@ -477,7 +478,7 @@ nsresult BounceTrackingState::OnStartNavigation(
     NS_ENSURE_SUCCESS(rv, rv);
 
     MOZ_ASSERT(!mBounceTrackingRecord);
-    mBounceTrackingRecord = new BounceTrackingRecord();
+    mBounceTrackingRecord = Some(BounceTrackingRecord());
     mBounceTrackingRecord->SetInitialHost(siteHost);
 
     return NS_OK;
@@ -539,8 +540,12 @@ nsresult BounceTrackingState::OnResponseReceived(
             ("%s: Calling RecordStatefulBounces after timeout.", __FUNCTION__));
 
         BounceTrackingState* bounceTrackingState = thisWeak;
-        bounceTrackingState->mBounceTrackingProtection->RecordStatefulBounces(
-            bounceTrackingState);
+        DebugOnly<nsresult> rv =
+            bounceTrackingState->mBounceTrackingProtection
+                ->RecordStatefulBounces(bounceTrackingState);
+        NS_WARNING_ASSERTION(
+            NS_SUCCEEDED(rv),
+            "Running RecordStatefulBounces after a timeout failed.");
 
         bounceTrackingState->mClientBounceDetectionTimeout = nullptr;
       },

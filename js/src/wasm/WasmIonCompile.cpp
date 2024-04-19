@@ -900,7 +900,7 @@ class FunctionCompiler {
     return true;
   }
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   [[nodiscard]] bool brOnNull(uint32_t relativeDepth, const DefVector& values,
                               const ResultType& type, MDefinition* condition) {
     if (inDeadCode()) {
@@ -963,7 +963,7 @@ class FunctionCompiler {
     return true;
   }
 
-#endif  // ENABLE_WASM_FUNCTION_REFERENCES
+#endif  // ENABLE_WASM_GC
 
 #ifdef ENABLE_WASM_GC
   MDefinition* refI31(MDefinition* input) {
@@ -2006,10 +2006,10 @@ class FunctionCompiler {
     MOZ_CRASH("Unknown ABIArg kind.");
   }
 
-  template <typename SpanT>
-  [[nodiscard]] bool passArgs(const DefVector& argDefs, SpanT types,
+  template <typename VecT>
+  [[nodiscard]] bool passArgs(const DefVector& argDefs, const VecT& types,
                               CallCompileState* call) {
-    MOZ_ASSERT(argDefs.length() == types.size());
+    MOZ_ASSERT(argDefs.length() == types.length());
     for (uint32_t i = 0; i < argDefs.length(); i++) {
       MDefinition* def = argDefs[i];
       ValType type = types[i];
@@ -2447,7 +2447,7 @@ class FunctionCompiler {
     return collectUnaryCallResult(builtin.retType, def);
   }
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   [[nodiscard]] bool callRef(const FuncType& funcType, MDefinition* ref,
                              uint32_t lineOrBytecode,
                              const CallCompileState& call, DefVector* results) {
@@ -2489,7 +2489,7 @@ class FunctionCompiler {
 
 #  endif  // ENABLE_WASM_TAIL_CALLS
 
-#endif  // ENABLE_WASM_FUNCTION_REFERENCES
+#endif  // ENABLE_WASM_GC
 
   /*********************************************** Control flow generation */
 
@@ -2788,7 +2788,8 @@ class FunctionCompiler {
     // patches around.
     for (uint32_t depth = 0; depth < iter().controlStackDepth(); depth++) {
       LabelKind kind = iter().controlKind(depth);
-      if (kind != LabelKind::Try && kind != LabelKind::Body) {
+      if (kind != LabelKind::Try && kind != LabelKind::TryTable &&
+          kind != LabelKind::Body) {
         continue;
       }
       Control& control = iter().controlItem(depth);
@@ -5440,7 +5441,7 @@ static bool EmitReturnCallIndirect(FunctionCompiler& f) {
 }
 #endif
 
-#if defined(ENABLE_WASM_TAIL_CALLS) && defined(ENABLE_WASM_FUNCTION_REFERENCES)
+#if defined(ENABLE_WASM_TAIL_CALLS) && defined(ENABLE_WASM_GC)
 static bool EmitReturnCallRef(FunctionCompiler& f) {
   uint32_t lineOrBytecode = f.readCallSiteLineOrBytecode();
 
@@ -7090,7 +7091,11 @@ static bool EmitLoadSplatSimd128(FunctionCompiler& f, Scalar::Type viewType,
     return false;
   }
 
-  f.iter().setResult(f.loadSplatSimd128(viewType, addr, splatOp));
+  auto* ins = f.loadSplatSimd128(viewType, addr, splatOp);
+  if (!f.inDeadCode() && !ins) {
+    return false;
+  }
+  f.iter().setResult(ins);
   return true;
 }
 
@@ -7100,7 +7105,11 @@ static bool EmitLoadExtendSimd128(FunctionCompiler& f, wasm::SimdOp op) {
     return false;
   }
 
-  f.iter().setResult(f.loadExtendSimd128(addr, op));
+  auto* ins = f.loadExtendSimd128(addr, op);
+  if (!f.inDeadCode() && !ins) {
+    return false;
+  }
+  f.iter().setResult(ins);
   return true;
 }
 
@@ -7111,7 +7120,11 @@ static bool EmitLoadZeroSimd128(FunctionCompiler& f, Scalar::Type viewType,
     return false;
   }
 
-  f.iter().setResult(f.loadZeroSimd128(viewType, numBytes, addr));
+  auto* ins = f.loadZeroSimd128(viewType, numBytes, addr);
+  if (!f.inDeadCode() && !ins) {
+    return false;
+  }
+  f.iter().setResult(ins);
   return true;
 }
 
@@ -7123,7 +7136,11 @@ static bool EmitLoadLaneSimd128(FunctionCompiler& f, uint32_t laneSize) {
     return false;
   }
 
-  f.iter().setResult(f.loadLaneSimd128(laneSize, addr, laneIndex, src));
+  auto* ins = f.loadLaneSimd128(laneSize, addr, laneIndex, src);
+  if (!f.inDeadCode() && !ins) {
+    return false;
+  }
+  f.iter().setResult(ins);
   return true;
 }
 
@@ -7141,7 +7158,7 @@ static bool EmitStoreLaneSimd128(FunctionCompiler& f, uint32_t laneSize) {
 
 #endif  // ENABLE_WASM_SIMD
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
 static bool EmitRefAsNonNull(FunctionCompiler& f) {
   MDefinition* ref;
   if (!f.iter().readRefAsNonNull(&ref)) {
@@ -7204,7 +7221,7 @@ static bool EmitCallRef(FunctionCompiler& f) {
   return true;
 }
 
-#endif  // ENABLE_WASM_FUNCTION_REFERENCES
+#endif  // ENABLE_WASM_GC
 
 #ifdef ENABLE_WASM_GC
 
@@ -7917,18 +7934,18 @@ static bool EmitCallBuiltinModuleFunc(FunctionCompiler& f) {
   }
 
   uint32_t bytecodeOffset = f.readBytecodeOffset();
-  const SymbolicAddressSignature& callee = builtinModuleFunc->signature;
+  const SymbolicAddressSignature& callee = *builtinModuleFunc->sig();
 
   CallCompileState args;
   if (!f.passInstance(callee.argTypes[0], &args)) {
     return false;
   }
 
-  if (!f.passArgs(params, builtinModuleFunc->params, &args)) {
+  if (!f.passArgs(params, builtinModuleFunc->funcType()->args(), &args)) {
     return false;
   }
 
-  if (builtinModuleFunc->usesMemory) {
+  if (builtinModuleFunc->usesMemory()) {
     MDefinition* memoryBase = f.memoryBase(0);
     if (!f.passArg(memoryBase, MIRType::Pointer, &args)) {
       return false;
@@ -7939,7 +7956,7 @@ static bool EmitCallBuiltinModuleFunc(FunctionCompiler& f) {
     return false;
   }
 
-  bool hasResult = builtinModuleFunc->result.isSome();
+  bool hasResult = !builtinModuleFunc->funcType()->results().empty();
   MDefinition* result = nullptr;
   MDefinition** resultOutParam = hasResult ? &result : nullptr;
   if (!f.builtinInstanceMethodCall(callee, bytecodeOffset, args,
@@ -7996,37 +8013,19 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
       case uint16_t(Op::Else):
         CHECK(EmitElse(f));
       case uint16_t(Op::Try):
-        if (!f.moduleEnv().exceptionsEnabled()) {
-          return f.iter().unrecognizedOpcode(&op);
-        }
         CHECK(EmitTry(f));
       case uint16_t(Op::Catch):
-        if (!f.moduleEnv().exceptionsEnabled()) {
-          return f.iter().unrecognizedOpcode(&op);
-        }
         CHECK(EmitCatch(f));
       case uint16_t(Op::CatchAll):
-        if (!f.moduleEnv().exceptionsEnabled()) {
-          return f.iter().unrecognizedOpcode(&op);
-        }
         CHECK(EmitCatchAll(f));
       case uint16_t(Op::Delegate):
-        if (!f.moduleEnv().exceptionsEnabled()) {
-          return f.iter().unrecognizedOpcode(&op);
-        }
         if (!EmitDelegate(f)) {
           return false;
         }
         break;
       case uint16_t(Op::Throw):
-        if (!f.moduleEnv().exceptionsEnabled()) {
-          return f.iter().unrecognizedOpcode(&op);
-        }
         CHECK(EmitThrow(f));
       case uint16_t(Op::Rethrow):
-        if (!f.moduleEnv().exceptionsEnabled()) {
-          return f.iter().unrecognizedOpcode(&op);
-        }
         CHECK(EmitRethrow(f));
       case uint16_t(Op::ThrowRef):
         if (!f.moduleEnv().exnrefEnabled()) {
@@ -8474,36 +8473,35 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
       }
 #endif
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
       case uint16_t(Op::RefAsNonNull):
-        if (!f.moduleEnv().functionReferencesEnabled()) {
+        if (!f.moduleEnv().gcEnabled()) {
           return f.iter().unrecognizedOpcode(&op);
         }
         CHECK(EmitRefAsNonNull(f));
       case uint16_t(Op::BrOnNull): {
-        if (!f.moduleEnv().functionReferencesEnabled()) {
+        if (!f.moduleEnv().gcEnabled()) {
           return f.iter().unrecognizedOpcode(&op);
         }
         CHECK(EmitBrOnNull(f));
       }
       case uint16_t(Op::BrOnNonNull): {
-        if (!f.moduleEnv().functionReferencesEnabled()) {
+        if (!f.moduleEnv().gcEnabled()) {
           return f.iter().unrecognizedOpcode(&op);
         }
         CHECK(EmitBrOnNonNull(f));
       }
       case uint16_t(Op::CallRef): {
-        if (!f.moduleEnv().functionReferencesEnabled()) {
+        if (!f.moduleEnv().gcEnabled()) {
           return f.iter().unrecognizedOpcode(&op);
         }
         CHECK(EmitCallRef(f));
       }
 #endif
 
-#if defined(ENABLE_WASM_TAIL_CALLS) && defined(ENABLE_WASM_FUNCTION_REFERENCES)
+#if defined(ENABLE_WASM_TAIL_CALLS) && defined(ENABLE_WASM_GC)
       case uint16_t(Op::ReturnCallRef): {
-        if (!f.moduleEnv().functionReferencesEnabled() ||
-            !f.moduleEnv().tailCallsEnabled()) {
+        if (!f.moduleEnv().gcEnabled() || !f.moduleEnv().tailCallsEnabled()) {
           return f.iter().unrecognizedOpcode(&op);
         }
         CHECK(EmitReturnCallRef(f));
@@ -9025,114 +9023,91 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
             CHECK(EmitAtomicStore(f, ValType::I64, Scalar::Uint32));
 
           case uint32_t(ThreadOp::I32AtomicAdd):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32,
-                                AtomicFetchAddOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32, AtomicOp::Add));
           case uint32_t(ThreadOp::I64AtomicAdd):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64,
-                                AtomicFetchAddOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64, AtomicOp::Add));
           case uint32_t(ThreadOp::I32AtomicAdd8U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8,
-                                AtomicFetchAddOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8, AtomicOp::Add));
           case uint32_t(ThreadOp::I32AtomicAdd16U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint16,
-                                AtomicFetchAddOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I32, Scalar::Uint16, AtomicOp::Add));
           case uint32_t(ThreadOp::I64AtomicAdd8U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8,
-                                AtomicFetchAddOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8, AtomicOp::Add));
           case uint32_t(ThreadOp::I64AtomicAdd16U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint16,
-                                AtomicFetchAddOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint16, AtomicOp::Add));
           case uint32_t(ThreadOp::I64AtomicAdd32U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint32,
-                                AtomicFetchAddOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint32, AtomicOp::Add));
 
           case uint32_t(ThreadOp::I32AtomicSub):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32,
-                                AtomicFetchSubOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32, AtomicOp::Sub));
           case uint32_t(ThreadOp::I64AtomicSub):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64,
-                                AtomicFetchSubOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64, AtomicOp::Sub));
           case uint32_t(ThreadOp::I32AtomicSub8U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8,
-                                AtomicFetchSubOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8, AtomicOp::Sub));
           case uint32_t(ThreadOp::I32AtomicSub16U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint16,
-                                AtomicFetchSubOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I32, Scalar::Uint16, AtomicOp::Sub));
           case uint32_t(ThreadOp::I64AtomicSub8U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8,
-                                AtomicFetchSubOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8, AtomicOp::Sub));
           case uint32_t(ThreadOp::I64AtomicSub16U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint16,
-                                AtomicFetchSubOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint16, AtomicOp::Sub));
           case uint32_t(ThreadOp::I64AtomicSub32U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint32,
-                                AtomicFetchSubOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint32, AtomicOp::Sub));
 
           case uint32_t(ThreadOp::I32AtomicAnd):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32,
-                                AtomicFetchAndOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32, AtomicOp::And));
           case uint32_t(ThreadOp::I64AtomicAnd):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64,
-                                AtomicFetchAndOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64, AtomicOp::And));
           case uint32_t(ThreadOp::I32AtomicAnd8U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8,
-                                AtomicFetchAndOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8, AtomicOp::And));
           case uint32_t(ThreadOp::I32AtomicAnd16U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint16,
-                                AtomicFetchAndOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I32, Scalar::Uint16, AtomicOp::And));
           case uint32_t(ThreadOp::I64AtomicAnd8U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8,
-                                AtomicFetchAndOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8, AtomicOp::And));
           case uint32_t(ThreadOp::I64AtomicAnd16U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint16,
-                                AtomicFetchAndOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint16, AtomicOp::And));
           case uint32_t(ThreadOp::I64AtomicAnd32U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint32,
-                                AtomicFetchAndOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint32, AtomicOp::And));
 
           case uint32_t(ThreadOp::I32AtomicOr):
-            CHECK(
-                EmitAtomicRMW(f, ValType::I32, Scalar::Int32, AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32, AtomicOp::Or));
           case uint32_t(ThreadOp::I64AtomicOr):
-            CHECK(
-                EmitAtomicRMW(f, ValType::I64, Scalar::Int64, AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64, AtomicOp::Or));
           case uint32_t(ThreadOp::I32AtomicOr8U):
-            CHECK(
-                EmitAtomicRMW(f, ValType::I32, Scalar::Uint8, AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8, AtomicOp::Or));
           case uint32_t(ThreadOp::I32AtomicOr16U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint16,
-                                AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint16, AtomicOp::Or));
           case uint32_t(ThreadOp::I64AtomicOr8U):
-            CHECK(
-                EmitAtomicRMW(f, ValType::I64, Scalar::Uint8, AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8, AtomicOp::Or));
           case uint32_t(ThreadOp::I64AtomicOr16U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint16,
-                                AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint16, AtomicOp::Or));
           case uint32_t(ThreadOp::I64AtomicOr32U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint32,
-                                AtomicFetchOrOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint32, AtomicOp::Or));
 
           case uint32_t(ThreadOp::I32AtomicXor):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32,
-                                AtomicFetchXorOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Int32, AtomicOp::Xor));
           case uint32_t(ThreadOp::I64AtomicXor):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64,
-                                AtomicFetchXorOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Int64, AtomicOp::Xor));
           case uint32_t(ThreadOp::I32AtomicXor8U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8,
-                                AtomicFetchXorOp));
+            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint8, AtomicOp::Xor));
           case uint32_t(ThreadOp::I32AtomicXor16U):
-            CHECK(EmitAtomicRMW(f, ValType::I32, Scalar::Uint16,
-                                AtomicFetchXorOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I32, Scalar::Uint16, AtomicOp::Xor));
           case uint32_t(ThreadOp::I64AtomicXor8U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8,
-                                AtomicFetchXorOp));
+            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint8, AtomicOp::Xor));
           case uint32_t(ThreadOp::I64AtomicXor16U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint16,
-                                AtomicFetchXorOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint16, AtomicOp::Xor));
           case uint32_t(ThreadOp::I64AtomicXor32U):
-            CHECK(EmitAtomicRMW(f, ValType::I64, Scalar::Uint32,
-                                AtomicFetchXorOp));
+            CHECK(
+                EmitAtomicRMW(f, ValType::I64, Scalar::Uint32, AtomicOp::Xor));
 
           case uint32_t(ThreadOp::I32AtomicXchg):
             CHECK(EmitAtomicXchg(f, ValType::I32, Scalar::Int32));
@@ -9267,6 +9242,41 @@ static bool EmitBodyExprs(FunctionCompiler& f) {
 #undef CHECK
 }
 
+static bool IonBuildMIR(Decoder& d, const ModuleEnvironment& moduleEnv,
+                        const FuncCompileInput& func,
+                        const ValTypeVector& locals, MIRGenerator& mir,
+                        TryNoteVector& tryNotes, FeatureUsage* observedFeatures,
+                        UniqueChars* error) {
+  // Initialize MIR global information used for optimization
+  if (moduleEnv.numMemories() > 0) {
+    if (moduleEnv.memories[0].indexType() == IndexType::I32) {
+      mir.initMinWasmMemory0Length(moduleEnv.memories[0].initialLength32());
+    } else {
+      mir.initMinWasmMemory0Length(moduleEnv.memories[0].initialLength64());
+    }
+  }
+
+  // Build MIR graph
+  FunctionCompiler f(moduleEnv, d, func, locals, mir, tryNotes);
+  if (!f.init()) {
+    return false;
+  }
+
+  if (!f.startBlock()) {
+    return false;
+  }
+
+  if (!EmitBodyExprs(f)) {
+    return false;
+  }
+
+  f.finish();
+
+  *observedFeatures = f.featureUsage();
+
+  return true;
+}
+
 bool wasm::IonCompileFunctions(const ModuleEnvironment& moduleEnv,
                                const CompilerEnvironment& compilerEnv,
                                LifoAlloc& lifo,
@@ -9307,51 +9317,27 @@ bool wasm::IonCompileFunctions(const ModuleEnvironment& moduleEnv,
     Decoder d(func.begin, func.end, func.lineOrBytecode, error);
 
     // Build the local types vector.
-
-    const FuncType& funcType = *moduleEnv.funcs[func.index].type;
     ValTypeVector locals;
-    if (!locals.appendAll(funcType.args())) {
-      return false;
-    }
-    if (!DecodeLocalEntries(d, *moduleEnv.types, moduleEnv.features, &locals)) {
+    if (!DecodeLocalEntriesWithParams(d, moduleEnv, func.index, &locals)) {
       return false;
     }
 
     // Set up for Ion compilation.
-
     const JitCompileOptions options;
     MIRGraph graph(&alloc);
     CompileInfo compileInfo(locals.length());
     MIRGenerator mir(nullptr, options, &alloc, &graph, &compileInfo,
                      IonOptimizations.get(OptimizationLevel::Wasm));
-    if (moduleEnv.numMemories() > 0) {
-      if (moduleEnv.memories[0].indexType() == IndexType::I32) {
-        mir.initMinWasmMemory0Length(moduleEnv.memories[0].initialLength32());
-      } else {
-        mir.initMinWasmMemory0Length(moduleEnv.memories[0].initialLength64());
-      }
-    }
 
     // Build MIR graph
-    {
-      FunctionCompiler f(moduleEnv, d, func, locals, mir, masm.tryNotes());
-      if (!f.init()) {
-        return false;
-      }
-
-      if (!f.startBlock()) {
-        return false;
-      }
-
-      if (!EmitBodyExprs(f)) {
-        return false;
-      }
-
-      f.finish();
-
-      // Record observed feature usage
-      code->featureUsage |= f.featureUsage();
+    FeatureUsage observedFeatures;
+    if (!IonBuildMIR(d, moduleEnv, func, locals, mir, masm.tryNotes(),
+                     &observedFeatures, error)) {
+      return false;
     }
+
+    // Record observed feature usage
+    code->featureUsage |= observedFeatures;
 
     // Compile MIR graph
     {
@@ -9373,7 +9359,7 @@ bool wasm::IonCompileFunctions(const ModuleEnvironment& moduleEnv,
 
       BytecodeOffset prologueTrapOffset(func.lineOrBytecode);
       FuncOffsets offsets;
-      ArgTypeVector args(funcType);
+      ArgTypeVector args(*moduleEnv.funcs[func.index].type);
       if (!codegen.generateWasm(CallIndirectId::forFunc(moduleEnv, func.index),
                                 prologueTrapOffset, args, trapExitLayout,
                                 trapExitLayoutNumWords, &offsets,
@@ -9405,6 +9391,66 @@ bool wasm::IonCompileFunctions(const ModuleEnvironment& moduleEnv,
   }
 
   return code->swap(masm);
+}
+
+bool wasm::IonDumpFunction(const ModuleEnvironment& moduleEnv,
+                           const FuncCompileInput& func,
+                           IonDumpContents contents, GenericPrinter& out,
+                           UniqueChars* error) {
+  LifoAlloc lifo(TempAllocator::PreferredLifoChunkSize);
+  TempAllocator alloc(&lifo);
+  JitContext jitContext;
+  Decoder d(func.begin, func.end, func.lineOrBytecode, error);
+
+  // Decode the locals.
+  ValTypeVector locals;
+  if (!DecodeLocalEntriesWithParams(d, moduleEnv, func.index, &locals)) {
+    return false;
+  }
+
+  // Set up for Ion compilation.
+  const JitCompileOptions options;
+  MIRGraph graph(&alloc);
+  CompileInfo compileInfo(locals.length());
+  MIRGenerator mir(nullptr, options, &alloc, &graph, &compileInfo,
+                   IonOptimizations.get(OptimizationLevel::Wasm));
+
+  // Build MIR graph
+  TryNoteVector tryNotes;
+  FeatureUsage observedFeatures;
+  if (!IonBuildMIR(d, moduleEnv, func, locals, mir, tryNotes, &observedFeatures,
+                   error)) {
+    return false;
+  }
+
+  if (contents == IonDumpContents::UnoptimizedMIR) {
+    graph.dump(out);
+    return true;
+  }
+
+  // Optimize the MIR graph
+  if (!OptimizeMIR(&mir)) {
+    return false;
+  }
+
+  if (contents == IonDumpContents::OptimizedMIR) {
+    graph.dump(out);
+    return true;
+  }
+
+#ifdef JS_JITSPEW
+  // Generate the LIR graph
+  LIRGraph* lir = GenerateLIR(&mir);
+  if (!lir) {
+    return false;
+  }
+
+  MOZ_ASSERT(contents == IonDumpContents::LIR);
+  lir->dump(out);
+#else
+  out.printf("cannot dump LIR without --enable-jitspew");
+#endif
+  return true;
 }
 
 bool js::wasm::IonPlatformSupport() {

@@ -26,13 +26,12 @@
 #include <stdint.h>  // uint32_t, uint64_t
 #include <utility>   // std::move
 
-#include "ds/Fifo.h"                        // Fifo
-#include "frontend/CompilationStencil.h"    // frontend::CompilationStencil
-#include "gc/GCRuntime.h"                   // gc::GCRuntime
-#include "js/AllocPolicy.h"                 // SystemAllocPolicy
-#include "js/CompileOptions.h"              // JS::ReadOnlyCompileOptions
-#include "js/experimental/CompileScript.h"  // JS::CompilationStorage
-#include "js/experimental/JSStencil.h"      // JS::InstantiationStorage
+#include "ds/Fifo.h"                      // Fifo
+#include "frontend/CompilationStencil.h"  // frontend::CompilationStencil
+#include "gc/GCRuntime.h"                 // gc::GCRuntime
+#include "js/AllocPolicy.h"               // SystemAllocPolicy
+#include "js/CompileOptions.h"            // JS::ReadOnlyCompileOptions
+#include "js/experimental/JSStencil.h"    // JS::InstantiationStorage
 #include "js/HelperThreadAPI.h"  // JS::HelperThreadTaskCallback, JS::DispatchReason
 #include "js/MemoryMetrics.h"  // JS::GlobalStats
 #include "js/ProfilingStack.h"  // JS::RegisterThreadCallback, JS::UnregisterThreadCallback
@@ -115,12 +114,18 @@ class GlobalHelperThreadState {
       PromiseHelperTaskVector;
 
   // Count of running task by each threadType.
-  mozilla::EnumeratedArray<ThreadType, ThreadType::THREAD_TYPE_MAX, size_t>
+  mozilla::EnumeratedArray<ThreadType, size_t,
+                           size_t(ThreadType::THREAD_TYPE_MAX)>
       runningTaskCount;
   size_t totalCountRunningTasks;
 
   WriteOnceData<JS::RegisterThreadCallback> registerThread;
   WriteOnceData<JS::UnregisterThreadCallback> unregisterThread;
+
+  // Count of helper threads 'reserved' for parallel marking. This is used to
+  // prevent too many runtimes trying to mark in parallel at once. Does not stop
+  // threads from being used for other kinds of task, including GC tasks.
+  HelperThreadLockData<size_t> gcParallelMarkingThreads;
 
  private:
   // The lists below are all protected by |lock|.

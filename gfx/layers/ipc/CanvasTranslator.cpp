@@ -13,6 +13,7 @@
 #include "mozilla/gfx/DrawTargetWebgl.h"
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUParent.h"
+#include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/layers/BufferTexture.h"
@@ -131,15 +132,17 @@ bool CanvasTranslator::EnsureSharedContextWebgl() {
 }
 
 mozilla::ipc::IPCResult CanvasTranslator::RecvInitTranslator(
-    TextureType aTextureType, gfx::BackendType aBackendType,
-    Handle&& aReadHandle, nsTArray<Handle>&& aBufferHandles,
-    uint64_t aBufferSize, CrossProcessSemaphoreHandle&& aReaderSem,
+    TextureType aTextureType, TextureType aWebglTextureType,
+    gfx::BackendType aBackendType, Handle&& aReadHandle,
+    nsTArray<Handle>&& aBufferHandles, uint64_t aBufferSize,
+    CrossProcessSemaphoreHandle&& aReaderSem,
     CrossProcessSemaphoreHandle&& aWriterSem) {
   if (mHeaderShmem) {
     return IPC_FAIL(this, "RecvInitTranslator called twice.");
   }
 
   mTextureType = aTextureType;
+  mWebglTextureType = aWebglTextureType;
   mBackendType = aBackendType;
   mOtherPid = OtherPid();
 
@@ -637,7 +640,11 @@ bool CanvasTranslator::HandleExtensionEvent(int32_t aType) {
   }
 }
 
-void CanvasTranslator::BeginTransaction() { mIsInTransaction = true; }
+void CanvasTranslator::BeginTransaction() {
+  PROFILER_MARKER_TEXT("CanvasTranslator", GRAPHICS, {},
+                       "CanvasTranslator::BeginTransaction"_ns);
+  mIsInTransaction = true;
+}
 
 void CanvasTranslator::Flush() {
 #if defined(XP_WIN)
@@ -728,9 +735,15 @@ bool CanvasTranslator::CheckForFreshCanvasDevice(int aLineNumber) {
     NotifyDeviceChanged();
   }
 
-  RefPtr<Runnable> runnable = NS_NewRunnableFunction(
-      "CanvasTranslator NotifyDeviceReset",
-      []() { gfx::GPUParent::GetSingleton()->NotifyDeviceReset(); });
+  RefPtr<Runnable> runnable =
+      NS_NewRunnableFunction("CanvasTranslator NotifyDeviceReset", []() {
+        if (XRE_IsGPUProcess()) {
+          gfx::GPUParent::GetSingleton()->NotifyDeviceReset();
+        } else {
+          gfx::GPUProcessManager::Get()->OnInProcessDeviceReset(
+              /* aTrackThreshold */ false);
+        }
+      });
 
   // It is safe to wait here because only the Compositor thread waits on us and
   // the main thread doesn't wait on the compositor thread in the GPU process.
@@ -1025,6 +1038,8 @@ bool CanvasTranslator::UnlockTexture(int64_t aTextureId) {
 }
 
 bool CanvasTranslator::PresentTexture(int64_t aTextureId, RemoteTextureId aId) {
+  AUTO_PROFILER_MARKER_TEXT("CanvasTranslator", GRAPHICS, {},
+                            "CanvasTranslator::PresentTexture"_ns);
   auto result = mTextureInfo.find(aTextureId);
   if (result == mTextureInfo.end()) {
     return false;
@@ -1033,7 +1048,8 @@ bool CanvasTranslator::PresentTexture(int64_t aTextureId, RemoteTextureId aId) {
   RemoteTextureOwnerId ownerId = info.mRemoteTextureOwnerId;
   if (gfx::DrawTargetWebgl* webgl = info.GetDrawTargetWebgl()) {
     EnsureRemoteTextureOwner(ownerId);
-    if (webgl->CopyToSwapChain(aId, ownerId, mRemoteTextureOwner)) {
+    if (webgl->CopyToSwapChain(mWebglTextureType, aId, ownerId,
+                               mRemoteTextureOwner)) {
       return true;
     }
     if (mSharedContext && mSharedContext->IsContextLost()) {

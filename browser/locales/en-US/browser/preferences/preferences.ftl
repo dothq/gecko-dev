@@ -287,7 +287,8 @@ preferences-web-appearance-choice-input-dark =
 
 # This can appear when using windows HCM or "Override colors: always" without
 # system colors.
-preferences-web-appearance-override-warning = Your color selections are overriding website appearance. <a data-l10n-name="colors-link">Manage colors</a>
+preferences-web-appearance-override-warning2 =
+    .message = Your color selections are overriding website appearance.
 
 # This message contains one link. It can be moved within the sentence as needed
 # to adapt to your language, but should not be changed.
@@ -1441,7 +1442,7 @@ addon-recommendations-link = Learn more
 # or builds with no Telemetry support available.
 collection-health-report-disabled = Data reporting is disabled for this build configuration
 
-collection-backlogged-crash-reports-with-link = Allow { -brand-short-name } to send backlogged crash reports on your behalf <a data-l10n-name="crash-reports-link">Learn more</a>
+collection-backlogged-crash-reports = Allow { -brand-short-name } to send backlogged crash reports on your behalf
     .accesskey = c
 
 privacy-segmentation-section-header = New features that enhance your browsing

@@ -67,6 +67,9 @@ static nsStaticAtom* const kRelationAttrs[] = {
 
 static const uint32_t kRelationAttrsLen = ArrayLength(kRelationAttrs);
 
+static nsStaticAtom* const kSingleElementRelationIdlAttrs[] = {
+    nsGkAtoms::popovertarget};
+
 ////////////////////////////////////////////////////////////////////////////////
 // Constructor/desctructor
 
@@ -383,25 +386,25 @@ void DocAccessible::QueueCacheUpdate(LocalAccessible* aAcc,
 
 void DocAccessible::QueueCacheUpdateForDependentRelations(
     LocalAccessible* aAcc) {
-  if (!mIPCDoc || !aAcc || !aAcc->Elm() || !aAcc->IsInDocument() ||
-      aAcc->IsDefunct()) {
+  if (!mIPCDoc || !aAcc || !aAcc->IsInDocument() || aAcc->IsDefunct()) {
     return;
   }
-  nsAutoString ID;
-  aAcc->DOMNodeID(ID);
-  if (AttrRelProviders* list = GetRelProviders(aAcc->Elm(), ID)) {
-    // We call this function when we've noticed an ID change, or when an acc
-    // is getting bound to its document. We need to ensure any existing accs
-    // that depend on this acc's ID have their rel cache entries updated.
-    for (const auto& provider : *list) {
-      LocalAccessible* relatedAcc = GetAccessible(provider->mContent);
-      if (!relatedAcc || relatedAcc->IsDefunct() ||
-          !relatedAcc->IsInDocument() ||
-          mInsertedAccessibles.Contains(relatedAcc)) {
-        continue;
-      }
-      QueueCacheUpdate(relatedAcc, CacheDomain::Relations);
+  dom::Element* el = aAcc->Elm();
+  if (!el) {
+    return;
+  }
+
+  // We call this function when we've noticed an ID change, or when an acc
+  // is getting bound to its document. We need to ensure any existing accs
+  // that depend on this acc's ID or Element have their relation cache entries
+  // updated.
+  RelatedAccIterator iter(this, el, nullptr);
+  while (LocalAccessible* relatedAcc = iter.Next()) {
+    if (relatedAcc->IsDefunct() || !relatedAcc->IsInDocument() ||
+        mInsertedAccessibles.Contains(relatedAcc)) {
+      continue;
     }
+    QueueCacheUpdate(relatedAcc, CacheDomain::Relations);
   }
 }
 
@@ -507,6 +510,7 @@ void DocAccessible::Shutdown() {
   }
 
   mDependentIDsHashes.Clear();
+  mDependentElementsMap.Clear();
   mNodeToAccessibleMap.Clear();
 
   mAnchorJumpElm = nullptr;
@@ -729,9 +733,26 @@ std::pair<nsPoint, nsRect> DocAccessible::ComputeScrollData(
 NS_IMPL_NSIDOCUMENTOBSERVER_CORE_STUB(DocAccessible)
 NS_IMPL_NSIDOCUMENTOBSERVER_LOAD_STUB(DocAccessible)
 
+// When a reflected element IDL attribute changes, we might get the following
+// synchronous calls:
+// 1. AttributeWillChange for the element.
+// 2. AttributeWillChange for the content attribute.
+// 3. AttributeChanged for the content attribute.
+// 4. AttributeChanged for the element.
+// Since the content attribute value is "" for any element, we won't always get
+// 2 or 3. Even if we do, they might occur after the element has already
+// changed, which means we can't detect any relevant state changes there; e.g.
+// mPrevStateBits. Thus, we need 1 and 4, and we must ignore 2 and 3. To
+// facilitate this, sIsAttrElementChanging will be set to true for 2 and 3.
+static bool sIsAttrElementChanging = false;
+
 void DocAccessible::AttributeWillChange(dom::Element* aElement,
                                         int32_t aNameSpaceID,
                                         nsAtom* aAttribute, int32_t aModType) {
+  if (sIsAttrElementChanging) {
+    // See the comment above the definition of sIsAttrElementChanging.
+    return;
+  }
   LocalAccessible* accessible = GetAccessible(aElement);
   if (!accessible) {
     if (aElement != mContent) return;
@@ -744,10 +765,11 @@ void DocAccessible::AttributeWillChange(dom::Element* aElement,
   // elements.
   if (aModType != dom::MutationEvent_Binding::ADDITION) {
     RemoveDependentIDsFor(accessible, aAttribute);
+    RemoveDependentElementsFor(accessible, aAttribute);
   }
 
   if (aAttribute == nsGkAtoms::id) {
-    if (accessible->IsActiveDescendant()) {
+    if (accessible->IsActiveDescendantId()) {
       RefPtr<AccEvent> event =
           new AccStateChangeEvent(accessible, states::ACTIVE, false);
       FireDelayedEvent(event);
@@ -778,6 +800,10 @@ void DocAccessible::AttributeChanged(dom::Element* aElement,
                                      int32_t aNameSpaceID, nsAtom* aAttribute,
                                      int32_t aModType,
                                      const nsAttrValue* aOldValue) {
+  if (sIsAttrElementChanging) {
+    // See the comment above the definition of sIsAttrElementChanging.
+    return;
+  }
   NS_ASSERTION(!IsDefunct(),
                "Attribute changed called on defunct document accessible!");
 
@@ -851,6 +877,7 @@ void DocAccessible::AttributeChanged(dom::Element* aElement,
   if (aModType == dom::MutationEvent_Binding::MODIFICATION ||
       aModType == dom::MutationEvent_Binding::ADDITION) {
     AddDependentIDsFor(accessible, aAttribute);
+    AddDependentElementsFor(accessible, aAttribute);
   }
 }
 
@@ -883,25 +910,23 @@ void DocAccessible::ARIAAttributeDefaultChanged(dom::Element* aElement,
 void DocAccessible::ARIAActiveDescendantChanged(LocalAccessible* aAccessible) {
   if (dom::Element* elm = aAccessible->Elm()) {
     nsAutoString id;
-    if (elm->GetAttr(nsGkAtoms::aria_activedescendant, id)) {
-      dom::Element* activeDescendantElm = IDRefsIterator::GetElem(elm, id);
-      if (activeDescendantElm) {
-        LocalAccessible* activeDescendant = GetAccessible(activeDescendantElm);
-        if (activeDescendant) {
-          RefPtr<AccEvent> event =
-              new AccStateChangeEvent(activeDescendant, states::ACTIVE, true);
-          FireDelayedEvent(event);
-          if (aAccessible->IsActiveWidget()) {
-            FocusMgr()->ActiveItemChanged(activeDescendant, false);
+    if (dom::Element* activeDescendantElm =
+            nsCoreUtils::GetAriaActiveDescendantElement(elm)) {
+      LocalAccessible* activeDescendant = GetAccessible(activeDescendantElm);
+      if (activeDescendant) {
+        RefPtr<AccEvent> event =
+            new AccStateChangeEvent(activeDescendant, states::ACTIVE, true);
+        FireDelayedEvent(event);
+        if (aAccessible->IsActiveWidget()) {
+          FocusMgr()->ActiveItemChanged(activeDescendant, false);
 #ifdef A11Y_LOG
-            if (logging::IsEnabled(logging::eFocus)) {
-              logging::ActiveItemChangeCausedBy("ARIA activedescedant changed",
-                                                activeDescendant);
-            }
-#endif
+          if (logging::IsEnabled(logging::eFocus)) {
+            logging::ActiveItemChangeCausedBy("ARIA activedescedant changed",
+                                              activeDescendant);
           }
-          return;
+#endif
         }
+        return;
       }
     }
 
@@ -989,6 +1014,11 @@ void DocAccessible::ElementStateChanged(dom::Document* aDocument,
       accessible->IsButton()) {
     RefPtr<AccEvent> event =
         new AccStateChangeEvent(accessible, states::DEFAULT);
+    FireDelayedEvent(event);
+  }
+
+  if (aStateMask.HasState(dom::ElementState::INDETERMINATE)) {
+    RefPtr<AccEvent> event = new AccStateChangeEvent(accessible, states::MIXED);
     FireDelayedEvent(event);
   }
 }
@@ -1150,6 +1180,7 @@ void DocAccessible::BindToDocument(LocalAccessible* aAccessible,
 
   if (aAccessible->HasOwnContent()) {
     AddDependentIDsFor(aAccessible);
+    AddDependentElementsFor(aAccessible);
 
     nsIContent* content = aAccessible->GetContent();
     if (content->IsElement() &&
@@ -1769,6 +1800,61 @@ void DocAccessible::RemoveDependentIDsFor(LocalAccessible* aRelProvider,
   }
 }
 
+void DocAccessible::AddDependentElementsFor(LocalAccessible* aRelProvider,
+                                            nsAtom* aRelAttr) {
+  dom::Element* providerEl = aRelProvider->Elm();
+  if (!providerEl) {
+    return;
+  }
+  for (nsStaticAtom* attr : kSingleElementRelationIdlAttrs) {
+    if (aRelAttr && aRelAttr != attr) {
+      continue;
+    }
+    if (dom::Element* targetEl =
+            providerEl->GetExplicitlySetAttrElement(attr)) {
+      AttrRelProviders& providers =
+          mDependentElementsMap.LookupOrInsert(targetEl);
+      AttrRelProvider* provider = new AttrRelProvider(attr, providerEl);
+      providers.AppendElement(provider);
+    }
+    // If the relation attribute was given, we've already handled it. We don't
+    // have anything else to check.
+    if (aRelAttr) {
+      break;
+    }
+  }
+}
+
+void DocAccessible::RemoveDependentElementsFor(LocalAccessible* aRelProvider,
+                                               nsAtom* aRelAttr) {
+  dom::Element* providerEl = aRelProvider->Elm();
+  if (!providerEl) {
+    return;
+  }
+  for (nsStaticAtom* attr : kSingleElementRelationIdlAttrs) {
+    if (aRelAttr && aRelAttr != attr) {
+      continue;
+    }
+    if (dom::Element* targetEl =
+            providerEl->GetExplicitlySetAttrElement(attr)) {
+      if (auto providers = mDependentElementsMap.Lookup(targetEl)) {
+        providers.Data().RemoveElementsBy([attr,
+                                           providerEl](const auto& provider) {
+          return provider->mRelAttr == attr && provider->mContent == providerEl;
+        });
+        if (providers.Data().IsEmpty()) {
+          providers.Remove();
+        }
+      }
+    }
+    // If the relation attribute was given, we've already handled it. We don't
+    // have anything else to check.
+    if (aRelAttr) {
+      break;
+    }
+  }
+}
+
 bool DocAccessible::UpdateAccessibleOnAttrChange(dom::Element* aElement,
                                                  nsAtom* aAttribute) {
   if (aAttribute == nsGkAtoms::role) {
@@ -2003,7 +2089,7 @@ bool InsertIterator::Next() {
   return false;
 }
 
-void DocAccessible::MaybeFireEventsForChangedPopover(LocalAccessible *aAcc) {
+void DocAccessible::MaybeFireEventsForChangedPopover(LocalAccessible* aAcc) {
   dom::Element* el = aAcc->Elm();
   if (!el || !el->IsHTMLElement() || !el->HasAttr(nsGkAtoms::popover)) {
     return;  // Not a popover.
@@ -2620,6 +2706,7 @@ void DocAccessible::UncacheChildrenInSubtree(LocalAccessible* aRoot) {
   MaybeFireEventsForChangedPopover(aRoot);
   aRoot->mStateFlags |= eIsNotInDocument;
   RemoveDependentIDsFor(aRoot);
+  RemoveDependentElementsFor(aRoot);
 
   // The parent of the removed subtree is about to be cleared, so we must do
   // this here rather than in LocalAccessible::UnbindFromParent because we need
@@ -2757,7 +2844,7 @@ void DocAccessible::DispatchScrollingEvent(nsINode* aTarget,
 void DocAccessible::ARIAActiveDescendantIDMaybeMoved(
     LocalAccessible* aAccessible) {
   LocalAccessible* widget = nullptr;
-  if (aAccessible->IsActiveDescendant(&widget) && widget) {
+  if (aAccessible->IsActiveDescendantId(&widget) && widget) {
     // The active descendant might have just been inserted and may not be in the
     // tree yet. Therefore, schedule this async to ensure the tree is up to
     // date.
@@ -2844,4 +2931,23 @@ void DocAccessible::MaybeHandleChangeToHiddenNameOrDescription(
                        dependentAcc);
     }
   }
+}
+
+void DocAccessible::AttrElementWillChange(dom::Element* aElement,
+                                          nsAtom* aAttr) {
+  MOZ_ASSERT(!sIsAttrElementChanging);
+  AttributeWillChange(aElement, kNameSpaceID_None, aAttr,
+                      dom::MutationEvent_Binding::MODIFICATION);
+  // We might get notified about a related content attribute change. Ignore
+  // it.
+  sIsAttrElementChanging = true;
+}
+
+void DocAccessible::AttrElementChanged(dom::Element* aElement, nsAtom* aAttr) {
+  MOZ_ASSERT(sIsAttrElementChanging);
+  // The element has changed and the content attribute change notifications
+  // (if any) have been sent.
+  sIsAttrElementChanging = false;
+  AttributeChanged(aElement, kNameSpaceID_None, aAttr,
+                   dom::MutationEvent_Binding::MODIFICATION, nullptr);
 }

@@ -57,7 +57,6 @@
 #include "mozilla/dom/LargestContentfulPaint.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/dom/WakeLockBinding.h"
-#include "mozilla/glean/GleanMetrics.h"
 #include "nsAtom.h"
 #include "nsCOMArray.h"
 #include "nsCOMPtr.h"
@@ -320,6 +319,9 @@ enum BFCacheStatus {
 };
 
 }  // namespace dom
+namespace glean::perf {
+struct PageLoadExtra;
+}
 }  // namespace mozilla
 
 namespace mozilla::net {
@@ -2930,10 +2932,11 @@ class Document : public nsINode,
    */
   void MaybePreLoadImage(nsIURI* uri, const nsAString& aCrossOriginAttr,
                          ReferrerPolicyEnum aReferrerPolicy, bool aIsImgSet,
-                         bool aLinkPreload);
+                         bool aLinkPreload, const nsAString& aFetchPriority);
   void PreLoadImage(nsIURI* uri, const nsAString& aCrossOriginAttr,
                     ReferrerPolicyEnum aReferrerPolicy, bool aIsImgSet,
-                    bool aLinkPreload, uint64_t aEarlyHintPreloaderId);
+                    bool aLinkPreload, uint64_t aEarlyHintPreloaderId,
+                    const nsAString& aFetchPriority);
 
   /**
    * Called by images to forget an image preload when they start doing
@@ -3722,12 +3725,12 @@ class Document : public nsINode,
   DOMIntersectionObserver* GetLazyLoadObserver() { return mLazyLoadObserver; }
   DOMIntersectionObserver& EnsureLazyLoadObserver();
 
-  ResizeObserver* GetLastRememberedSizeObserver() {
-    return mLastRememberedSizeObserver;
+  bool HasElementsWithLastRememberedSize() const {
+    return !mElementsObservedForLastRememberedSize.IsEmpty();
   }
-  ResizeObserver& EnsureLastRememberedSizeObserver();
   void ObserveForLastRememberedSize(Element&);
   void UnobserveForLastRememberedSize(Element&);
+  void UpdateLastRememberedSizes();
 
   // Dispatch a runnable related to the document.
   nsresult Dispatch(already_AddRefed<nsIRunnable>&& aRunnable) const;
@@ -3874,6 +3877,17 @@ class Document : public nsINode,
 
   void SetAllowDeclarativeShadowRoots(bool aAllowDeclarativeShadowRoots);
   bool AllowsDeclarativeShadowRoots() const;
+
+  void SuspendDOMNotifications() {
+    MOZ_ASSERT(IsHTMLDocument(),
+               "Currently suspending DOM notifications is supported only on "
+               "HTML documents.");
+    mSuspendDOMNotifications = true;
+  }
+
+  void ResumeDOMNotifications() { mSuspendDOMNotifications = false; }
+
+  bool DOMNotificationsSuspended() const { return mSuspendDOMNotifications; }
 
  protected:
   RefPtr<DocumentL10n> mDocumentL10n;
@@ -4866,6 +4880,8 @@ class Document : public nsINode,
 
   bool mAllowDeclarativeShadowRoots : 1;
 
+  bool mSuspendDOMNotifications : 1;
+
   // The fingerprinting protections overrides for this document. The value will
   // override the default enabled fingerprinting protections for this document.
   // This will only get populated if these is one that comes from the local
@@ -5125,7 +5141,11 @@ class Document : public nsINode,
   // https://drafts.csswg.org/css-round-display/#viewport-fit-descriptor
   ViewportFitType mViewportFit;
 
-  PLDHashTable* mSubDocuments;
+  // XXXdholbert This should really be modernized to a nsTHashMap or similar,
+  // though note that the modernization will need to take care to also convert
+  // the special hash_table_ops logic (e.g. how SubDocClearEntry clears the
+  // parent document as part of cleaning up an entry in this table).
+  UniquePtr<PLDHashTable> mSubDocuments;
 
   class HeaderData;
   UniquePtr<HeaderData> mHeaderData;
@@ -5162,9 +5182,9 @@ class Document : public nsINode,
 
   RefPtr<DOMIntersectionObserver> mLazyLoadObserver;
 
-  // ResizeObserver for storing and removing the last remembered size.
+  // Elements observed for a last remembered size.
   // @see {@link https://drafts.csswg.org/css-sizing-4/#last-remembered}
-  RefPtr<ResizeObserver> mLastRememberedSizeObserver;
+  nsTHashSet<RefPtr<Element>> mElementsObservedForLastRememberedSize;
 
   // Stack of top layer elements.
   nsTArray<nsWeakPtr> mTopLayer;

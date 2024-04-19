@@ -247,6 +247,7 @@ already_AddRefed<Sampler> Device::CreateSampler(
   desc.mipmap_filter = ffi::WGPUFilterMode(aDesc.mMipmapFilter);
   desc.lod_min_clamp = aDesc.mLodMinClamp;
   desc.lod_max_clamp = aDesc.mLodMaxClamp;
+  desc.max_anisotropy = aDesc.mMaxAnisotropy;
 
   ffi::WGPUCompareFunction comparison = ffi::WGPUCompareFunction_Sentinel;
   if (aDesc.mCompare.WasPassed()) {
@@ -320,8 +321,6 @@ already_AddRefed<BindGroupLayout> Device::CreateBindGroupLayout(
         case dom::GPUTextureSampleType::Depth:
           data.type = ffi::WGPURawTextureSampleType_Depth;
           break;
-        case dom::GPUTextureSampleType::EndGuard_:
-          MOZ_ASSERT_UNREACHABLE();
       }
     }
     if (entry.mStorageTexture.WasPassed()) {
@@ -349,8 +348,6 @@ already_AddRefed<BindGroupLayout> Device::CreateBindGroupLayout(
         case dom::GPUBufferBindingType::Read_only_storage:
           e.ty = ffi::WGPURawBindingType_ReadonlyStorageBuffer;
           break;
-        case dom::GPUBufferBindingType::EndGuard_:
-          MOZ_ASSERT_UNREACHABLE();
       }
       e.has_dynamic_offset = entry.mBuffer.Value().mHasDynamicOffset;
     }
@@ -361,10 +358,23 @@ already_AddRefed<BindGroupLayout> Device::CreateBindGroupLayout(
       e.multisampled = entry.mTexture.Value().mMultisampled;
     }
     if (entry.mStorageTexture.WasPassed()) {
-      e.ty = entry.mStorageTexture.Value().mAccess ==
-                     dom::GPUStorageTextureAccess::Write_only
-                 ? ffi::WGPURawBindingType_WriteonlyStorageTexture
-                 : ffi::WGPURawBindingType_ReadonlyStorageTexture;
+      switch (entry.mStorageTexture.Value().mAccess) {
+        case dom::GPUStorageTextureAccess::Write_only: {
+          e.ty = ffi::WGPURawBindingType_WriteonlyStorageTexture;
+          break;
+        }
+        case dom::GPUStorageTextureAccess::Read_only: {
+          e.ty = ffi::WGPURawBindingType_ReadonlyStorageTexture;
+          break;
+        }
+        case dom::GPUStorageTextureAccess::Read_write: {
+          e.ty = ffi::WGPURawBindingType_ReadWriteStorageTexture;
+          break;
+        }
+        default: {
+          MOZ_ASSERT_UNREACHABLE();
+        }
+      }
       e.view_dimension = &optional[i].dim;
       e.storage_texture_format = &optional[i].format;
     }
@@ -379,8 +389,6 @@ already_AddRefed<BindGroupLayout> Device::CreateBindGroupLayout(
         case dom::GPUSamplerBindingType::Comparison:
           e.sampler_compare = true;
           break;
-        case dom::GPUSamplerBindingType::EndGuard_:
-          MOZ_ASSERT_UNREACHABLE();
       }
     }
     entries.AppendElement(e);
@@ -671,8 +679,12 @@ RawId CreateComputePipelineImpl(PipelineCreationContext* const aContext,
     MOZ_ASSERT_UNREACHABLE();
   }
   desc.stage.module = aDesc.mCompute.mModule->mId;
-  CopyUTF16toUTF8(aDesc.mCompute.mEntryPoint, entryPoint);
-  desc.stage.entry_point = entryPoint.get();
+  if (aDesc.mCompute.mEntryPoint.WasPassed()) {
+    CopyUTF16toUTF8(aDesc.mCompute.mEntryPoint.Value(), entryPoint);
+    desc.stage.entry_point = entryPoint.get();
+  } else {
+    desc.stage.entry_point = nullptr;
+  }
 
   RawId implicit_bgl_ids[WGPUMAX_BIND_GROUPS] = {};
   RawId id = ffi::wgpu_client_create_compute_pipeline(
@@ -717,8 +729,12 @@ RawId CreateRenderPipelineImpl(PipelineCreationContext* const aContext,
   {
     const auto& stage = aDesc.mVertex;
     vertexState.stage.module = stage.mModule->mId;
-    CopyUTF16toUTF8(stage.mEntryPoint, vsEntry);
-    vertexState.stage.entry_point = vsEntry.get();
+    if (stage.mEntryPoint.WasPassed()) {
+      CopyUTF16toUTF8(stage.mEntryPoint.Value(), vsEntry);
+      vertexState.stage.entry_point = vsEntry.get();
+    } else {
+      vertexState.stage.entry_point = nullptr;
+    }
 
     for (const auto& vertex_desc : stage.mBuffers) {
       ffi::WGPUVertexBufferLayout vb_desc = {};
@@ -753,8 +769,12 @@ RawId CreateRenderPipelineImpl(PipelineCreationContext* const aContext,
   if (aDesc.mFragment.WasPassed()) {
     const auto& stage = aDesc.mFragment.Value();
     fragmentState.stage.module = stage.mModule->mId;
-    CopyUTF16toUTF8(stage.mEntryPoint, fsEntry);
-    fragmentState.stage.entry_point = fsEntry.get();
+    if (stage.mEntryPoint.WasPassed()) {
+      CopyUTF16toUTF8(stage.mEntryPoint.Value(), fsEntry);
+      fragmentState.stage.entry_point = fsEntry.get();
+    } else {
+      fragmentState.stage.entry_point = nullptr;
+    }
 
     // Note: we pre-collect the blend states into a different array
     // so that we can have non-stale pointers into it.

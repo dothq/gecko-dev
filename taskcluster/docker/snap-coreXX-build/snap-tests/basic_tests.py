@@ -13,12 +13,13 @@ import time
 import traceback
 
 from mozlog import formatters, handlers, structuredlog
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
+from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
@@ -128,6 +129,9 @@ class SnapTestsBase:
         else:
             return 5
 
+    def is_debug_build(self):
+        return "BUILD_IS_DEBUG" in os.environ.keys()
+
     def maybe_collect_reference(self):
         return "TEST_COLLECT_REFERENCE" in os.environ.keys()
 
@@ -149,9 +153,11 @@ class SnapTestsBase:
             element_or_driver.screenshot_as_png
             if isinstance(element_or_driver, WebElement)
             else element_or_driver.get_screenshot_as_png()
+            if isinstance(element_or_driver, WebDriver)
+            else base64.b64decode(element_or_driver)
         )
         svg_png = Image.open(io.BytesIO(png_bytes)).convert("RGB")
-        svg_png_cropped = svg_png.crop((0, 0, svg_png.width - 20, svg_png.height - 20))
+        svg_png_cropped = svg_png.crop((0, 35, svg_png.width - 20, svg_png.height - 10))
 
         if self.maybe_collect_reference():
             new_ref = "new_{}".format(exp["reference"])
@@ -169,8 +175,28 @@ class SnapTestsBase:
 
         svg_ref = Image.open(os.path.join(self._dir, exp["reference"])).convert("RGB")
         diff = ImageChops.difference(svg_ref, svg_png_cropped)
+        bbox = diff.getbbox()
 
-        if diff.getbbox() is not None:
+        if bbox is not None:
+            (diff_r, diff_g, diff_b) = diff.getextrema()
+
+            min_is_black = (diff_r[0] == 0) and (diff_g[0] == 0) and (diff_b[0] == 0)
+            max_is_low_enough = (
+                (diff_r[1] <= 15) and (diff_g[1] <= 15) and (diff_b[1] <= 15)
+            )
+
+            draw_ref = ImageDraw.Draw(svg_ref)
+            draw_ref.rectangle(bbox, outline="red")
+
+            draw_rend = ImageDraw.Draw(svg_png_cropped)
+            draw_rend.rectangle(bbox, outline="red")
+
+            draw_diff = ImageDraw.Draw(diff)
+            draw_diff.rectangle(bbox, outline="red")
+
+            # Some differences have been found, let's verify
+            self._logger.info("Non empty differences bbox: {}".format(bbox))
+
             buffered = io.BytesIO()
             diff.save(buffered, format="PNG")
 
@@ -190,8 +216,18 @@ class SnapTestsBase:
             ) as current_screenshot:
                 svg_png_cropped.save(current_screenshot)
 
-            assert diff.getbbox() is None, "Mismatching screenshots for {}".format(
-                exp["reference"]
+            with open(
+                self.get_screenshot_destination("reference_rendering.png"), "wb"
+            ) as current_screenshot:
+                svg_ref.save(current_screenshot)
+
+            # Assume a difference is mismatching if the minimum pixel value in
+            # image difference is NOT black or if the maximum pixel value is
+            # not low enough
+            assert (
+                min_is_black and max_is_low_enough
+            ), "Mismatching screenshots for {} with extremas: {}".format(
+                exp["reference"], (diff_r, diff_g, diff_b)
             )
 
 
@@ -255,7 +291,7 @@ class SnapTests(SnapTestsBase):
         return True
 
     def test_youtube(self, exp):
-        self.open_tab("https://www.youtube.com")
+        self.open_tab("https://www.youtube.com/channel/UCYfdidRxbB8Qhf0Nx7ioOYw")
 
         # Wait for the consent dialog and accept it
         self._logger.info("Wait for consent form")
@@ -268,20 +304,11 @@ class SnapTests(SnapTestsBase):
         except TimeoutException:
             self._logger.info("Wait for consent form: timed out, maybe it is not here")
 
-        try:
-            # Find first video and click it
-            self._logger.info("Wait for one video")
-            self._wait.until(
-                EC.visibility_of_element_located((By.ID, "video-title-link"))
-            ).click()
-        except TimeoutException:
-            # We might have got the "try searching to get started"
-            # link to News channel
-            self._driver.get("https://www.youtube.com/channel/UCYfdidRxbB8Qhf0Nx7ioOYw")
-            self._logger.info("Wait again for one video")
-            self._wait.until(
-                EC.visibility_of_element_located((By.ID, "video-title-link"))
-            ).click()
+        # Find first video and click it
+        self._logger.info("Wait for one video")
+        self._wait.until(
+            EC.visibility_of_element_located((By.ID, "video-title-link"))
+        ).click()
 
         # Wait for duration to be set to something
         self._logger.info("Wait for video to start")
@@ -293,6 +320,79 @@ class SnapTests(SnapTestsBase):
         assert (
             video.get_property("duration") > exp["duration"]
         ), "youtube video should have duration"
+
+        self._wait.until(lambda d: video.get_property("currentTime") > exp["playback"])
+        self._logger.info("video played: {}".format(video.get_property("currentTime")))
+        assert (
+            video.get_property("currentTime") > exp["playback"]
+        ), "youtube video should perform playback"
+
+        return True
+
+    def wait_for_enable_drm(self):
+        rv = True
+        self._driver.set_context("chrome")
+        self._driver.execute_script(
+            "Services.prefs.setBoolPref('media.gmp-manager.updateEnabled', true);"
+        )
+
+        channel = self._driver.execute_script(
+            "return Services.prefs.getCharPref('app.update.channel');"
+        )
+        if channel == "esr":
+            rv = False
+        else:
+            enable_drm_button = self._wait.until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, ".notification-button[label='Enable DRM']")
+                )
+            )
+            self._logger.info("Enabling DRMs")
+            enable_drm_button.click()
+            self._wait.until(
+                EC.invisibility_of_element_located(
+                    (By.CSS_SELECTOR, ".notification-button[label='Enable DRM']")
+                )
+            )
+
+            self._logger.info("Installing DRMs")
+            self._wait.until(
+                EC.visibility_of_element_located(
+                    (By.CSS_SELECTOR, ".infobar[value='drmContentCDMInstalling']")
+                )
+            )
+
+            self._logger.info("Waiting for DRMs installation to complete")
+            self._longwait.until(
+                EC.invisibility_of_element_located(
+                    (By.CSS_SELECTOR, ".infobar[value='drmContentCDMInstalling']")
+                )
+            )
+
+        self._driver.set_context("content")
+        return rv
+
+    def test_youtube_film(self, exp):
+        self.open_tab("https://www.youtube.com/watch?v=i4FSx9LXVSE")
+        if not self.wait_for_enable_drm():
+            self._logger.info("Skipped on ESR because cannot enable DRM")
+            return True
+
+        # Wait for duration to be set to something
+        self._logger.info("Wait for video to start")
+        video = self._wait.until(
+            EC.visibility_of_element_located(
+                (By.CSS_SELECTOR, "video.html5-main-video")
+            )
+        )
+        self._wait.until(lambda d: type(video.get_property("duration")) == float)
+        self._logger.info("video duration: {}".format(video.get_property("duration")))
+        assert (
+            video.get_property("duration") > exp["duration"]
+        ), "youtube video should have duration"
+
+        self._driver.execute_script("arguments[0].click();", video)
+        video.send_keys("k")
 
         self._wait.until(lambda d: video.get_property("currentTime") > exp["playback"])
         self._logger.info("video played: {}".format(video.get_property("currentTime")))

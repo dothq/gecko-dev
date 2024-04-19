@@ -9,11 +9,13 @@
 #include "mozilla/PresShell.h"
 
 #include "Units.h"
+#include "mozilla/EventForwards.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/dom/AncestorIterator.h"
 #include "mozilla/dom/FontFaceSet.h"
 #include "mozilla/dom/ElementBinding.h"
 #include "mozilla/dom/LargestContentfulPaint.h"
+#include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/PerformanceMainThread.h"
 #include "mozilla/dom/HTMLAreaElement.h"
 #include "mozilla/ArrayUtils.h"
@@ -45,6 +47,7 @@
 #include "mozilla/StaticPrefs_font.h"
 #include "mozilla/StaticPrefs_image.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPrefs_test.h"
 #include "mozilla/StaticPrefs_toolkit.h"
 #include "mozilla/Try.h"
 #include "mozilla/TextEvents.h"
@@ -562,35 +565,52 @@ class nsBeforeFirstPaintDispatcher : public Runnable {
 class MOZ_STACK_CLASS AutoPointerEventTargetUpdater final {
  public:
   AutoPointerEventTargetUpdater(PresShell* aShell, WidgetEvent* aEvent,
-                                nsIFrame* aFrame, nsIContent** aTargetContent) {
+                                nsIFrame* aFrame, nsIContent* aTargetContent,
+                                nsIContent** aOutTargetContent) {
     MOZ_ASSERT(aEvent);
-    if (!aTargetContent || aEvent->mClass != ePointerEventClass) {
+    if (!aOutTargetContent || aEvent->mClass != ePointerEventClass) {
       // Make the destructor happy.
-      mTargetContent = nullptr;
+      mOutTargetContent = nullptr;
       return;
     }
     MOZ_ASSERT(aShell);
-    MOZ_ASSERT(aFrame);
-    MOZ_ASSERT(!aFrame->GetContent() ||
-               aShell->GetDocument() == aFrame->GetContent()->OwnerDoc());
+    MOZ_ASSERT_IF(aFrame && aFrame->GetContent(),
+                  aShell->GetDocument() == aFrame->GetContent()->OwnerDoc());
 
     mShell = aShell;
     mWeakFrame = aFrame;
-    mTargetContent = aTargetContent;
-    aShell->mPointerEventTarget = aFrame->GetContent();
+    mOutTargetContent = aOutTargetContent;
+    mFromTouch = aEvent->AsPointerEvent()->mFromTouchEvent;
+    // Touch event target may have no frame, e.g., removed from the DOM
+    MOZ_ASSERT_IF(!mFromTouch, aFrame);
+    mOriginalPointerEventTarget = aShell->mPointerEventTarget =
+        aFrame ? aFrame->GetContent() : aTargetContent;
   }
 
   ~AutoPointerEventTargetUpdater() {
-    if (!mTargetContent || !mShell || mWeakFrame.IsAlive()) {
+    if (!mOutTargetContent || !mShell || mWeakFrame.IsAlive()) {
       return;
     }
-    mShell->mPointerEventTarget.swap(*mTargetContent);
+    if (mFromTouch) {
+      // If the source event is a touch event, the touch event target should
+      // always be same target as preceding ePointerDown.  Therefore, we should
+      // always set it back to the original event target.
+      mOriginalPointerEventTarget.swap(*mOutTargetContent);
+    } else {
+      // If the source event is not a touch event (must be a mouse event in
+      // this case), the event should be fired on the closest inclusive ancestor
+      // of the pointer event target which is still connected.  The mutations
+      // are tracked by PresShell::ContentRemoved.  Therefore, we should set it.
+      mShell->mPointerEventTarget.swap(*mOutTargetContent);
+    }
   }
 
  private:
   RefPtr<PresShell> mShell;
+  nsCOMPtr<nsIContent> mOriginalPointerEventTarget;
   AutoWeakFrame mWeakFrame;
-  nsIContent** mTargetContent;
+  nsIContent** mOutTargetContent;
+  bool mFromTouch = false;
 };
 
 bool PresShell::sDisableNonTestMouseEvents = false;
@@ -5421,7 +5441,6 @@ bool PresShell::IsTransparentContainerElement() const {
         case dom::PrefersColorSchemeOverride::Dark:
           return pc->DefaultBackgroundColorScheme() == ColorScheme::Dark;
         case dom::PrefersColorSchemeOverride::None:
-        case dom::PrefersColorSchemeOverride::EndGuard_:
           break;
       }
     }
@@ -6888,18 +6907,13 @@ PresShell* PresShell::GetShellForTouchEvent(WidgetGUIEvent* aEvent) {
           return nullptr;
         }
 
-        nsCOMPtr<nsIContent> content = do_QueryInterface(oldTouch->GetTarget());
+        nsIContent* const content =
+            nsIContent::FromEventTargetOrNull(oldTouch->GetTarget());
         if (!content) {
           return nullptr;
         }
 
-        nsIFrame* contentFrame = content->GetPrimaryFrame();
-        if (!contentFrame) {
-          return nullptr;
-        }
-
-        PresShell* presShell = contentFrame->PresContext()->GetPresShell();
-        if (presShell) {
+        if (PresShell* const presShell = content->OwnerDoc()->GetPresShell()) {
           return presShell;
         }
       }
@@ -7249,12 +7263,6 @@ nsresult PresShell::EventHandler::HandleEventUsingCoordinates(
     return NS_OK;
   }
 
-  // frame could be null after dispatching pointer events.
-  // XXX Despite of this comment, we update the event target data outside
-  //     DispatchPrecedingPointerEvent().  Can we make it call
-  //     UpdateTouchEventTarget()?
-  eventTargetData.UpdateTouchEventTarget(aGUIEvent);
-
   // Handle the event in the correct shell.
   // We pass the subshell's root frame as the frame to start from. This is
   // the only correct alternative; if the event was captured then it
@@ -7267,7 +7275,17 @@ nsresult PresShell::EventHandler::HandleEventUsingCoordinates(
   nsresult rv = eventHandler.HandleEventWithCurrentEventInfo(
       aGUIEvent, aEventStatus, true,
       MOZ_KnownLive(eventTargetData.mOverrideClickTarget));
-  return rv;
+  if (NS_FAILED(rv) ||
+      MOZ_UNLIKELY(eventTargetData.mPresShell->IsDestroying())) {
+    return rv;
+  }
+
+  if (aGUIEvent->mMessage == eTouchEnd) {
+    MaybeSynthesizeCompatMouseEventsForTouchEnd(aGUIEvent->AsTouchEvent(),
+                                                aEventStatus);
+  }
+
+  return NS_OK;
 }
 
 bool PresShell::EventHandler::MaybeFlushPendingNotifications(
@@ -7436,41 +7454,58 @@ bool PresShell::EventHandler::DispatchPrecedingPointerEvent(
 
   AutoWeakFrame weakTargetFrame(targetFrame);
   AutoWeakFrame weakFrame(aEventTargetData->GetFrame());
-  nsCOMPtr<nsIContent> content(aEventTargetData->GetContent());
+  nsCOMPtr<nsIContent> pointerEventTargetContent(
+      aEventTargetData->GetContent());
   RefPtr<PresShell> presShell(aEventTargetData->mPresShell);
-  nsCOMPtr<nsIContent> targetContent;
+  nsCOMPtr<nsIContent> mouseOrTouchEventTargetContent;
   PointerEventHandler::DispatchPointerFromMouseOrTouch(
-      presShell, aEventTargetData->GetFrame(), content, aGUIEvent,
-      aDontRetargetEvents, aEventStatus, getter_AddRefs(targetContent));
+      presShell, aEventTargetData->GetFrame(), pointerEventTargetContent,
+      aGUIEvent, aDontRetargetEvents, aEventStatus,
+      getter_AddRefs(mouseOrTouchEventTargetContent));
 
   // If the target frame is alive, the caller should keep handling the event
   // unless event target frame is destroyed.
-  if (weakTargetFrame.IsAlive()) {
-    return weakFrame.IsAlive();
+  if (weakTargetFrame.IsAlive() && weakFrame.IsAlive()) {
+    aEventTargetData->UpdateTouchEventTarget(aGUIEvent);
+    return true;
   }
 
-  // If the event is not a mouse event, the caller should keep handling the
-  // event unless event target frame is destroyed.  Note that this case is
-  // not defined by the spec.
-  if (aGUIEvent->mClass != eMouseEventClass) {
-    return weakFrame.IsAlive();
-  }
-
-  // Spec defines that mouse events must be dispatched to the same target as
-  // the pointer event. If the target is no longer participating in its
-  // ownerDocument's tree, fire the event at the original target's nearest
-  // ancestor node
-  if (!targetContent) {
+  presShell->FlushPendingNotifications(FlushType::Layout);
+  if (MOZ_UNLIKELY(mPresShell->IsDestroying())) {
     return false;
   }
 
-  aEventTargetData->SetFrameAndContent(targetContent->GetPrimaryFrame(),
-                                       targetContent);
-  aEventTargetData->mPresShell = PresShell::GetShellForEventTarget(
-      aEventTargetData->GetFrame(), aEventTargetData->GetContent());
+  // The spec defines that mouse events must be dispatched to the same target as
+  // the pointer event.
+  // The Touch Events spec defines that touch events must be dispatched to the
+  // same target as touch start and the other browsers dispatch touch events
+  // even if the touch event target is not connected to the document.
+  // Retargetting the event is handled by AutoPointerEventTargetUpdater and
+  // mouseOrTouchEventTargetContent stores the result.
+
+  // If the target is no longer participating in its ownerDocument's tree,
+  // fire the event at the original target's nearest ancestor node.
+  if (!mouseOrTouchEventTargetContent) {
+    MOZ_ASSERT(aGUIEvent->mClass == eMouseEventClass);
+    return false;
+  }
+
+  aEventTargetData->SetFrameAndContent(
+      mouseOrTouchEventTargetContent->GetPrimaryFrame(),
+      mouseOrTouchEventTargetContent);
+  aEventTargetData->mPresShell =
+      mouseOrTouchEventTargetContent->IsInComposedDoc()
+          ? PresShell::GetShellForEventTarget(aEventTargetData->GetFrame(),
+                                              aEventTargetData->GetContent())
+          : mouseOrTouchEventTargetContent->OwnerDoc()->GetPresShell();
 
   // If new target PresShel is not found, we cannot keep handling the event.
-  return !!aEventTargetData->mPresShell;
+  if (!aEventTargetData->mPresShell) {
+    return false;
+  }
+
+  aEventTargetData->UpdateTouchEventTarget(aGUIEvent);
+  return true;
 }
 
 /**
@@ -7584,6 +7619,60 @@ bool PresShell::EventHandler::MaybeHandleEventWithAccessibleCaret(
   aGUIEvent->mFlags.mMultipleActionsPrevented = true;
   autoEventTargetPointResetter.SetHandledByAccessibleCaret();
   return true;
+}
+
+void PresShell::EventHandler::MaybeSynthesizeCompatMouseEventsForTouchEnd(
+    const WidgetTouchEvent* aTouchEndEvent,
+    const nsEventStatus* aStatus) const {
+  MOZ_ASSERT(aTouchEndEvent->mMessage == eTouchEnd);
+
+  // If the eTouchEnd event is dispatched via APZ, APZCCallbackHelper dispatches
+  // a set of mouse events with better handling.  Therefore, we don't need to
+  // handle that here.
+  if (!aTouchEndEvent->mFlags.mIsSynthesizedForTests ||
+      StaticPrefs::test_events_async_enabled()) {
+    return;
+  }
+
+  // If the tap was consumed or 2 or more touches occurred, we don't need the
+  // compatibility mouse events.
+  if (*aStatus == nsEventStatus_eConsumeNoDefault ||
+      !TouchManager::IsSingleTapEndToDoDefault(aTouchEndEvent)) {
+    return;
+  }
+
+  if (NS_WARN_IF(!aTouchEndEvent->mWidget)) {
+    return;
+  }
+
+  nsCOMPtr<nsIWidget> widget = aTouchEndEvent->mWidget;
+
+  // NOTE: I think that we don't need to implement a double click here becase
+  // WebDriver does not support a way to synthesize a double click and Chrome
+  // does not fire "dblclick" even if doing `pointerDown().pointerUp()` twice.
+  // FIXME: Currently we don't support long tap.
+  RefPtr<PresShell> presShell = mPresShell;
+  for (const EventMessage message : {eMouseMove, eMouseDown, eMouseUp}) {
+    if (MOZ_UNLIKELY(presShell->IsDestroying())) {
+      break;
+    }
+    nsIFrame* frameForPresShell = GetNearestFrameContainingPresShell(presShell);
+    if (!frameForPresShell) {
+      break;
+    }
+    WidgetMouseEvent event(true, message, widget, WidgetMouseEvent::eReal,
+                           WidgetMouseEvent::eNormal);
+    event.mRefPoint = aTouchEndEvent->mTouches[0]->mRefPoint;
+    event.mButton = MouseButton::ePrimary;
+    event.mButtons = message == eMouseDown ? MouseButtonsFlag::ePrimaryFlag
+                                           : MouseButtonsFlag::eNoButtons;
+    event.mInputSource = MouseEvent_Binding::MOZ_SOURCE_TOUCH;
+    event.mClickCount = message == eMouseMove ? 0 : 1;
+    event.mModifiers = aTouchEndEvent->mModifiers;
+    event.convertToPointer = false;
+    nsEventStatus mouseEventStatus = nsEventStatus_eIgnore;
+    presShell->HandleEvent(frameForPresShell, &event, false, &mouseEventStatus);
+  }
 }
 
 bool PresShell::EventHandler::MaybeDiscardEvent(WidgetGUIEvent* aGUIEvent) {
@@ -8252,7 +8341,7 @@ nsresult PresShell::EventHandler::HandleEventWithTarget(
     mPresShell->RecordPointerLocation(aEvent->AsMouseEvent());
   }
   AutoPointerEventTargetUpdater updater(mPresShell, aEvent, aNewEventFrame,
-                                        aTargetContent);
+                                        aNewEventContent, aTargetContent);
   AutoCurrentEventInfoSetter eventInfoSetter(*this, aNewEventFrame,
                                              aNewEventContent);
   nsresult rv = HandleEventWithCurrentEventInfo(aEvent, aEventStatus, false,
@@ -8360,7 +8449,7 @@ nsresult PresShell::EventHandler::HandleEventWithCurrentEventInfo(
     manager->TryToFlushPendingNotificationsToIME();
   }
 
-  FinalizeHandlingEvent(aEvent);
+  FinalizeHandlingEvent(aEvent, aEventStatus);
 
   RecordEventHandlingResponsePerformance(aEvent);
 
@@ -8512,7 +8601,8 @@ bool PresShell::EventHandler::PrepareToDispatchEvent(
   }
 }
 
-void PresShell::EventHandler::FinalizeHandlingEvent(WidgetEvent* aEvent) {
+void PresShell::EventHandler::FinalizeHandlingEvent(
+    WidgetEvent* aEvent, const nsEventStatus* aStatus) {
   switch (aEvent->mMessage) {
     case eKeyPress:
     case eKeyDown:
@@ -8561,6 +8651,16 @@ void PresShell::EventHandler::FinalizeHandlingEvent(WidgetEvent* aEvent) {
         dataTransfer->Disconnect();
       }
       return;
+    }
+    case eTouchStart:
+    case eTouchMove:
+    case eTouchEnd:
+    case eTouchCancel:
+    case eTouchPointerCancel:
+    case eMouseLongTap:
+    case eContextMenu: {
+      mPresShell->mTouchManager.PostHandleEvent(aEvent, aStatus);
+      break;
     }
     default:
       return;
@@ -11955,7 +12055,7 @@ void PresShell::EventHandler::EventTargetData::UpdateTouchEventTarget(
     nsIFrame* newFrame =
         TouchManager::SuppressInvalidPointsAndGetTargetedFrame(touchEvent);
     if (!newFrame) {
-      return;  // XXX Why don't we stop handling the event in this case?
+      return;
     }
     SetFrameAndComputePresShellAndContent(newFrame, aGUIEvent);
     return;

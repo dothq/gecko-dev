@@ -14,7 +14,7 @@ HEADER_LINE = (
     " DO NOT EDIT.\n"
 )
 
-FEATURE_MANIFEST_SCHEMA = Path("schemas", "ExperimentFeatureManifest.schema.json")
+FEATURE_SCHEMA = Path("schemas", "ExperimentFeature.schema.json")
 
 NIMBUS_FALLBACK_PREFS = (
     "constexpr std::pair<nsLiteralCString, nsLiteralCString>"
@@ -26,36 +26,17 @@ NIMBUS_FALLBACK_PREFS = (
 ALLOWED_ISEARLYSTARTUP_FEATURE_IDS = {
     "abouthomecache",
     "aboutwelcome",
-    "backgroundThreads",
-    "backgroundUpdate",
-    "bookmarks",
     "dapTelemetry",
-    "deviceMigration",
-    "frecency",
-    "fullPageTranslation",
-    "fullPageTranslationAutomaticPopup",
-    "fxaButtonVisibility",
-    "gcParallelMarking",
     "gleanInternalSdk",
-    "jitHintsCache",
-    "jitThresholds",
-    "jsParallelParsing",
     "majorRelease2022",
-    "migrationWizard",
     "newtab",
-    "nimbus-qa-2",
-    "opaqueResponseBlocking",
-    "phc",
     "pocketNewtab",
-    "powerSaver",
-    "reportBrokenSite",
     "saveToPocket",
     "searchConfiguration",
     "shellService",
     "testFeature",
     "updatePrompt",
     "upgradeDialog",
-    "windowsJumpList",
 }
 
 
@@ -91,7 +72,7 @@ def validate_feature_manifest(schema_path, manifest_path, manifest):
                         f"Feature {feature_id} is not early startup but is in the allow list."
                     )
                     print("Please remove it from generate_feature_manifest.py")
-                raise Exception("isEarlyStatup is deprecated")
+                raise Exception("isEarlyStartup is deprecated")
 
             for variable, variable_def in feature.get("variables", {}).items():
                 set_pref = variable_def.get("setPref")
@@ -158,7 +139,7 @@ def generate_feature_manifest(fd, input_file):
             manifest = yaml.safe_load(f)
 
         validate_feature_manifest(
-            Path(input_file).parent / FEATURE_MANIFEST_SCHEMA, input_file, manifest
+            Path(input_file).parent / FEATURE_SCHEMA, input_file, manifest
         )
 
         fd.write(f"export const FeatureManifest = {json.dumps(manifest)};")

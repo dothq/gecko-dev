@@ -4,6 +4,7 @@
 
 
 import itertools
+import logging
 import os
 import re
 from datetime import datetime, timedelta
@@ -20,6 +21,9 @@ from gecko_taskgraph.util.attributes import (
 )
 from gecko_taskgraph.util.hg import find_hg_revision_push_info, get_hg_commit_message
 from gecko_taskgraph.util.platforms import platform_family
+
+logger = logging.getLogger(__name__)
+
 
 # Some tasks show up in the target task set, but are possibly special cases,
 # uncommon tasks, or tasks running against limited hardware set that they
@@ -247,9 +251,9 @@ def accept_raptor_android_build(platform):
     if "p5" in platform and "aarch64" in platform:
         return False
     if "p6" in platform and "aarch64" in platform:
-        return False
+        return True
     if "s21" in platform and "aarch64" in platform:
-        return False
+        return True
     if "a51" in platform:
         return True
     return False
@@ -299,16 +303,30 @@ def _try_task_config(full_task_graph, parameters, graph_config):
     pattern_tasks = [x for x in requested_tasks if x.endswith("-*")]
     tasks = list(set(requested_tasks) - set(pattern_tasks))
     matched_tasks = []
+    missing = set()
     for pattern in pattern_tasks:
-        matched_tasks.extend(
-            [
-                t
-                for t in full_task_graph.graph.nodes
-                if t.split(pattern.replace("*", ""))[-1].isnumeric()
-            ]
-        )
+        found = [
+            t
+            for t in full_task_graph.graph.nodes
+            if t.split(pattern.replace("*", ""))[-1].isnumeric()
+        ]
+        if found:
+            matched_tasks.extend(found)
+        else:
+            missing.add(pattern)
 
-    return list(set(tasks) | set(matched_tasks))
+        if "MOZHARNESS_TEST_PATHS" in parameters["try_task_config"].get("env", {}):
+            matched_tasks = [x for x in matched_tasks if x.endswith("-1")]
+
+    selected_tasks = set(tasks) | set(matched_tasks)
+    missing.update(selected_tasks - set(full_task_graph.tasks))
+
+    if missing:
+        missing_str = "\n  ".join(sorted(missing))
+        logger.warning(
+            f"The following tasks were requested but do not exist in the full task graph and will be skipped:\n  {missing_str}"
+        )
+    return list(selected_tasks - missing)
 
 
 def _try_option_syntax(full_task_graph, parameters, graph_config):
@@ -731,6 +749,7 @@ def target_tasks_larch(full_task_graph, parameters, graph_config):
             "l10n" in task.kind
             or "msix" in task.kind
             or "android" in task.attributes.get("build_platform", "")
+            or (task.kind == "test" and "msix" in task.label)
         ):
             return False
         # otherwise reduce tests only
@@ -800,6 +819,8 @@ def target_tasks_custom_car_perf_testing(full_task_graph, parameters, graph_conf
             if "browsertime" in try_name and (
                 "custom-car" in try_name or "cstm-car-m" in try_name
             ):
+                if "hw-s21" in platform and "speedometer3" not in try_name:
+                    return False
                 return True
         return False
 
@@ -853,6 +874,8 @@ def target_tasks_general_perf_testing(full_task_graph, parameters, graph_config)
                     return True
         # Android selection
         elif accept_raptor_android_build(platform):
+            if "hw-s21" in platform and "speedometer3" not in try_name:
+                return False
             if "chrome-m" in try_name and (
                 ("ebay" in try_name and "live" not in try_name)
                 or (
@@ -935,6 +958,8 @@ def target_tasks_speedometer_tests(full_task_graph, parameters, graph_config):
             platform
         ):
             try_name = attributes.get("raptor_try_name")
+            if "hw-s21" in platform and "speedometer3" not in try_name:
+                return False
             if (
                 "browsertime" in try_name
                 and "speedometer" in try_name
@@ -950,7 +975,9 @@ def target_tasks_nightly_linux(full_task_graph, parameters, graph_config):
     """Select the set of tasks required for a nightly build of linux. The
     nightly build process involves a pipeline of builds, signing,
     and, eventually, uploading the tasks to balrog."""
-    filter = make_desktop_nightly_filter({"linux64-shippable", "linux-shippable"})
+    filter = make_desktop_nightly_filter(
+        {"linux64-shippable", "linux-shippable", "linux-aarch64-shippable"}
+    )
     return [l for l, t in full_task_graph.tasks.items() if filter(t, parameters)]
 
 
@@ -1060,6 +1087,7 @@ def target_tasks_searchfox(full_task_graph, parameters, graph_config):
         "searchfox-macosx64-searchfox/debug",
         "searchfox-win64-searchfox/debug",
         "searchfox-android-armv7-searchfox/debug",
+        "searchfox-ios-searchfox/debug",
         "source-test-file-metadata-bugzilla-components",
         "source-test-file-metadata-test-info-all",
         "source-test-wpt-metadata-summary",

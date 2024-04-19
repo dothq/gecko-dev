@@ -118,6 +118,10 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
                                    const ipc::ByteBuf& aByteBuf);
   ipc::IPCResult RecvCommandEncoderAction(RawId aEncoderId, RawId aDeviceId,
                                           const ipc::ByteBuf& aByteBuf);
+  ipc::IPCResult RecvRenderPass(RawId aEncoderId, RawId aDeviceId,
+                                const ipc::ByteBuf& aByteBuf);
+  ipc::IPCResult RecvComputePass(RawId aEncoderId, RawId aDeviceId,
+                                 const ipc::ByteBuf& aByteBuf);
   ipc::IPCResult RecvBumpImplicitBindGroupLayout(RawId aPipelineId,
                                                  bool aIsCompute,
                                                  uint32_t aIndex,
@@ -219,7 +223,7 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
   nsTHashSet<RawId> mLostDeviceIds;
 
   // Shared handle of wgpu device's fence.
-  RefPtr<gfx::FileHandleWrapper> mFenceHandle;
+  std::unordered_map<RawId, RefPtr<gfx::FileHandleWrapper>> mDeviceFenceHandles;
 
   // Store DeviceLostRequest structs for each device as unique_ptrs mapped
   // to their device ids. We keep these unique_ptrs alive as long as the

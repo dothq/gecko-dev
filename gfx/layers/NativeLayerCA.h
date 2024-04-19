@@ -6,7 +6,7 @@
 #ifndef mozilla_layers_NativeLayerCA_h
 #define mozilla_layers_NativeLayerCA_h
 
-#include <IOSurface/IOSurface.h>
+#include <IOSurface/IOSurfaceRef.h>
 
 #include <deque>
 #include <unordered_map>
@@ -39,7 +39,9 @@ class RenderMacIOSurfaceTextureHost;
 
 namespace layers {
 
+#ifdef XP_MACOSX
 class NativeLayerRootSnapshotterCA;
+#endif
 class SurfacePoolHandleCA;
 
 enum class VideoLowPowerType {
@@ -102,8 +104,10 @@ class NativeLayerRootCA : public NativeLayerRoot {
   bool CommitToScreen() override;
 
   void CommitOffscreen();
+#ifdef XP_MACOSX
   void OnNativeLayerRootSnapshotterDestroyed(
       NativeLayerRootSnapshotterCA* aNativeLayerRootSnapshotter);
+#endif
 
   // Enters a mode during which CommitToScreen(), when called on a non-main
   // thread, will not apply any updates to the CALayer tree.
@@ -139,7 +143,7 @@ class NativeLayerRootCA : public NativeLayerRoot {
 
   void SetWindowIsFullscreen(bool aFullscreen);
 
-  VideoLowPowerType CheckVideoLowPower(const MutexAutoLock& aProofOfLock);
+  VideoLowPowerType CheckVideoLowPower();
 
  protected:
   explicit NativeLayerRootCA(CALayer* aLayer);
@@ -149,7 +153,8 @@ class NativeLayerRootCA : public NativeLayerRoot {
     explicit Representation(CALayer* aRootCALayer);
     ~Representation();
     void Commit(WhichRepresentation aRepresentation,
-                const nsTArray<RefPtr<NativeLayerCA>>& aSublayers);
+                const nsTArray<RefPtr<NativeLayerCA>>& aSublayers,
+                bool aWindowIsFullscreen);
     CALayer* mRootCALayer = nullptr;  // strong
     bool mMutatedLayerStructure = false;
   };
@@ -160,7 +165,9 @@ class NativeLayerRootCA : public NativeLayerRoot {
   Mutex mMutex MOZ_UNANNOTATED;  // protects all other fields
   Representation mOnscreenRepresentation;
   Representation mOffscreenRepresentation;
+#ifdef XP_MACOSX
   NativeLayerRootSnapshotterCA* mWeakSnapshotter = nullptr;
+#endif
   nsTArray<RefPtr<NativeLayerCA>> mSublayers;  // in z-order
   float mBackingScale = 1.0f;
   bool mMutated = false;
@@ -188,6 +195,7 @@ class NativeLayerRootCA : public NativeLayerRoot {
 
 class RenderSourceNLRS;
 
+#ifdef XP_MACOSX
 class NativeLayerRootSnapshotterCA final : public NativeLayerRootSnapshotter {
  public:
   static UniquePtr<NativeLayerRootSnapshotterCA> Create(
@@ -217,6 +225,7 @@ class NativeLayerRootSnapshotterCA final : public NativeLayerRootSnapshotter {
   RefPtr<RenderSourceNLRS> mSnapshot;
   CARenderer* mRenderer = nullptr;  // strong
 };
+#endif
 
 // NativeLayerCA wraps a CALayer and lets you draw to it. It ensures that only
 // fully-drawn frames make their way to the screen, by maintaining a swap chain
@@ -259,6 +268,8 @@ class NativeLayerCA : public NativeLayer {
   void DumpLayer(std::ostream& aOutputStream);
 
   void AttachExternalImage(wr::RenderTextureHost* aExternalImage) override;
+
+  void SetRootWindowIsFullscreen(bool aFullscreen);
 
  protected:
   friend class NativeLayerRootCA;
@@ -324,7 +335,8 @@ class NativeLayerCA : public NativeLayer {
   Maybe<SurfaceWithInvalidRegion> GetUnusedSurfaceAndCleanUp(
       const MutexAutoLock& aProofOfLock);
 
-  bool IsVideo(const MutexAutoLock& aProofOfLock);
+  bool IsVideo();
+  bool IsVideoAndLocked(const MutexAutoLock& aProofOfLock);
   bool ShouldSpecializeVideo(const MutexAutoLock& aProofOfLock);
   bool HasExtent() const { return mHasExtent; }
   void SetHasExtent(bool aHasExtent) { mHasExtent = aHasExtent; }
@@ -468,10 +480,10 @@ class NativeLayerCA : public NativeLayer {
   bool mSurfaceIsFlipped = false;
   CFTypeRefPtr<CGColorRef> mColor;
   const bool mIsOpaque = false;
+  bool mRootWindowIsFullscreen = false;
   bool mSpecializeVideo = false;
   bool mHasExtent = false;
   bool mIsDRM = false;
-  bool mIsTextureHostVideo = false;
 
 #ifdef NIGHTLY_BUILD
   // Track the consistency of our caller's API usage. Layers that are drawn

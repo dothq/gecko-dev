@@ -104,6 +104,7 @@
 #include "mozilla/SMILTimeContainer.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Components.h"
+#include "mozilla/SVGUtils.h"
 #include "mozilla/ServoStyleConsts.h"
 #include "mozilla/ServoTypes.h"
 #include "mozilla/SizeOfState.h"
@@ -1399,6 +1400,7 @@ Document::Document(const char* aContentType)
       mShouldResistFingerprinting(false),
       mCloningForSVGUse(false),
       mAllowDeclarativeShadowRoots(false),
+      mSuspendDOMNotifications(false),
       mXMLDeclarationBits(0),
       mOnloadBlockCount(0),
       mWriteLevel(0),
@@ -1430,7 +1432,6 @@ Document::Document(const char* aContentType)
       mHttpsOnlyStatus(nsILoadInfo::HTTPS_ONLY_UNINITIALIZED),
       mViewportType(Unknown),
       mViewportFit(ViewportFitType::Auto),
-      mSubDocuments(nullptr),
       mHeaderData(nullptr),
       mServoRestyleRootDirtyBits(0),
       mThrowOnDynamicMarkupInsertionCounter(0),
@@ -2333,7 +2334,6 @@ Document::~Document() {
 
   // Kill the subdocument map, doing this will release its strong
   // references, if any.
-  delete mSubDocuments;
   mSubDocuments = nullptr;
 
   nsAutoScriptBlocker scriptBlocker;
@@ -2505,7 +2505,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(Document)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOnloadBlocker)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mLazyLoadObserver)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mLastRememberedSizeObserver)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mElementsObservedForLastRememberedSize)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDOMImplementation)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mImageMaps)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOrientationPendingPromise)
@@ -2627,7 +2627,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Document)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mSecurityInfo)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDisplayDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mLazyLoadObserver)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mLastRememberedSizeObserver)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mElementsObservedForLastRememberedSize);
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFontFaceSet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mReadyForIdle)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocumentL10n)
@@ -2687,7 +2687,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Document)
     tmp->mStyleSheetSetList = nullptr;
   }
 
-  delete tmp->mSubDocuments;
   tmp->mSubDocuments = nullptr;
 
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mFrameRequestManager)
@@ -2848,7 +2847,6 @@ void Document::DisconnectNodeTree() {
   // Delete references to sub-documents and kill the subdocument map,
   // if any. This is not strictly needed, but makes the node tree
   // teardown a bit faster.
-  delete mSubDocuments;
   mSubDocuments = nullptr;
 
   bool oldVal = mInUnlinkOrDeletion;
@@ -6319,9 +6317,11 @@ void Document::DeferredContentEditableCountChange(Element* aElement) {
     if (aElement) {
       if (RefPtr<HTMLEditor> htmlEditor = GetHTMLEditor()) {
         nsCOMPtr<nsIInlineSpellChecker> spellChecker;
-        rv = htmlEditor->GetInlineSpellChecker(false,
-                                               getter_AddRefs(spellChecker));
-        NS_ENSURE_SUCCESS_VOID(rv);
+        DebugOnly<nsresult> rvIgnored = htmlEditor->GetInlineSpellChecker(
+            false, getter_AddRefs(spellChecker));
+        NS_WARNING_ASSERTION(
+            NS_SUCCEEDED(rvIgnored),
+            "EditorBase::GetInlineSpellChecker() failed, but ignored");
 
         if (spellChecker &&
             aElement->InclusiveDescendantMayNeedSpellchecking(htmlEditor)) {
@@ -7205,7 +7205,8 @@ nsresult Document::SetSubDocumentFor(Element* aElement, Document* aSubDoc) {
           PLDHashTable::HashVoidPtrKeyStub, PLDHashTable::MatchEntryStub,
           PLDHashTable::MoveEntryStub, SubDocClearEntry, SubDocInitEntry};
 
-      mSubDocuments = new PLDHashTable(&hash_table_ops, sizeof(SubDocMapEntry));
+      mSubDocuments =
+          MakeUnique<PLDHashTable>(&hash_table_ops, sizeof(SubDocMapEntry));
     }
 
     // Add a mapping to the hash table
@@ -12394,7 +12395,8 @@ already_AddRefed<nsIURI> Document::ResolvePreloadImage(
 
 void Document::PreLoadImage(nsIURI* aUri, const nsAString& aCrossOriginAttr,
                             ReferrerPolicyEnum aReferrerPolicy, bool aIsImgSet,
-                            bool aLinkPreload, uint64_t aEarlyHintPreloaderId) {
+                            bool aLinkPreload, uint64_t aEarlyHintPreloaderId,
+                            const nsAString& aFetchPriority) {
   nsLoadFlags loadFlags = nsIRequest::LOAD_NORMAL |
                           nsContentUtils::CORSModeToLoadImageFlags(
                               Element::StringToCORSMode(aCrossOriginAttr));
@@ -12415,7 +12417,8 @@ void Document::PreLoadImage(nsIURI* aUri, const nsAString& aCrossOriginAttr,
   nsresult rv = nsContentUtils::LoadImage(
       aUri, static_cast<nsINode*>(this), this, NodePrincipal(), 0, referrerInfo,
       nullptr /* no observer */, loadFlags, initiator, getter_AddRefs(request),
-      policyType, false /* urgent */, aLinkPreload, aEarlyHintPreloaderId);
+      policyType, false /* urgent */, aLinkPreload, aEarlyHintPreloaderId,
+      nsGenericHTMLElement::ToFetchPriority(aFetchPriority));
 
   // Pin image-reference to avoid evicting it from the img-cache before
   // the "real" load occurs. Unpinned in DispatchContentLoadedEvents and
@@ -12428,7 +12431,8 @@ void Document::PreLoadImage(nsIURI* aUri, const nsAString& aCrossOriginAttr,
 void Document::MaybePreLoadImage(nsIURI* aUri,
                                  const nsAString& aCrossOriginAttr,
                                  ReferrerPolicyEnum aReferrerPolicy,
-                                 bool aIsImgSet, bool aLinkPreload) {
+                                 bool aIsImgSet, bool aLinkPreload,
+                                 const nsAString& aFetchPriority) {
   const CORSMode corsMode = dom::Element::StringToCORSMode(aCrossOriginAttr);
   if (aLinkPreload) {
     // Check if the image was already preloaded in this document to avoid
@@ -12437,7 +12441,7 @@ void Document::MaybePreLoadImage(nsIURI* aUri,
         PreloadHashKey::CreateAsImage(aUri, NodePrincipal(), corsMode);
     if (!mPreloadService.PreloadExists(key)) {
       PreLoadImage(aUri, aCrossOriginAttr, aReferrerPolicy, aIsImgSet,
-                   aLinkPreload, 0);
+                   aLinkPreload, 0, aFetchPriority);
     }
     return;
   }
@@ -12451,7 +12455,7 @@ void Document::MaybePreLoadImage(nsIURI* aUri,
 
   // Image not in cache - trigger preload
   PreLoadImage(aUri, aCrossOriginAttr, aReferrerPolicy, aIsImgSet, aLinkPreload,
-               0);
+               0, aFetchPriority);
 }
 
 void Document::MaybePreconnect(nsIURI* aOrigURI, mozilla::CORSMode aCORSMode) {
@@ -14751,6 +14755,10 @@ void Document::TopLayerPush(Element& aElement) {
   const bool modal = aElement.State().HasState(ElementState::MODAL);
 
   TopLayerPop(aElement);
+  if (nsIFrame* f = aElement.GetPrimaryFrame()) {
+    f->MarkNeedsDisplayItemRebuild();
+  }
+
   mTopLayer.AppendElement(do_GetWeakReference(&aElement));
   NS_ASSERTION(GetTopLayerTop() == &aElement, "Should match");
 
@@ -14804,6 +14812,9 @@ Element* Document::TopLayerPop(FunctionRef<bool(Element*)> aPredicate) {
     nsCOMPtr<Element> element(do_QueryReferent(mTopLayer[i]));
     if (element && aPredicate(element)) {
       removedElement = element;
+      if (nsIFrame* f = element->GetPrimaryFrame()) {
+        f->MarkNeedsDisplayItemRebuild();
+      }
       mTopLayer.RemoveElementAt(i);
       break;
     }
@@ -14818,6 +14829,12 @@ Element* Document::TopLayerPop(FunctionRef<bool(Element*)> aPredicate) {
   while (!mTopLayer.IsEmpty()) {
     Element* element = GetTopLayerTop();
     if (!element || element->GetComposedDoc() != this) {
+      if (element) {
+        if (nsIFrame* f = element->GetPrimaryFrame()) {
+          f->MarkNeedsDisplayItemRebuild();
+        }
+      }
+
       mTopLayer.RemoveLastElement();
     } else {
       // The top element of the stack is now an in-doc element. Return here.
@@ -16432,27 +16449,79 @@ DOMIntersectionObserver& Document::EnsureLazyLoadObserver() {
   return *mLazyLoadObserver;
 }
 
-ResizeObserver& Document::EnsureLastRememberedSizeObserver() {
-  if (!mLastRememberedSizeObserver) {
-    mLastRememberedSizeObserver =
-        ResizeObserver::CreateLastRememberedSizeObserver(*this);
-  }
-  return *mLastRememberedSizeObserver;
-}
-
 void Document::ObserveForLastRememberedSize(Element& aElement) {
   if (NS_WARN_IF(!IsActive())) {
     return;
   }
-  // Options are initialized with ResizeObserverBoxOptions::Content_box by
-  // default, which is what we want.
-  static ResizeObserverOptions options;
-  EnsureLastRememberedSizeObserver().Observe(aElement, options);
+  mElementsObservedForLastRememberedSize.Insert(&aElement);
 }
 
 void Document::UnobserveForLastRememberedSize(Element& aElement) {
-  if (mLastRememberedSizeObserver) {
-    mLastRememberedSizeObserver->Unobserve(aElement);
+  mElementsObservedForLastRememberedSize.Remove(&aElement);
+}
+
+void Document::UpdateLastRememberedSizes() {
+  auto shouldRemoveElement = [&](auto* element) {
+    if (element->GetComposedDoc() != this) {
+      element->RemoveLastRememberedBSize();
+      element->RemoveLastRememberedISize();
+      return true;
+    }
+    return !element->GetPrimaryFrame();
+  };
+
+  for (auto it = mElementsObservedForLastRememberedSize.begin(),
+            end = mElementsObservedForLastRememberedSize.end();
+       it != end; ++it) {
+    if (shouldRemoveElement(*it)) {
+      mElementsObservedForLastRememberedSize.Remove(it);
+      continue;
+    }
+    const auto element = *it;
+    MOZ_ASSERT(element->GetComposedDoc() == this);
+    nsIFrame* frame = element->GetPrimaryFrame();
+    MOZ_ASSERT(frame);
+
+    // As for ResizeObserver, skip nodes hidden `content-visibility`.
+    if (frame->IsHiddenByContentVisibilityOnAnyAncestor()) {
+      continue;
+    }
+
+    MOZ_ASSERT(!frame->IsLineParticipant() || frame->IsReplaced(),
+               "Should have unobserved non-replaced inline.");
+    MOZ_ASSERT(!frame->HidesContent(),
+               "Should have unobserved element skipping its contents.");
+    const nsStylePosition* stylePos = frame->StylePosition();
+    const WritingMode wm = frame->GetWritingMode();
+    bool canUpdateBSize = stylePos->ContainIntrinsicBSize(wm).HasAuto();
+    bool canUpdateISize = stylePos->ContainIntrinsicISize(wm).HasAuto();
+    MOZ_ASSERT(canUpdateBSize || !element->HasLastRememberedBSize(),
+               "Should have removed the last remembered block size.");
+    MOZ_ASSERT(canUpdateISize || !element->HasLastRememberedISize(),
+               "Should have removed the last remembered inline size.");
+    MOZ_ASSERT(canUpdateBSize || canUpdateISize,
+               "Should have unobserved if we can't update any size.");
+
+    AutoTArray<LogicalPixelSize, 1> contentSizeList =
+        ResizeObserver::CalculateBoxSize(element,
+                                         ResizeObserverBoxOptions::Content_box,
+                                         /* aForceFragmentHandling */ true);
+    MOZ_ASSERT(!contentSizeList.IsEmpty());
+
+    if (canUpdateBSize) {
+      float bSize = 0;
+      for (const auto& current : contentSizeList) {
+        bSize += current.BSize();
+      }
+      element->SetLastRememberedBSize(bSize);
+    }
+    if (canUpdateISize) {
+      float iSize = 0;
+      for (const auto& current : contentSizeList) {
+        iSize = std::max(iSize, current.ISize());
+      }
+      element->SetLastRememberedISize(iSize);
+    }
   }
 }
 
@@ -17103,13 +17172,7 @@ bool Document::IsExtensionPage() const {
 
 void Document::AddResizeObserver(ResizeObserver& aObserver) {
   MOZ_ASSERT(!mResizeObservers.Contains(&aObserver));
-  // Insert internal ResizeObservers before scripted ones, since they may have
-  // observable side-effects and we don't want to expose the insertion time.
-  if (aObserver.HasNativeCallback()) {
-    mResizeObservers.InsertElementAt(0, &aObserver);
-  } else {
-    mResizeObservers.AppendElement(&aObserver);
-  }
+  mResizeObservers.AppendElement(&aObserver);
 }
 
 void Document::RemoveResizeObserver(ResizeObserver& aObserver) {
@@ -17164,6 +17227,18 @@ void Document::DetermineProximityToViewportAndNotifyResizeObservers() {
     // sub-documents or ancestors, so flushing layout for the whole browsing
     // context tree makes sure we don't miss anyone.
     FlushLayoutForWholeBrowsingContextTree(*this);
+
+    // Last remembered sizes are recorded "at the time that ResizeObserver
+    // events are determined and delivered".
+    // https://drafts.csswg.org/css-sizing-4/#last-remembered
+    //
+    // We do it right after layout to make sure sizes are up-to-date. If we do
+    // it after determining the proximities to viewport of
+    // 'content-visibility: auto' nodes, and if one of such node ever becomes
+    // relevant to the user, then we would be incorrectly recording the size
+    // of its rendering when it was skipping its content.
+    UpdateLastRememberedSizes();
+
     if (PresShell* presShell = GetPresShell()) {
       auto result = presShell->DetermineProximityToViewport();
       if (result.mHadInitialDetermination) {
@@ -18627,7 +18702,7 @@ nsIPrincipal* Document::EffectiveStoragePrincipal() const {
   }
 
   // Calling StorageAllowedForDocument will notify the ContentBlockLog. This
-  // loads TrackingDBService.jsm, which in turn pulls in osfile.jsm, making us
+  // loads TrackingDBService.sys.mjs, making us potentially
   // fail // browser/base/content/test/performance/browser_startup.js. To avoid
   // that, we short-circuit the check here by allowing storage access to system
   // and addon principles, avoiding the test-failure.

@@ -198,11 +198,13 @@ class Proxy final : public nsIDOMEventListener {
 #ifdef DEBUG
   void DebugStoreWorkerRef(RefPtr<StrongWorkerRef>& aWorkerRef) {
     MOZ_ASSERT(!NS_IsMainThread());
+    MutexAutoLock lock(mXHR->mTSWorkerRefMutex);
     mXHR->mTSWorkerRef = new ThreadSafeWorkerRef(aWorkerRef);
   }
 
   void DebugForgetWorkerRef() {
     MOZ_ASSERT(!NS_IsMainThread());
+    MutexAutoLock lock(mXHR->mTSWorkerRefMutex);
     mXHR->mTSWorkerRef = nullptr;
   }
 #endif
@@ -325,7 +327,6 @@ class LoadStartDetectionRunnable final : public Runnable,
   WorkerPrivate* mWorkerPrivate;
   RefPtr<Proxy> mProxy;
   RefPtr<XMLHttpRequest> mXHR;
-  nsString mEventType;
   uint32_t mChannelId;
   bool mReceivedLoadStart;
 

@@ -996,29 +996,22 @@ dependencies = [
 
 [[package]]
 name = "glean"
-version = "57.0.0"
+version = "58.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae5847ad58b7f925c984de7f4dffcad67d7d0befa59a5a888cf93741b5ef1e6a"
+checksum = "f58388f10d013e2d12bb58e6e76983ede120789956fe827913a3d2560c66d44d"
 dependencies = [
- "chrono",
- "crossbeam-channel",
  "glean-core",
  "inherent",
  "log",
  "once_cell",
- "serde",
- "serde_json",
- "thiserror",
- "time",
- "uuid",
  "whatsys",
 ]
 
 [[package]]
 name = "glean-core"
-version = "57.0.0"
+version = "58.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6831cadd28b625bc296732d71dc7c978f208ba27911cad072785f87f23b1e634"
+checksum = "ed9acc46fd38c5c995a0537e76364496addace660839dc279079e5957e3c1093"
 dependencies = [
  "android_logger",
  "bincode",
@@ -1121,9 +1114,9 @@ dependencies = [
 
 [[package]]
 name = "glslopt"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74a3f5c04450dfdadb4b08f6e5ee6f5110f674de1acbd6199bfec68392a8cbaf"
+checksum = "ee5be629003d587bab188f3e2e3b010aa2cde7c41ec967b3a244f388d4d81877"
 dependencies = [
  "cc",
 ]

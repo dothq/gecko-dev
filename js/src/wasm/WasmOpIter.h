@@ -165,7 +165,7 @@ enum class OpKind {
   ReturnCall,
   CallIndirect,
   ReturnCallIndirect,
-#  ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#  ifdef ENABLE_WASM_GC
   CallRef,
   ReturnCallRef,
 #  endif
@@ -493,7 +493,8 @@ class MOZ_STACK_CLASS OpIter : private Policy {
   [[nodiscard]] bool getControl(uint32_t relativeDepth, Control** controlEntry);
   [[nodiscard]] bool checkBranchValueAndPush(uint32_t relativeDepth,
                                              ResultType* type,
-                                             ValueVector* values);
+                                             ValueVector* values,
+                                             bool rewriteStackTypes);
   [[nodiscard]] bool checkBrTableEntryAndPush(uint32_t* relativeDepth,
                                               ResultType prevBranchType,
                                               ResultType* branchType,
@@ -533,7 +534,7 @@ class MOZ_STACK_CLASS OpIter : private Policy {
 
   inline bool checkIsSubtypeOf(ResultType params, ResultType results);
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   inline bool checkIsSubtypeOf(uint32_t actualTypeIndex,
                                uint32_t expectedTypeIndex);
 #endif
@@ -703,7 +704,7 @@ class MOZ_STACK_CLASS OpIter : private Policy {
                                             uint32_t* tableIndex, Value* callee,
                                             ValueVector* argValues);
 #endif
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   [[nodiscard]] bool readCallRef(const FuncType** funcType, Value* callee,
                                  ValueVector* argValues);
 
@@ -932,7 +933,7 @@ inline bool OpIter<Policy>::checkIsSubtypeOf(ResultType params,
   return true;
 }
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
 template <typename Policy>
 inline bool OpIter<Policy>::checkIsSubtypeOf(uint32_t actualTypeIndex,
                                              uint32_t expectedTypeIndex) {
@@ -1480,14 +1481,15 @@ inline void OpIter<Policy>::popEnd() {
 template <typename Policy>
 inline bool OpIter<Policy>::checkBranchValueAndPush(uint32_t relativeDepth,
                                                     ResultType* type,
-                                                    ValueVector* values) {
+                                                    ValueVector* values,
+                                                    bool rewriteStackTypes) {
   Control* block = nullptr;
   if (!getControl(relativeDepth, &block)) {
     return false;
   }
 
   *type = block->branchTargetType();
-  return checkTopTypeMatches(*type, values, /*rewriteStackTypes=*/false);
+  return checkTopTypeMatches(*type, values, rewriteStackTypes);
 }
 
 template <typename Policy>
@@ -1499,7 +1501,8 @@ inline bool OpIter<Policy>::readBr(uint32_t* relativeDepth, ResultType* type,
     return fail("unable to read br depth");
   }
 
-  if (!checkBranchValueAndPush(*relativeDepth, type, values)) {
+  if (!checkBranchValueAndPush(*relativeDepth, type, values,
+                               /*rewriteStackTypes=*/false)) {
     return false;
   }
 
@@ -1520,7 +1523,8 @@ inline bool OpIter<Policy>::readBrIf(uint32_t* relativeDepth, ResultType* type,
     return false;
   }
 
-  return checkBranchValueAndPush(*relativeDepth, type, values);
+  return checkBranchValueAndPush(*relativeDepth, type, values,
+                                 /*rewriteStackTypes=*/true);
 }
 
 #define UNKNOWN_ARITY UINT32_MAX
@@ -2392,10 +2396,10 @@ inline bool OpIter<Policy>::readRefFunc(uint32_t* funcIndex) {
         "function index is not declared in a section before the code section");
   }
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   // When function references enabled, push type index on the stack, e.g. for
   // validation of the call_ref instruction.
-  if (env_.functionReferencesEnabled()) {
+  if (env_.gcEnabled()) {
     const uint32_t typeIndex = env_.funcs[*funcIndex].typeIndex;
     const TypeDef& typeDef = env_.types->type(typeIndex);
     return push(RefType::fromTypeDef(&typeDef, false));
@@ -2457,7 +2461,8 @@ inline bool OpIter<Policy>::readBrOnNull(uint32_t* relativeDepth,
     return false;
   }
 
-  if (!checkBranchValueAndPush(*relativeDepth, type, values)) {
+  if (!checkBranchValueAndPush(*relativeDepth, type, values,
+                               /*rewriteStackTypes=*/true)) {
     return false;
   }
 
@@ -2505,7 +2510,7 @@ inline bool OpIter<Policy>::readBrOnNonNull(uint32_t* relativeDepth,
   }
 
   // Check if the type stack matches the branch target type.
-  if (!checkTopTypeMatches(*type, values, /*rewriteStackTypes=*/false)) {
+  if (!checkTopTypeMatches(*type, values, /*rewriteStackTypes=*/true)) {
     return false;
   }
 
@@ -2693,7 +2698,7 @@ inline bool OpIter<Policy>::readReturnCallIndirect(uint32_t* funcTypeIndex,
 }
 #endif
 
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
 template <typename Policy>
 inline bool OpIter<Policy>::readCallRef(const FuncType** funcType,
                                         Value* callee, ValueVector* argValues) {
@@ -2719,7 +2724,7 @@ inline bool OpIter<Policy>::readCallRef(const FuncType** funcType,
 }
 #endif
 
-#if defined(ENABLE_WASM_TAIL_CALLS) && defined(ENABLE_WASM_FUNCTION_REFERENCES)
+#if defined(ENABLE_WASM_TAIL_CALLS) && defined(ENABLE_WASM_GC)
 template <typename Policy>
 inline bool OpIter<Policy>::readReturnCallRef(const FuncType** funcType,
                                               Value* callee,
@@ -4001,7 +4006,7 @@ inline bool OpIter<Policy>::readBrOnCast(bool onSuccess,
   fallthroughTypes[labelTypeNumValues - 1] = typeOnFallthrough;
 
   return checkTopTypeMatches(ResultType::Vector(fallthroughTypes), values,
-                             /*rewriteStackTypes=*/false);
+                             /*rewriteStackTypes=*/true);
 }
 
 template <typename Policy>
@@ -4228,18 +4233,18 @@ inline bool OpIter<Policy>::readCallBuiltinModuleFunc(
     return fail("index out of range");
   }
 
-  *builtinModuleFunc = &BuiltinModuleFunc::getFromId(BuiltinModuleFuncId(id));
+  *builtinModuleFunc = &BuiltinModuleFuncs::getFromId(BuiltinModuleFuncId(id));
 
-  if ((*builtinModuleFunc)->usesMemory && env_.numMemories() == 0) {
+  if ((*builtinModuleFunc)->usesMemory() && env_.numMemories() == 0) {
     return fail("can't touch memory without memory");
   }
-  if (!popWithTypes((*builtinModuleFunc)->params, params)) {
+
+  const FuncType& funcType = *(*builtinModuleFunc)->funcType();
+  if (!popCallArgs(funcType.args(), params)) {
     return false;
   }
-  if ((*builtinModuleFunc)->result.isNothing()) {
-    return true;
-  }
-  return push(*(*builtinModuleFunc)->result);
+
+  return push(ResultType::Vector(funcType.results()));
 }
 
 }  // namespace wasm

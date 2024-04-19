@@ -48,7 +48,6 @@
 #include "mozilla/dom/XMLHttpRequestEventTarget.h"
 #include "mozilla/dom/XMLHttpRequestString.h"
 #include "mozilla/Encoding.h"
-#include "nsBaseChannel.h"
 
 #ifdef Status
 /* Xlib headers insist on this for some reason... Nuke it because
@@ -64,6 +63,10 @@ class nsILoadGroup;
 
 namespace mozilla {
 class ProfileChunkedBuffer;
+
+namespace net {
+class ContentRange;
+}
 
 namespace dom {
 
@@ -447,7 +450,8 @@ class XMLHttpRequestMainThread final : public XMLHttpRequest,
 
 #ifdef DEBUG
   // For logging when there's trouble
-  RefPtr<ThreadSafeWorkerRef> mTSWorkerRef = nullptr;
+  RefPtr<ThreadSafeWorkerRef> mTSWorkerRef MOZ_GUARDED_BY(mTSWorkerRefMutex);
+  Mutex mTSWorkerRefMutex;
 #endif
 
  protected:
@@ -507,7 +511,8 @@ class XMLHttpRequestMainThread final : public XMLHttpRequest,
 
   void AbortInternal(ErrorResult& aRv);
 
-  Maybe<nsBaseChannel::ContentRange> GetRequestedContentRange() const;
+  bool BadContentRangeRequested();
+  RefPtr<mozilla::net::ContentRange> GetRequestedContentRange() const;
   void GetContentRangeHeader(nsACString&) const;
 
   struct PendingEvent {

@@ -4,8 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![cfg_attr(feature = "deny-warnings", deny(warnings))]
-#![warn(clippy::use_self)]
+#![allow(clippy::module_name_repetitions)] // This lint doesn't work here.
 
 use neqo_common::qinfo;
 use neqo_crypto::Error as CryptoError;
@@ -30,6 +29,9 @@ pub mod recv_stream;
 #[cfg(not(feature = "bench"))]
 mod recv_stream;
 mod rtt;
+#[cfg(feature = "bench")]
+pub mod send_stream;
+#[cfg(not(feature = "bench"))]
 mod send_stream;
 mod sender;
 pub mod server;
@@ -130,6 +132,7 @@ pub enum Error {
 }
 
 impl Error {
+    #[must_use]
     pub fn code(&self) -> TransportError {
         match self {
             Self::NoError
@@ -206,6 +209,7 @@ pub enum ConnectionError {
 }
 
 impl ConnectionError {
+    #[must_use]
     pub fn app_code(&self) -> Option<AppError> {
         match self {
             Self::Application(e) => Some(*e),

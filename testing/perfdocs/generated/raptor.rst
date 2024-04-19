@@ -994,6 +994,691 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
 
 
 
+.. dropdown:: motionmark-1-3
+   :class-container: anchor-id-motionmark-1-3-b
+
+   **Owner**: Graphics Team
+
+   * **alert threshold**: 2.0
+   * **apps**: firefox, chrome, chromium, safari, custom-car
+   * **browser cycles**: 1
+   * **cold**: true
+   * **expected**: pass
+   * **expose browser profiler**: true
+   * **expose chrome trace**: true
+   * **gecko profile features**: stackwalk,js,cpu,java,processcpu
+   * **gecko profile interval**: 1
+   * **gecko profile threads**: GeckoMain,Compositor,Renderer,SwComposite,RenderBackend,SceneBuilder,WrWorker,CanvasWorkers,TextureUpdate
+   * **host from parent**: false
+   * **lower is better**: false
+   * **page cycles**: 1
+   * **page timeout**: 600000
+   * **repository**: https://github.com/webkit/motionmark
+   * **repository revision**: 5d9c88136d59c11daf78d539c73e4e3e88c091ab
+   * **suite name**: MotionMark
+   * **support class**: motionmark-1-3.py
+   * **test script**: motionmark-1-3.js
+   * **test url**: `<http://\<host\>:\<port\>/MotionMark/developer.html?warmup-length=2000&warmup-frame-count=30&first-frame-minimum-length=0&test-interval=30&display=minimal&tiles=big&controller=ramp&system-frame-rate=60&frame-rate=60&time-measurement=performance>`__
+   * **type**: benchmark
+   * **unit**: score
+   * **Test Task**:
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-chrome-m-motionmark-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-cstm-car-m-motionmark-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-clang-trunk-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1400-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+   **Owner**: Graphics Team
+
+   * **alert threshold**: 2.0
+   * **apps**: fenix, geckoview, chrome-m, cstm-car-m
+   * **browser cycles**: 1
+   * **cold**: true
+   * **expected**: pass
+   * **expose browser profiler**: true
+   * **gecko profile features**: stackwalk,js,cpu,java,processcpu
+   * **gecko profile interval**: 1
+   * **gecko profile threads**: GeckoMain,Compositor,Renderer,SwComposite,RenderBackend,SceneBuilder,WrWorker,CanvasWorkers,TextureUpdate
+   * **host from parent**: false
+   * **lower is better**: false
+   * **page cycles**: 1
+   * **page timeout**: 600000
+   * **repository**: https://github.com/webkit/motionmark
+   * **repository revision**: 5d9c88136d59c11daf78d539c73e4e3e88c091ab
+   * **suite name**: MotionMark
+   * **support class**: motionmark-1-3.py
+   * **test script**: motionmark-1-3.js
+   * **test url**: `<http://\<host\>:\<port\>/MotionMark/developer.html?warmup-length=2000&warmup-frame-count=30&first-frame-minimum-length=0&test-interval=30&display=minimal&tiles=big&controller=ramp&system-frame-rate=60&frame-rate=60&time-measurement=performance>`__
+   * **type**: benchmark
+   * **unit**: score
+   * **Test Task**:
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-chrome-m-motionmark-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-cstm-car-m-motionmark-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-clang-trunk-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1400-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+
 .. dropdown:: motionmark-animometer
    :class-container: anchor-id-motionmark-animometer-b
 
@@ -2714,6 +3399,691 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
 
 
 
+.. dropdown:: motionmark-htmlsuite-1-3
+   :class-container: anchor-id-motionmark-htmlsuite-1-3-b
+
+   **Owner**: Graphics Team
+
+   * **alert threshold**: 2.0
+   * **apps**: firefox, chrome, chromium, safari, custom-car
+   * **browser cycles**: 1
+   * **cold**: true
+   * **expected**: pass
+   * **expose browser profiler**: true
+   * **expose chrome trace**: true
+   * **gecko profile features**: stackwalk,js,cpu,java,processcpu
+   * **gecko profile interval**: 1
+   * **gecko profile threads**: GeckoMain,Compositor,Renderer,SwComposite,RenderBackend,SceneBuilder,WrWorker,CanvasWorkers,TextureUpdate
+   * **host from parent**: false
+   * **lower is better**: false
+   * **page cycles**: 1
+   * **page timeout**: 600000
+   * **repository**: https://github.com/webkit/motionmark
+   * **repository revision**: 5d9c88136d59c11daf78d539c73e4e3e88c091ab
+   * **suite name**: HTML suite
+   * **support class**: motionmark-1-3.py
+   * **test script**: motionmark-1-3.js
+   * **test url**: `<http://\<host\>:\<port\>/MotionMark/developer.html?warmup-length=2000&warmup-frame-count=30&first-frame-minimum-length=0&test-interval=30&display=minimal&tiles=big&controller=ramp&system-frame-rate=60&frame-rate=60&time-measurement=performance>`__
+   * **type**: benchmark
+   * **unit**: score
+   * **Test Task**:
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-htmlsuite-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-htmlsuite-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-chrome-m-motionmark-htmlsuite-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-cstm-car-m-motionmark-htmlsuite-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-htmlsuite-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-htmlsuite-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-clang-trunk-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1400-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+   **Owner**: Graphics Team
+
+   * **alert threshold**: 2.0
+   * **apps**: fenix, geckoview, chrome-m, cstm-car-m
+   * **browser cycles**: 1
+   * **cold**: true
+   * **expected**: pass
+   * **expose browser profiler**: true
+   * **gecko profile features**: stackwalk,js,cpu,java,processcpu
+   * **gecko profile interval**: 1
+   * **gecko profile threads**: GeckoMain,Compositor,Renderer,SwComposite,RenderBackend,SceneBuilder,WrWorker,CanvasWorkers,TextureUpdate
+   * **host from parent**: false
+   * **lower is better**: false
+   * **page cycles**: 1
+   * **page timeout**: 600000
+   * **repository**: https://github.com/webkit/motionmark
+   * **repository revision**: 5d9c88136d59c11daf78d539c73e4e3e88c091ab
+   * **suite name**: HTML suite
+   * **support class**: motionmark-1-3.py
+   * **test script**: motionmark-1-3.js
+   * **test url**: `<http://\<host\>:\<port\>/MotionMark/developer.html?warmup-length=2000&warmup-frame-count=30&first-frame-minimum-length=0&test-interval=30&display=minimal&tiles=big&controller=ramp&system-frame-rate=60&frame-rate=60&time-measurement=performance>`__
+   * **type**: benchmark
+   * **unit**: score
+   * **Test Task**:
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-htmlsuite-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-htmlsuite-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-motionmark-1-3-chrome-m-motionmark-htmlsuite-1-3-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-cstm-car-m-motionmark-htmlsuite-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-fenix-motionmark-htmlsuite-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-motionmark-1-3-geckoview-motionmark-htmlsuite-1-3-nofis**
+        - ✅
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-clang-trunk-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-linux1804-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1015-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-macosx1400-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-safari-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-32-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-nightlyasrelease-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-windows10-64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-benchmark-chrome-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-custom-car-motionmark-htmlsuite-1-3**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-benchmark-firefox-motionmark-htmlsuite-1-3**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+
+
+
 .. dropdown:: motionmark-htmlsuite-ramp
    :class-container: anchor-id-motionmark-htmlsuite-ramp-b
 
@@ -4111,7 +5481,7 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
    * **page cycles**: 5
    * **page timeout**: 600000
    * **repository**: https://github.com/WebKit/Speedometer
-   * **repository revision**: 64a5e7c0ba0f668834c0adf01b933e54d2b0d1f0
+   * **repository revision**: 8d67f28d0281ac4330f283495b7f48286654ad7d
    * **subtest lower is better**: true
    * **subtest unit**: ms
    * **support class**: speedometer3.py
@@ -4183,12 +5553,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - mozilla-release
         - mozilla-beta
       * - **browsertime-benchmark-speedometer3-mobile-chrome-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
       * - **browsertime-benchmark-speedometer3-mobile-cstm-car-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
@@ -4214,12 +5584,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - mozilla-release
         - mozilla-beta
       * - **browsertime-benchmark-speedometer3-mobile-chrome-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
       * - **browsertime-benchmark-speedometer3-mobile-cstm-car-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
@@ -4507,7 +5877,7 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
    * **page cycles**: 5
    * **page timeout**: 420000
    * **repository**: https://github.com/WebKit/Speedometer
-   * **repository revision**: 64a5e7c0ba0f668834c0adf01b933e54d2b0d1f0
+   * **repository revision**: 8d67f28d0281ac4330f283495b7f48286654ad7d
    * **subtest lower is better**: true
    * **subtest unit**: ms
    * **support class**: speedometer3.py
@@ -4579,12 +5949,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - mozilla-release
         - mozilla-beta
       * - **browsertime-benchmark-speedometer3-mobile-chrome-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
       * - **browsertime-benchmark-speedometer3-mobile-cstm-car-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
@@ -4610,12 +5980,12 @@ Standard benchmarks are third-party tests (i.e. Speedometer) that we have integr
         - mozilla-release
         - mozilla-beta
       * - **browsertime-benchmark-speedometer3-mobile-chrome-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
       * - **browsertime-benchmark-speedometer3-mobile-cstm-car-m-nofis**
-        - ❌
+        - ✅
         - ❌
         - ❌
         - ❌
@@ -10775,6 +12145,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
 
+   **Description**: Use add API to send many small ArrayBuffers to IndexedDB in one transaction
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -11021,6 +12393,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-addMabN-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Use add API to send many small ArrayBuffers to IndexedDB independently
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -11269,6 +12643,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
 
+   **Description**: Use add API to send many small Arrays to IndexedDB in one transaction
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -11515,6 +12891,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-addMarN-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Use add API to send many small Arrays to IndexedDB independently
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -11763,6 +13141,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
 
+   **Description**: Use add API to send many small Blobs to IndexedDB in one transaction
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -12009,6 +13389,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-addMblN-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Use add API to send many small Blobs to IndexedDB independently
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -12257,6 +13639,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
 
+   **Description**: Use add API to send a couple of large ArrayBuffers to IndexedDB in one transaction
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -12503,6 +13887,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-addkABN-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Use add API to send a couple of large ArrayBuffers to IndexedDB independently
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -12751,6 +14137,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
 
+   **Description**: Use add API to send a couple of large JS Arrays to IndexedDB in one transaction
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -12997,6 +14385,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-addkARN-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Use add API to send a couple of large JS Arrays to IndexedDB independently
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -13245,6 +14635,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
 
+   **Description**: Use add API to send a couple of large Blobs to IndexedDB in one transaction
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -13491,6 +14883,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-addkBLN-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Use add API to send a couple of large Blobs to IndexedDB independently
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -13739,6 +15133,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: PerfTest Team
 
+   **Description**: Used to run vanilla browsertime tests through raptor. For example: `./mach raptor --browsertime -t browsertime --browsertime-arg url=https://www.sitespeed.io --browsertime-arg iterations=3`
+
    * **alert on**: fcp, loadtime
    * **alert threshold**: 2.0
    * **apps**: firefox
@@ -13762,6 +15158,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-connect-c
 
    **Owner**: Network Team
+
+   **Description**: Verifies that connection time on a pageload is zero when a speculative connection has first been made
 
    * **alert change type**: absolute
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange
@@ -13964,6 +15362,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: PerfTest Team
 
+   **Description**: Generates a constant value that can be changed to induce a regression.
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari, geckoview, fenix
    * **browser cycles**: 1
@@ -14024,6 +15424,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-getkeyrng-c
 
    **Owner**: DOM Lifecycle, Workers and Storage Team
+
+   **Description**: Measures the speed of key-range based reads of IndexedDB
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -14271,6 +15673,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: PerfTest Team
 
+   **Description**: Runs the Grandprix benchmark
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -14295,6 +15699,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-process-switch-c
 
    **Owner**: PerfTest Team
+
+   **Description**: Measures process switch time
 
    * **accept zero vismet**: true
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
@@ -14500,6 +15906,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: PerfTest Team
 
+   **Description**: A sample test that uses a python support file to modify the test command.
+
    * **alert threshold**: 2.0
    * **apps**: firefox
    * **browser cycles**: 1
@@ -14527,6 +15935,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-throttled-c
 
    **Owner**: Network Team
+
+   **Description**: Pageload test using a throttled network environment
 
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange
    * **alert threshold**: 2.0
@@ -14727,6 +16137,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-tp6-bench-c
 
    **Owner**: PerfTest Team
+
+   **Description**: A pageload benchmark test that quickly runs through all of the pages available to produce a single overall metric.
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -14932,6 +16344,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-upload-c
 
    **Owner**: Network Team
+
+   **Description**: Measures http/2 file upload throughput
 
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
@@ -15161,6 +16575,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
 
    **Owner**: Network Team
 
+   **Description**: Measures http/3 file upload throughput
+
    * **alert threshold**: 2.0
    * **apps**: firefox, chrome, chromium, safari
    * **browser cycles**: 1
@@ -15388,6 +16804,8 @@ Browsertime tests that use a custom pageload test script. These use the pageload
    :class-container: anchor-id-welcome-c
 
    **Owner**: PerfTest Team
+
+   **Description**: Measures pageload metrics for the first-install about:welcome page
 
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
    * **alert threshold**: 2.0
@@ -27060,6 +28478,8 @@ Browsertime tests that interact with the webpage. Includes responsiveness tests 
 
    **Owner**: PerfTest Team
 
+   **Description**: Navigates to cnn main page, then to the world sub-page.
+
    * **accept zero vismet**: true
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
    * **alert threshold**: 2.0
@@ -27298,6 +28718,8 @@ Browsertime tests that interact with the webpage. Includes responsiveness tests 
    :class-container: anchor-id-facebook-nav-i
 
    **Owner**: PerfTest Team
+
+   **Description**: Navigates to facebook, then the sub-pages friends, marketplace, groups.
 
    * **accept zero vismet**: true
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
@@ -27538,6 +28960,8 @@ Browsertime tests that interact with the webpage. Includes responsiveness tests 
 
    **Owner**: PerfTest Team
 
+   **Description**: Navigates from the Bill Gates AMA to the Reddit members section.
+
    * **accept zero vismet**: true
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
    * **alert threshold**: 2.0
@@ -27777,6 +29201,8 @@ Browsertime tests that interact with the webpage. Includes responsiveness tests 
 
    **Owner**: PerfTest Team
 
+   **Description**: Navigates the `thisisbillgates` user starting at the main user page, then to the posts, comments, hot, and top sections.
+
    * **accept zero vismet**: true
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
    * **alert threshold**: 2.0
@@ -28015,6 +29441,8 @@ Browsertime tests that interact with the webpage. Includes responsiveness tests 
    :class-container: anchor-id-reddit-billgates-post-2-i
 
    **Owner**: PerfTest Team
+
+   **Description**: Navigates the `thisisbillgates` user starting at the main user page, then to the posts, comments, hot, and top sections.
 
    * **accept zero vismet**: true
    * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange
@@ -29833,6 +31261,137 @@ Page-load performance test suite on Android. The links direct to the actual webs
         - ❌
       * - **browsertime-tp6m-webextensions-fenix-amazon-search-nofis**
         - ✅
+        - ❌
+        - ❌
+        - ❌
+
+
+
+.. dropdown:: bild-de
+   :class-container: anchor-id-bild-de-m
+
+   **Owner**: PerfTest Team
+
+   * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange, largestContentfulPaint
+   * **alert threshold**: 2.0
+   * **apps**: geckoview, fenix, refbrow, chrome-m
+   * **benchmark page**: true
+   * **browser cycles**: 15
+   * **expected**: pass
+   * **lower is better**: true
+   * **page cycles**: 25
+   * **page timeout**: 60000
+   * **playback**: mitmproxy-android
+   * **playback pageset manifest**: mitm8-android-fenix-bild-de.manifest
+   * **playback version**: 8.1.1
+   * **test url**: `<https://www.bild.de/sport/american-football/nfl/super-bowl-rekordquote-fuer-die-nfl-87139668.bild.html>`__
+   * **type**: pageload
+   * **unit**: ms
+   * **use live sites**: false
+   * **Test Task**:
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-tp6m-fenix-bild-de**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-fenix-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-geckoview-bild-de**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-geckoview-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-live-fenix-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-live-geckoview-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-refbrow-bild-de**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+
+
+   .. list-table:: **test-android-hw-a51-11-0-aarch64-shippable-qr/opt**
+      :widths: 30 15 15 15 15
+      :header-rows: 1
+
+      * - **Test Name**
+        - mozilla-central
+        - autoland
+        - mozilla-release
+        - mozilla-beta
+      * - **browsertime-tp6m-chrome-m-bild-de**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-chrome-m-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-fenix-bild-de**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-fenix-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-geckoview-bild-de**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-geckoview-bild-de-nofis**
+        - ✅
+        - ✅
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-live-chrome-m-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-live-fenix-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-live-geckoview-bild-de-nofis**
+        - ❌
+        - ❌
+        - ❌
+        - ❌
+      * - **browsertime-tp6m-refbrow-bild-de**
+        - ❌
         - ❌
         - ❌
         - ❌
@@ -33863,7 +35422,7 @@ Page-load performance test suite on Android. The links direct to the actual webs
    * **page cycles**: 25
    * **page timeout**: 60000
    * **playback**: mitmproxy-android
-   * **playback pageset manifest**: mitm6-android-fenix-sina.manifest
+   * **playback pageset manifest**: mitm8-android-fenix-sina.manifest
    * **playback version**: 8.1.1
    * **test url**: `<https://www.sina.com.cn/>`__
    * **type**: pageload
@@ -34078,137 +35637,6 @@ Page-load performance test suite on Android. The links direct to the actual webs
         - ❌
         - ❌
       * - **browsertime-tp6m-refbrow-stackoverflow**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-
-
-
-.. dropdown:: web-de
-   :class-container: anchor-id-web-de-m
-
-   **Owner**: PerfTest Team
-
-   * **alert on**: fcp, loadtime, ContentfulSpeedIndex, PerceptualSpeedIndex, SpeedIndex, FirstVisualChange, LastVisualChange, largestContentfulPaint
-   * **alert threshold**: 2.0
-   * **apps**: geckoview, fenix, refbrow, chrome-m
-   * **benchmark page**: true
-   * **browser cycles**: 15
-   * **expected**: pass
-   * **lower is better**: true
-   * **page cycles**: 25
-   * **page timeout**: 60000
-   * **playback**: mitmproxy-android
-   * **playback pageset manifest**: mitm7-android-gve-p2-web-de.manifest
-   * **playback version**: 8.1.1
-   * **test url**: `<https://web.de/magazine/politik/politologe-glaubt-grossen-koalition-herbst-knallen-33563566>`__
-   * **type**: pageload
-   * **unit**: ms
-   * **use live sites**: false
-   * **Test Task**:
-
-   .. list-table:: **test-android-hw-a51-11-0-aarch64-qr/opt**
-      :widths: 30 15 15 15 15
-      :header-rows: 1
-
-      * - **Test Name**
-        - mozilla-central
-        - autoland
-        - mozilla-release
-        - mozilla-beta
-      * - **browsertime-tp6m-fenix-web-de**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-fenix-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-geckoview-web-de**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-geckoview-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-live-fenix-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-live-geckoview-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-refbrow-web-de**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-
-
-   .. list-table:: **test-android-hw-a51-11-0-aarch64-shippable-qr/opt**
-      :widths: 30 15 15 15 15
-      :header-rows: 1
-
-      * - **Test Name**
-        - mozilla-central
-        - autoland
-        - mozilla-release
-        - mozilla-beta
-      * - **browsertime-tp6m-chrome-m-web-de**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-chrome-m-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-fenix-web-de**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-fenix-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-geckoview-web-de**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-geckoview-web-de-nofis**
-        - ✅
-        - ✅
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-live-chrome-m-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-live-fenix-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-live-geckoview-web-de-nofis**
-        - ❌
-        - ❌
-        - ❌
-        - ❌
-      * - **browsertime-tp6m-refbrow-web-de**
         - ❌
         - ❌
         - ❌

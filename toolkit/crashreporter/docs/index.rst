@@ -66,7 +66,8 @@ a ``google_breakpad::ExceptionHandler`` instance and it's stored as
 As the application runs, various other systems may write *annotations*
 or *notes* to the crash reporter to indicate state of the application,
 help with possible reasons for a current or future crash, etc. These are
-performed via ``CrashReporter::AnnotateCrashReport()`` and
+performed via ``CrashReporter::RecordAnnotation*()``,
+``CrashReporter::RegisterAnnotation*()`` functions and
 ``CrashReporter::AppendAppNotesToCrashReport()`` from
 ``nsExceptionHandler.h``.
 
@@ -154,7 +155,7 @@ with information about the crash.
 
 Submission of child process crashes is handled by application code. This
 code prompts the user to submit crashes in context-appropriate UI and then
-submits the crashes using ``CrashSubmit.jsm``.
+submits the crashes using ``CrashSubmit.sys.mjs``.
 
 Memory Reports
 ==============

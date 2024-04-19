@@ -3,6 +3,7 @@
 
 const {
   getFirefoxViewURL,
+  switchToWindow,
   withFirefoxView,
   assertFirefoxViewTab,
   assertFirefoxViewTabSelected,
@@ -31,6 +32,11 @@ const { FeatureCalloutMessages } = ChromeUtils.importESModule(
 const { TelemetryTestUtils } = ChromeUtils.importESModule(
   "resource://testing-common/TelemetryTestUtils.sys.mjs"
 );
+const { NonPrivateTabs } = ChromeUtils.importESModule(
+  "resource:///modules/OpenTabs.sys.mjs"
+);
+// shut down the open tabs module after each test so we don't get debounced events bleeding into the next
+registerCleanupFunction(() => NonPrivateTabs.stop());
 
 const triggeringPrincipal_base64 = E10SUtils.SERIALIZED_SYSTEMPRINCIPAL;
 const { SessionStoreTestUtils } = ChromeUtils.importESModule(
@@ -548,31 +554,19 @@ registerCleanupFunction(() => {
   gSandbox?.restore();
 });
 
-function navigateToCategory(document, category) {
-  const navigation = document.querySelector("fxview-category-navigation");
-  let navButton = Array.from(navigation.categoryButtons).filter(
-    categoryButton => {
-      return categoryButton.name === category;
-    }
-  )[0];
-  navButton.buttonEl.click();
-}
-
-async function navigateToCategoryAndWait(document, category) {
-  info(`navigateToCategoryAndWait, for ${category}`);
-  const navigation = document.querySelector("fxview-category-navigation");
+async function navigateToViewAndWait(document, view) {
+  info(`navigateToViewAndWait, for ${view}`);
+  const navigation = document.querySelector("moz-page-nav");
   const win = document.ownerGlobal;
   SimpleTest.promiseFocus(win);
-  let navButton = Array.from(navigation.categoryButtons).find(
-    categoryButton => {
-      return categoryButton.name === category;
-    }
-  );
+  let navButton = Array.from(navigation.pageNavButtons).find(pageNavButton => {
+    return pageNavButton.view === view;
+  });
   const namedDeck = document.querySelector("named-deck");
 
   await BrowserTestUtils.waitForCondition(
     () => navButton.getBoundingClientRect().height,
-    `Waiting for ${category} button to be clickable`
+    `Waiting for ${view} button to be clickable`
   );
 
   EventUtils.synthesizeMouseAtCenter(navButton, {}, win);
@@ -582,10 +576,10 @@ async function navigateToCategoryAndWait(document, category) {
       child => child.slot == "selected"
     );
     return (
-      namedDeck.selectedViewName == category &&
+      namedDeck.selectedViewName == view &&
       selectedView?.getBoundingClientRect().height
     );
-  }, `Waiting for ${category} to be visible`);
+  }, `Waiting for ${view} to be visible`);
 }
 
 /**
@@ -597,6 +591,7 @@ async function navigateToCategoryAndWait(document, category) {
  *   The tab switched to.
  */
 async function switchToFxViewTab(win = window) {
+  await switchToWindow(win);
   return BrowserTestUtils.switchTab(win.gBrowser, win.FirefoxViewHandler.tab);
 }
 
@@ -657,8 +652,30 @@ function setSortOption(component, value) {
   EventUtils.synthesizeMouseAtCenter(el, {}, el.ownerGlobal);
 }
 
+/**
+ * Select the Open Tabs view-page in the Firefox View tab.
+ */
+async function navigateToOpenTabs(browser) {
+  const document = browser.contentDocument;
+  if (document.querySelector("named-deck").selectedViewName != "opentabs") {
+    await navigateToViewAndWait(browser.contentDocument, "opentabs");
+  }
+}
+
 function getOpenTabsCards(openTabs) {
   return openTabs.shadowRoot.querySelectorAll("view-opentabs-card");
+}
+
+function getOpenTabsComponent(browser) {
+  return browser.contentDocument.querySelector("named-deck > view-opentabs");
+}
+
+async function getTabRowsForCard(card) {
+  await TestUtils.waitForCondition(
+    () => card.tabList.rowEls.length,
+    "Wait for the card's tab list to have rows"
+  );
+  return card.tabList.rowEls;
 }
 
 async function click_recently_closed_tab_item(itemElem, itemProperty = "") {
@@ -675,7 +692,7 @@ async function click_recently_closed_tab_item(itemElem, itemProperty = "") {
   let clickTarget;
   switch (itemProperty) {
     case "dismiss":
-      clickTarget = itemElem.buttonEl;
+      clickTarget = itemElem.secondaryButtonEl;
       break;
     default:
       clickTarget = itemElem.mainEl;
@@ -705,4 +722,26 @@ async function waitForRecentlyClosedTabsList(doc) {
     return cardMainSlotNode.rowEls.length;
   });
   return [cardMainSlotNode, cardMainSlotNode.rowEls];
+}
+
+async function add_new_tab(URL) {
+  let tabChangeRaised = BrowserTestUtils.waitForEvent(
+    NonPrivateTabs,
+    "TabChange"
+  );
+  let tab = BrowserTestUtils.addTab(gBrowser, URL);
+  // wait so we can reliably compare the tab URL
+  await BrowserTestUtils.browserLoaded(tab.linkedBrowser);
+  await tabChangeRaised;
+  return tab;
+}
+
+function isActiveElement(expectedLinkEl) {
+  return expectedLinkEl.getRootNode().activeElement == expectedLinkEl;
+}
+
+function cleanupTabs() {
+  while (gBrowser.tabs.length > 1) {
+    BrowserTestUtils.removeTab(gBrowser.tabs[0]);
+  }
 }

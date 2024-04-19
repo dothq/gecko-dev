@@ -12,7 +12,7 @@ use crate::{
     global::Global,
     hal_api::HalApi,
     hal_label,
-    id::{self, QueueId},
+    id::{self, DeviceId, QueueId},
     init_tracker::{has_copy_partial_init_tracker_coverage, TextureInitRange},
     resource::{
         Buffer, BufferAccessError, BufferMapState, DestroyedBuffer, DestroyedTexture, Resource,
@@ -188,10 +188,17 @@ impl<A: HalApi> EncoderInFlight<A> {
 #[derive(Debug)]
 pub(crate) struct PendingWrites<A: HalApi> {
     pub command_encoder: A::CommandEncoder,
-    pub is_active: bool,
+
+    /// True if `command_encoder` is in the "recording" state, as
+    /// described in the docs for the [`wgpu_hal::CommandEncoder`]
+    /// trait.
+    pub is_recording: bool,
+
     pub temp_resources: Vec<TempResource<A>>,
     pub dst_buffers: FastHashMap<id::BufferId, Arc<Buffer<A>>>,
     pub dst_textures: FastHashMap<id::TextureId, Arc<Texture<A>>>,
+
+    /// All command buffers allocated from `command_encoder`.
     pub executing_command_buffers: Vec<A::CommandBuffer>,
 }
 
@@ -199,7 +206,7 @@ impl<A: HalApi> PendingWrites<A> {
     pub fn new(command_encoder: A::CommandEncoder) -> Self {
         Self {
             command_encoder,
-            is_active: false,
+            is_recording: false,
             temp_resources: Vec::new(),
             dst_buffers: FastHashMap::default(),
             dst_textures: FastHashMap::default(),
@@ -209,7 +216,7 @@ impl<A: HalApi> PendingWrites<A> {
 
     pub fn dispose(mut self, device: &A::Device) {
         unsafe {
-            if self.is_active {
+            if self.is_recording {
                 self.command_encoder.discard_encoding();
             }
             self.command_encoder
@@ -232,9 +239,9 @@ impl<A: HalApi> PendingWrites<A> {
     fn pre_submit(&mut self) -> Result<Option<&A::CommandBuffer>, DeviceError> {
         self.dst_buffers.clear();
         self.dst_textures.clear();
-        if self.is_active {
+        if self.is_recording {
             let cmd_buf = unsafe { self.command_encoder.end_encoding()? };
-            self.is_active = false;
+            self.is_recording = false;
             self.executing_command_buffers.push(cmd_buf);
 
             return Ok(self.executing_command_buffers.last());
@@ -262,23 +269,23 @@ impl<A: HalApi> PendingWrites<A> {
     }
 
     pub fn activate(&mut self) -> &mut A::CommandEncoder {
-        if !self.is_active {
+        if !self.is_recording {
             unsafe {
                 self.command_encoder
                     .begin_encoding(Some("(wgpu internal) PendingWrites"))
                     .unwrap();
             }
-            self.is_active = true;
+            self.is_recording = true;
         }
         &mut self.command_encoder
     }
 
     pub fn deactivate(&mut self) {
-        if self.is_active {
+        if self.is_recording {
             unsafe {
                 self.command_encoder.discard_encoding();
             }
-            self.is_active = false;
+            self.is_recording = false;
         }
     }
 }
@@ -303,7 +310,10 @@ fn prepare_staging_buffer<A: HalApi>(
         raw: Mutex::new(Some(buffer)),
         device: device.clone(),
         size,
-        info: ResourceInfo::new("<StagingBuffer>"),
+        info: ResourceInfo::new(
+            "<StagingBuffer>",
+            Some(device.tracker_indices.staging_buffers.clone()),
+        ),
         is_coherent: mapping.is_coherent,
     };
 
@@ -332,6 +342,15 @@ pub struct InvalidQueue;
 #[derive(Clone, Debug, Error)]
 #[non_exhaustive]
 pub enum QueueWriteError {
+    #[error(
+        "Device of queue ({:?}) does not match device of write recipient ({:?})",
+        queue_device_id,
+        target_device_id
+    )]
+    DeviceMismatch {
+        queue_device_id: DeviceId,
+        target_device_id: DeviceId,
+    },
     #[error(transparent)]
     Queue(#[from] DeviceError),
     #[error(transparent)]
@@ -376,12 +395,30 @@ impl Global {
 
         let hub = A::hub(self);
 
+        let buffer_device_id = hub
+            .buffers
+            .get(buffer_id)
+            .map_err(|_| TransferError::InvalidBuffer(buffer_id))?
+            .device
+            .as_info()
+            .id();
+
         let queue = hub
             .queues
             .get(queue_id)
             .map_err(|_| DeviceError::InvalidQueueId)?;
 
         let device = queue.device.as_ref().unwrap();
+
+        {
+            let queue_device_id = device.as_info().id();
+            if buffer_device_id != queue_device_id {
+                return Err(QueueWriteError::DeviceMismatch {
+                    queue_device_id,
+                    target_device_id: buffer_device_id,
+                });
+            }
+        }
 
         let data_size = data.len() as wgt::BufferAddress;
 
@@ -1143,7 +1180,7 @@ impl Global {
                     for &cmb_id in command_buffer_ids {
                         // we reset the used surface textures every time we use
                         // it, so make sure to set_size on it.
-                        used_surface_textures.set_size(hub.textures.read().len());
+                        used_surface_textures.set_size(device.tracker_indices.textures.size());
 
                         #[allow(unused_mut)]
                         let mut cmdbuf = match command_buffer_guard.replace_with_error(cmb_id) {
@@ -1188,11 +1225,13 @@ impl Global {
 
                             // update submission IDs
                             for buffer in cmd_buf_trackers.buffers.used_resources() {
-                                let id = buffer.info.id();
+                                let tracker_index = buffer.info.tracker_index();
                                 let raw_buf = match buffer.raw.get(&snatch_guard) {
                                     Some(raw) => raw,
                                     None => {
-                                        return Err(QueueSubmitError::DestroyedBuffer(id));
+                                        return Err(QueueSubmitError::DestroyedBuffer(
+                                            buffer.info.id(),
+                                        ));
                                     }
                                 };
                                 buffer.info.use_at(submit_index);
@@ -1207,28 +1246,28 @@ impl Global {
                                         .as_mut()
                                         .unwrap()
                                         .buffers
-                                        .insert(id, buffer.clone());
+                                        .insert(tracker_index, buffer.clone());
                                 } else {
                                     match *buffer.map_state.lock() {
                                         BufferMapState::Idle => (),
-                                        _ => return Err(QueueSubmitError::BufferStillMapped(id)),
+                                        _ => {
+                                            return Err(QueueSubmitError::BufferStillMapped(
+                                                buffer.info.id(),
+                                            ))
+                                        }
                                     }
                                 }
                             }
                             for texture in cmd_buf_trackers.textures.used_resources() {
-                                let id = texture.info.id();
+                                let tracker_index = texture.info.tracker_index();
                                 let should_extend = match texture.inner.get(&snatch_guard) {
                                     None => {
-                                        return Err(QueueSubmitError::DestroyedTexture(id));
+                                        return Err(QueueSubmitError::DestroyedTexture(
+                                            texture.info.id(),
+                                        ));
                                     }
                                     Some(TextureInner::Native { .. }) => false,
-                                    Some(TextureInner::Surface {
-                                        ref has_work,
-                                        ref raw,
-                                        ..
-                                    }) => {
-                                        has_work.store(true, Ordering::Relaxed);
-
+                                    Some(TextureInner::Surface { ref raw, .. }) => {
                                         if raw.is_some() {
                                             submit_surface_textures_owned.push(texture.clone());
                                         }
@@ -1242,7 +1281,7 @@ impl Global {
                                         .as_mut()
                                         .unwrap()
                                         .textures
-                                        .insert(id, texture.clone());
+                                        .insert(tracker_index, texture.clone());
                                 }
                                 if should_extend {
                                     unsafe {
@@ -1255,11 +1294,10 @@ impl Global {
                             for texture_view in cmd_buf_trackers.views.used_resources() {
                                 texture_view.info.use_at(submit_index);
                                 if texture_view.is_unique() {
-                                    temp_suspected
-                                        .as_mut()
-                                        .unwrap()
-                                        .texture_views
-                                        .insert(texture_view.as_info().id(), texture_view.clone());
+                                    temp_suspected.as_mut().unwrap().texture_views.insert(
+                                        texture_view.as_info().tracker_index(),
+                                        texture_view.clone(),
+                                    );
                                 }
                             }
                             {
@@ -1279,7 +1317,7 @@ impl Global {
                                             .as_mut()
                                             .unwrap()
                                             .bind_groups
-                                            .insert(bg.as_info().id(), bg.clone());
+                                            .insert(bg.as_info().tracker_index(), bg.clone());
                                     }
                                 }
                             }
@@ -1290,7 +1328,7 @@ impl Global {
                                 compute_pipeline.info.use_at(submit_index);
                                 if compute_pipeline.is_unique() {
                                     temp_suspected.as_mut().unwrap().compute_pipelines.insert(
-                                        compute_pipeline.as_info().id(),
+                                        compute_pipeline.as_info().tracker_index(),
                                         compute_pipeline.clone(),
                                     );
                                 }
@@ -1301,7 +1339,7 @@ impl Global {
                                 render_pipeline.info.use_at(submit_index);
                                 if render_pipeline.is_unique() {
                                     temp_suspected.as_mut().unwrap().render_pipelines.insert(
-                                        render_pipeline.as_info().id(),
+                                        render_pipeline.as_info().tracker_index(),
                                         render_pipeline.clone(),
                                     );
                                 }
@@ -1309,11 +1347,10 @@ impl Global {
                             for query_set in cmd_buf_trackers.query_sets.used_resources() {
                                 query_set.info.use_at(submit_index);
                                 if query_set.is_unique() {
-                                    temp_suspected
-                                        .as_mut()
-                                        .unwrap()
-                                        .query_sets
-                                        .insert(query_set.as_info().id(), query_set.clone());
+                                    temp_suspected.as_mut().unwrap().query_sets.insert(
+                                        query_set.as_info().tracker_index(),
+                                        query_set.clone(),
+                                    );
                                 }
                             }
                             for bundle in cmd_buf_trackers.bundles.used_resources() {
@@ -1334,7 +1371,7 @@ impl Global {
                                         .as_mut()
                                         .unwrap()
                                         .render_bundles
-                                        .insert(bundle.as_info().id(), bundle.clone());
+                                        .insert(bundle.as_info().tracker_index(), bundle.clone());
                                 }
                             }
                         }
@@ -1423,13 +1460,7 @@ impl Global {
                             return Err(QueueSubmitError::DestroyedTexture(id));
                         }
                         Some(TextureInner::Native { .. }) => {}
-                        Some(TextureInner::Surface {
-                            ref has_work,
-                            ref raw,
-                            ..
-                        }) => {
-                            has_work.store(true, Ordering::Relaxed);
-
+                        Some(TextureInner::Surface { ref raw, .. }) => {
                             if raw.is_some() {
                                 submit_surface_textures_owned.push(texture.clone());
                             }

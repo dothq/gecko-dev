@@ -5666,7 +5666,7 @@ nsDocShell::OnStateChange(nsIWebProgress* aProgress, nsIRequest* aRequest,
     mBusyFlags = (BusyFlags)(BUSY_FLAGS_BUSY | BUSY_FLAGS_BEFORE_PAGE_LOAD);
 
     if ((aStateFlags & STATE_RESTORING) == 0) {
-      if (StaticPrefs::browser_sessionstore_platform_collection_AtStartup()) {
+      if (SessionStorePlatformCollection()) {
         if (IsForceReloadType(mLoadType)) {
           if (WindowContext* windowContext =
                   mBrowsingContext->GetCurrentWindowContext()) {
@@ -6393,7 +6393,7 @@ nsresult nsDocShell::EndPageLoad(nsIWebProgress* aProgress,
     // incorrectly overrides session store data from the following load.
     return NS_OK;
   }
-  if (StaticPrefs::browser_sessionstore_platform_collection_AtStartup()) {
+  if (SessionStorePlatformCollection()) {
     if (WindowContext* windowContext =
             mBrowsingContext->GetCurrentWindowContext()) {
       using Change = SessionStoreChangeListener::Change;
@@ -6474,6 +6474,9 @@ nsresult nsDocShell::CreateAboutBlankDocumentViewer(
   RefPtr<Document> blankDoc;
   nsCOMPtr<nsIDocumentViewer> viewer;
   nsresult rv = NS_ERROR_FAILURE;
+
+  PROFILER_MARKER_UNTYPED("CreateAboutBlankDocumentViewer", DOM,
+                          MarkerStack::Capture());
 
   MOZ_ASSERT_IF(aActor, aActor->DocumentPrincipal() == aPrincipal);
 
@@ -10590,7 +10593,8 @@ static nsresult AppendSegmentToString(nsIInputStream* aIn, void* aClosure,
 }
 
 /* static */ uint32_t nsDocShell::ComputeURILoaderFlags(
-    BrowsingContext* aBrowsingContext, uint32_t aLoadType) {
+    BrowsingContext* aBrowsingContext, uint32_t aLoadType,
+    bool aIsDocumentLoad) {
   MOZ_ASSERT(aBrowsingContext);
 
   uint32_t openFlags = 0;
@@ -10598,6 +10602,13 @@ static nsresult AppendSegmentToString(nsIInputStream* aIn, void* aClosure,
     openFlags |= nsIURILoader::IS_CONTENT_PREFERRED;
   }
   if (!aBrowsingContext->GetAllowContentRetargeting()) {
+    openFlags |= nsIURILoader::DONT_RETARGET;
+  }
+
+  // Unless the pref is set, object/embed loads always specify DONT_RETARGET.
+  // See bug 1868001 for details.
+  if (!aIsDocumentLoad &&
+      !StaticPrefs::dom_navigation_object_embed_allow_retargeting()) {
     openFlags |= nsIURILoader::DONT_RETARGET;
   }
 
@@ -11376,11 +11387,14 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
     if (mozilla::SessionHistoryInParent()) {
       MOZ_LOG(gSHLog, LogLevel::Debug,
               ("nsDocShell %p UpdateActiveEntry (not replacing)", this));
+
       nsString title(mActiveEntry->GetTitle());
+      nsCOMPtr<nsIReferrerInfo> referrerInfo = mActiveEntry->GetReferrerInfo();
+
       UpdateActiveEntry(false,
                         /* aPreviousScrollPos = */ Some(scrollPos), aNewURI,
                         /* aOriginalURI = */ nullptr,
-                        /* aReferrerInfo = */ nullptr,
+                        /* aReferrerInfo = */ referrerInfo,
                         /* aTriggeringPrincipal = */ aDocument->NodePrincipal(),
                         csp, title, scrollRestorationIsManual, aData,
                         uriWasModified);
@@ -11399,11 +11413,13 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
       // mode from the current entry.
       newSHEntry->SetScrollRestorationIsManual(scrollRestorationIsManual);
 
+      // Set the new SHEntry's title (bug 655273).
       nsString title;
       mOSHE->GetTitle(title);
-
-      // Set the new SHEntry's title (bug 655273).
       newSHEntry->SetTitle(title);
+
+      nsCOMPtr<nsIReferrerInfo> referrerInfo = mOSHE->GetReferrerInfo();
+      newSHEntry->SetReferrerInfo(referrerInfo);
 
       // Link the new SHEntry to the old SHEntry's BFCache entry, since the
       // two entries correspond to the same document.
@@ -11453,6 +11469,8 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
       mOSHE = newSHEntry;
     }
 
+    nsCOMPtr<nsIReferrerInfo> referrerInfo = mOSHE->GetReferrerInfo();
+
     newSHEntry->SetURI(aNewURI);
     newSHEntry->SetOriginalURI(aNewURI);
     // We replaced the URI of the entry, clear the unstripped URI as it
@@ -11463,6 +11481,7 @@ nsresult nsDocShell::UpdateURLAndHistory(Document* aDocument, nsIURI* aNewURI,
     // in our case.  We could also set it to aNewURI, with the same result.
     newSHEntry->SetResultPrincipalURI(nullptr);
     newSHEntry->SetLoadReplace(false);
+    newSHEntry->SetReferrerInfo(referrerInfo);
   }
 
   if (!mozilla::SessionHistoryInParent()) {

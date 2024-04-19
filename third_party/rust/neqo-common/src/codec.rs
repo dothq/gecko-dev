@@ -4,7 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::{convert::TryFrom, fmt::Debug};
+use std::fmt::Debug;
 
 use crate::hex_with_len;
 
@@ -112,9 +112,7 @@ impl<'a> Decoder<'a> {
 
     /// Decodes a QUIC varint.
     pub fn decode_varint(&mut self) -> Option<u64> {
-        let Some(b1) = self.decode_byte() else {
-            return None;
-        };
+        let b1 = self.decode_byte()?;
         match b1 >> 6 {
             0 => Some(u64::from(b1 & 0x3f)),
             1 => Some((u64::from(b1 & 0x3f) << 8) | self.decode_uint(1)?),

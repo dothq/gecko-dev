@@ -566,6 +566,12 @@ class ArrayBufferObject : public ArrayBufferObjectMaybeShared {
   void setDataPointer(BufferContents contents);
   void setByteLength(size_t length);
 
+  /**
+   * Return the byte length for fixed-length buffers or the maximum byte length
+   * for resizable buffers.
+   */
+  inline size_t maxByteLength() const;
+
   size_t associatedBytes() const;
 
   uint32_t flags() const;
@@ -703,6 +709,13 @@ class ResizableArrayBufferObject : public ArrayBufferObject {
       JS::Handle<ResizableArrayBufferObject*> source);
 };
 
+size_t ArrayBufferObject::maxByteLength() const {
+  if (isResizable()) {
+    return as<ResizableArrayBufferObject>().maxByteLength();
+  }
+  return byteLength();
+}
+
 // Create a buffer for a wasm memory, whose type is determined by
 // memory.indexType().
 ArrayBufferObjectMaybeShared* CreateWasmBuffer(JSContext* cx,
@@ -775,6 +788,7 @@ class InnerViewTable {
 
  private:
   friend class ArrayBufferObject;
+  friend class ResizableArrayBufferObject;
   bool addView(JSContext* cx, ArrayBufferObject* buffer,
                ArrayBufferViewObject* view);
   ViewVector* maybeViewsUnbarriered(ArrayBufferObject* buffer);

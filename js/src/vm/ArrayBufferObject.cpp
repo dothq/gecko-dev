@@ -536,12 +536,7 @@ bool ArrayBufferObject::maxByteLengthGetterImpl(JSContext* cx,
   auto* buffer = &args.thisv().toObject().as<ArrayBufferObject>();
 
   // Steps 4-6.
-  size_t maxByteLength;
-  if (buffer->isResizable()) {
-    maxByteLength = buffer->as<ResizableArrayBufferObject>().maxByteLength();
-  } else {
-    maxByteLength = buffer->byteLength();
-  }
+  size_t maxByteLength = buffer->maxByteLength();
   MOZ_ASSERT_IF(buffer->isDetached(), maxByteLength == 0);
 
   // Step 7.
@@ -914,8 +909,6 @@ void ArrayBufferObject::detach(JSContext* cx,
 
   // Update all views of the buffer to account for the buffer having been
   // detached, and clear the buffer's data and list of views.
-  //
-  // Typed object buffers are not exposed and cannot be detached.
 
   auto& innerViews = ObjectRealm::get(buffer).innerViews.get();
   if (InnerViewTable::ViewVector* views =
@@ -962,6 +955,20 @@ void ResizableArrayBufferObject::resize(size_t newByteLength) {
   }
 
   setByteLength(newByteLength);
+
+  // Update all views of the buffer to account for the buffer having been
+  // resized.
+
+  auto& innerViews = ObjectRealm::get(this).innerViews.get();
+  if (InnerViewTable::ViewVector* views =
+          innerViews.maybeViewsUnbarriered(this)) {
+    for (auto& view : *views) {
+      view->notifyBufferResized();
+    }
+  }
+  if (auto* view = firstView()) {
+    view->as<ArrayBufferViewObject>().notifyBufferResized();
+  }
 }
 
 /* clang-format off */
@@ -1490,10 +1497,7 @@ size_t ArrayBufferObject::byteLength() const {
 
 inline size_t ArrayBufferObject::associatedBytes() const {
   if (isMalloced()) {
-    if (isResizable()) {
-      return as<ResizableArrayBufferObject>().maxByteLength();
-    }
-    return byteLength();
+    return maxByteLength();
   }
   if (isMapped()) {
     return RoundUp(byteLength(), js::gc::SystemPageSize());
@@ -2472,7 +2476,7 @@ bool ArrayBufferObject::ensureNonInline(JSContext* cx,
     return true;
   }
 
-  size_t nbytes = buffer->byteLength();
+  size_t nbytes = buffer->maxByteLength();
   ArrayBufferContents copy = NewCopiedBufferContents(cx, buffer);
   if (!copy) {
     return false;

@@ -17,10 +17,10 @@ const kExpectedRequestsForScriptsInHead = [
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
     },
     {   fileNameAndSuffix: kFetchPriorityAutoRequestFileNameAndSuffix,
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: kNoFetchPriorityRequestFileNameAndSuffix,
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     }
 ];
 
@@ -39,6 +39,7 @@ const kExpectedRequestsForScriptsInHeadDisabled = [
     }
 ];
 
+// TODO(bug 1872654): Should we align on Chromium for "early" in-body scripts?
 const kExpectedRequestsForScriptsInBody = [
     {   fileNameAndSuffix: "dummy.js?1",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_LOW
@@ -46,7 +47,6 @@ const kExpectedRequestsForScriptsInBody = [
     {   fileNameAndSuffix: "dummy.js?2",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
     },
-    // Bug 1872654: Chromium's behavior here differs.
     {   fileNameAndSuffix: "dummy.js?3",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
@@ -54,15 +54,39 @@ const kExpectedRequestsForScriptsInBody = [
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?5",
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_LOW
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?6",
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?7",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?8",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?9",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_LOW
+    },
+    {   fileNameAndSuffix: "dummy.js?10",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
+    },
+    {   fileNameAndSuffix: "dummy.js?11",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?12",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?13",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?14",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?15",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?16",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
 ]
@@ -92,6 +116,30 @@ const kExpectedRequestsForScriptsInBodyDisabled = [
     {   fileNameAndSuffix: "dummy.js?8",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
+    {   fileNameAndSuffix: "dummy.js?9",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?10",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?11",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?12",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?13",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?14",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?15",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?16",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
 ]
 
 export const kTestFolderName = "script-tests";
@@ -104,10 +152,22 @@ const kExpectedRequestsForNonModuleAsyncAndDeferredScripts = [
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
     },
     {   fileNameAndSuffix: "dummy.js?3",
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_LOW
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?4",
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_LOW
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?5",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?6",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?7",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?8",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
 ]
 
@@ -124,6 +184,18 @@ const kExpectedRequestsForNonModuleAsyncAndDeferredScriptsDisabled = [
     {   fileNameAndSuffix: "dummy.js?4",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
+    {   fileNameAndSuffix: "dummy.js?5",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?6",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?7",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?8",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
 ]
 
 // Chromium's desired behavior is under discussion:
@@ -136,10 +208,22 @@ const kExpectedRequestsForModuleScripts = [
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
     },
     {   fileNameAndSuffix: "dummy.js?3",
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?4",
-        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_HIGH
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?5",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?6",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?7",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?8",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
 ]
 
@@ -154,6 +238,18 @@ const kExpectedRequestsForModuleScriptsDisabled = [
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
     {   fileNameAndSuffix: "dummy.js?4",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?5",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?6",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?7",
+        internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
+    },
+    {   fileNameAndSuffix: "dummy.js?8",
         internalPriority: SpecialPowers.Ci.nsISupportsPriority.PRIORITY_NORMAL
     },
 ]

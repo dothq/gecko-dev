@@ -126,7 +126,7 @@ add_task(async function open_empty() {
   let image = searchPopup.querySelector(".searchbar-engine-image");
   Assert.equal(
     image.src,
-    engine.getIconURL(16),
+    await engine.getIconURL(16),
     "Should have the correct icon"
   );
 
@@ -266,6 +266,13 @@ add_no_popup_task(async function right_click_doesnt_open_popup() {
   });
   context_click(textbox);
   let contextPopup = await promise;
+
+  // Assert that the context menu click inside the popup does nothing. If it
+  // opens something, assert_no_popup_task will make us fail. On macOS this
+  // doesn't work because of native context menus.
+  if (!navigator.platform.includes("Mac")) {
+    context_click(contextPopup);
+  }
 
   is(
     Services.focus.focusedElement,

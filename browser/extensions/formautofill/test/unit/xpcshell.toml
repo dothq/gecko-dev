@@ -6,6 +6,9 @@ skip-if = [
 firefox-appdir = "browser"
 head = "head.js"
 support-files = ["../fixtures/**"]
+prefs = [
+  "extensions.formautofill.test.ignoreVisibilityCheck=true",
+]
 
 ["test_activeStatus.js"]
 
@@ -97,9 +100,6 @@ skip-if = [
 skip-if = ["tsan"] # Times out, bug 1612707
 
 ["test_nameUtils.js"]
-
-["test_onFormSubmitted.js"]
-skip-if = ["tsan"] # Times out, bug 1612707
 
 ["test_parseAddressFormat.js"]
 

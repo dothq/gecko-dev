@@ -798,6 +798,7 @@ mac-signing:
                       - "/Contents/MacOS/XUL"
                       - "/Contents/MacOS/pingsender"
                       - "/Contents/MacOS/minidump-analyzer"
+                      - "/Contents/MacOS/nmhproxy"
                       - "/Contents/MacOS/*.dylib"
                       - "/Contents/Resources/gmp-clearkey/*/*.dylib"
 
@@ -839,6 +840,7 @@ mac-signing:
                       - "/Contents/Library/LaunchServices/org.mozilla.updater"
                       - "/Contents/MacOS/pingsender"
                       - "/Contents/MacOS/minidump-analyzer"
+                      - "/Contents/MacOS/nmhproxy"
 
                 - deep: false
                   runtime: true

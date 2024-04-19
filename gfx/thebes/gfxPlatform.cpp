@@ -21,8 +21,8 @@
 #include "mozilla/gfx/gfxVars.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/GraphicsMessages.h"
-#include "mozilla/gfx/CanvasManagerChild.h"
 #include "mozilla/gfx/CanvasRenderThread.h"
+#include "mozilla/gfx/CanvasShutdownManager.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/EnumTypeTraits.h"
@@ -79,7 +79,7 @@
 #if defined(XP_WIN)
 #  include "gfxWindowsPlatform.h"
 #  include "mozilla/widget/WinWindowOcclusionTracker.h"
-#elif defined(XP_MACOSX)
+#elif defined(XP_DARWIN)
 #  include "gfxPlatformMac.h"
 #  include "gfxQuartzSurface.h"
 #elif defined(MOZ_WIDGET_GTK)
@@ -289,9 +289,8 @@ void CrashStatsLogForwarder::UpdateCrashReport() {
             << " (t=" << std::get<2>(it) << ") ";
   }
 
-  nsCString reportString(message.str().c_str());
-  nsresult annotated =
-      CrashReporter::AnnotateCrashReport(mCrashCriticalKey, reportString);
+  nsresult annotated = CrashReporter::RecordAnnotationCString(
+      mCrashCriticalKey, message.str().c_str());
 
   if (annotated != NS_OK) {
     printf("Crash Annotation %s: %s",
@@ -409,7 +408,7 @@ void CrashStatsLogForwarder::CrashAction(LogReason aReason) {
 #define GFX_PREF_WORD_CACHE_MAXENTRIES "gfx.font_rendering.wordcache.maxentries"
 
 #define GFX_PREF_GRAPHITE_SHAPING "gfx.font_rendering.graphite.enabled"
-#if defined(XP_MACOSX)
+#if defined(XP_DARWIN)
 #  define GFX_PREF_CORETEXT_SHAPING "gfx.font_rendering.coretext.enabled"
 #endif
 
@@ -786,7 +785,7 @@ bool gfxPlatform::HasVariationFontSupport() {
     // as any thread will set it to the same value.
 #if defined(XP_WIN)
     sHasVariationFontSupport = gfxWindowsPlatform::CheckVariationFontSupport();
-#elif defined(XP_MACOSX)
+#elif defined(XP_DARWIN)
     sHasVariationFontSupport = gfxPlatformMac::CheckVariationFontSupport();
 #elif defined(MOZ_WIDGET_GTK)
     sHasVariationFontSupport = gfxPlatformGtk::CheckVariationFontSupport();
@@ -904,7 +903,7 @@ void gfxPlatform::Init() {
 
 #if defined(XP_WIN)
   gPlatform = new gfxWindowsPlatform;
-#elif defined(XP_MACOSX)
+#elif defined(XP_DARWIN)
   gPlatform = new gfxPlatformMac;
 #elif defined(MOZ_WIDGET_GTK)
   gPlatform = new gfxPlatformGtk;
@@ -1069,6 +1068,15 @@ void gfxPlatform::ReportTelemetry() {
 
   nsString adapterDesc;
   gfxInfo->GetAdapterDescription(adapterDesc);
+
+// Android description is constructed in a way that makes it possible to exceed
+// the metric's length limit.
+#if defined(ANDROID)
+  if (!adapterDesc.IsEmpty()) {
+    adapterDesc.Truncate(99);
+  }
+#endif
+
   mozilla::glean::gfx_adapter_primary::description.Set(
       NS_ConvertUTF16toUTF8(adapterDesc));
 
@@ -1335,7 +1343,7 @@ void gfxPlatform::ShutdownLayersIPC() {
 
   if (XRE_IsContentProcess()) {
     gfx::VRManagerChild::ShutDown();
-    gfx::CanvasManagerChild::Shutdown();
+    gfx::CanvasShutdownManager::Shutdown();
     // cf bug 1215265.
     if (StaticPrefs::layers_child_process_shutdown()) {
       layers::CompositorManagerChild::Shutdown();
@@ -1346,7 +1354,7 @@ void gfxPlatform::ShutdownLayersIPC() {
     VideoBridgeParent::Shutdown();
     RDDProcessManager::RDDProcessShutdown();
     gfx::VRManagerChild::ShutDown();
-    gfx::CanvasManagerChild::Shutdown();
+    gfx::CanvasShutdownManager::Shutdown();
     layers::CompositorManagerChild::Shutdown();
     layers::ImageBridgeChild::ShutDown();
     // This could be running on either the Compositor thread, the Renderer
@@ -2273,7 +2281,7 @@ void gfxPlatform::FontsPrefsChanged(const char* aPref) {
              !strcmp(GFX_PREF_GRAPHITE_SHAPING, aPref)) {
     FlushFontAndWordCaches();
   } else if (
-#if defined(XP_MACOSX)
+#if defined(XP_DARWIN)
       !strcmp(GFX_PREF_CORETEXT_SHAPING, aPref) ||
 #endif
       !strcmp("gfx.font_rendering.ahem_antialias_none", aPref)) {
@@ -2693,7 +2701,7 @@ void gfxPlatform::InitWebRenderConfig() {
           StaticPrefs::GetPrefName_gfx_webrender_batched_upload_threshold()));
 
   if (WebRenderResourcePathOverride()) {
-    CrashReporter::AnnotateCrashReport(
+    CrashReporter::RecordAnnotationBool(
         CrashReporter::Annotation::IsWebRenderResourcePathOverridden, true);
   }
 
@@ -2740,7 +2748,7 @@ void gfxPlatform::InitWebRenderConfig() {
                                  "FEATURE_FAILURE_WR_NO_GFX_INFO"_ns);
         useVideoHwOverlay = false;
       } else {
-        if (status != nsIGfxInfo::FEATURE_ALLOW_ALWAYS) {
+        if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
           FeatureState& feature =
               gfxConfig::GetFeature(Feature::VIDEO_HARDWARE_OVERLAY);
           feature.DisableByDefault(FeatureStatus::Blocked,
@@ -2896,6 +2904,49 @@ void gfxPlatform::InitWebRenderConfig() {
     }
   }
 #endif
+
+  bool allowOverlayVpAutoHDR = false;
+  if (StaticPrefs::gfx_webrender_overlay_vp_auto_hdr_AtStartup()) {
+    allowOverlayVpAutoHDR = true;
+
+    nsCString failureId;
+    int32_t status;
+    const nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+    if (NS_FAILED(gfxInfo->GetFeatureStatus(
+            nsIGfxInfo::FEATURE_OVERLAY_VP_AUTO_HDR, failureId, &status))) {
+      allowOverlayVpAutoHDR = false;
+    } else {
+      if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
+        allowOverlayVpAutoHDR = false;
+      }
+    }
+  }
+
+  if (allowOverlayVpAutoHDR) {
+    gfxVars::SetWebRenderOverlayVpAutoHDR(true);
+  }
+
+  bool allowOverlayVpSuperResolution = false;
+  if (StaticPrefs::gfx_webrender_overlay_vp_super_resolution_AtStartup()) {
+    allowOverlayVpSuperResolution = true;
+
+    nsCString failureId;
+    int32_t status;
+    const nsCOMPtr<nsIGfxInfo> gfxInfo = components::GfxInfo::Service();
+    if (NS_FAILED(gfxInfo->GetFeatureStatus(
+            nsIGfxInfo::FEATURE_OVERLAY_VP_SUPER_RESOLUTION, failureId,
+            &status))) {
+      allowOverlayVpSuperResolution = false;
+    } else {
+      if (status != nsIGfxInfo::FEATURE_STATUS_OK) {
+        allowOverlayVpSuperResolution = false;
+      }
+    }
+  }
+
+  if (allowOverlayVpSuperResolution) {
+    gfxVars::SetWebRenderOverlayVpSuperResolution(true);
+  }
 
   if (gfxConfig::IsEnabled(Feature::WEBRENDER_COMPOSITOR)) {
     gfxVars::SetUseWebRenderCompositor(true);

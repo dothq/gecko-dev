@@ -175,12 +175,11 @@
 #include <zmouse.h>
 #include <richedit.h>
 
-#if defined(ACCESSIBILITY)
-
+#ifdef ACCESSIBILITY
 #  ifdef DEBUG
 #    include "mozilla/a11y/Logging.h"
 #  endif
-
+#  include "mozilla/a11y/Compatibility.h"
 #  include "oleidl.h"
 #  include <winuser.h>
 #  include "nsAccessibilityService.h"
@@ -190,7 +189,7 @@
 #  if !defined(WINABLEAPI)
 #    include <winable.h>
 #  endif  // !defined(WINABLEAPI)
-#endif    // defined(ACCESSIBILITY)
+#endif
 
 #include "WindowsUIUtils.h"
 
@@ -1221,18 +1220,19 @@ static LPWSTR const gStockApplicationIcon = MAKEINTRESOURCEW(32512);
 
 /* static */
 const wchar_t* nsWindow::ChooseWindowClass(WindowType aWindowType) {
-  switch (aWindowType) {
-    case WindowType::Invisible:
-      return RegisterWindowClass(kClassNameHidden, 0, gStockApplicationIcon);
-    case WindowType::Dialog:
-      return RegisterWindowClass(kClassNameDialog, 0, nullptr);
-    case WindowType::Popup:
-      return RegisterWindowClass(kClassNameDropShadow, 0,
-                                 gStockApplicationIcon);
-    default:
-      return RegisterWindowClass(GetMainWindowClass(), 0,
-                                 gStockApplicationIcon);
-  }
+  const wchar_t* className = [aWindowType] {
+    switch (aWindowType) {
+      case WindowType::Invisible:
+        return kClassNameHidden;
+      case WindowType::Dialog:
+        return kClassNameDialog;
+      case WindowType::Popup:
+        return kClassNameDropShadow;
+      default:
+        return GetMainWindowClass();
+    }
+  }();
+  return RegisterWindowClass(className, 0, gStockApplicationIcon);
 }
 
 /**************************************************************
@@ -1310,13 +1310,6 @@ DWORD nsWindow::WindowStyle() {
     if (mBorderStyle == BorderStyle::None ||
         !(mBorderStyle & BorderStyle::Maximize))
       style &= ~WS_MAXIMIZEBOX;
-
-    if (IsPopupWithTitleBar()) {
-      style |= WS_CAPTION;
-      if (mBorderStyle & BorderStyle::Close) {
-        style |= WS_SYSMENU;
-      }
-    }
   }
 
   if (mIsChildWindow) {
@@ -1332,7 +1325,6 @@ DWORD nsWindow::WindowStyle() {
 
 // Return nsWindow extended styles
 DWORD nsWindow::WindowExStyle() {
-  MOZ_ASSERT_IF(mIsAlert, mWindowType == WindowType::Dialog);
   switch (mWindowType) {
     case WindowType::Child:
       return 0;
@@ -1343,17 +1335,17 @@ DWORD nsWindow::WindowExStyle() {
       }
       return extendedStyle;
     }
-    case WindowType::Dialog: {
-      if (mIsAlert) {
-        return WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
-      }
-      return WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME;
-    }
     case WindowType::Sheet:
       MOZ_FALLTHROUGH_ASSERT("Sheets are macOS specific");
+    case WindowType::Dialog:
     case WindowType::TopLevel:
     case WindowType::Invisible:
       break;
+  }
+  if (mIsAlert) {
+    MOZ_ASSERT(mWindowType == WindowType::Dialog,
+               "Expect alert windows to have type=dialog");
+    return WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
   }
   return WS_EX_WINDOWEDGE;
 }
@@ -3058,9 +3050,7 @@ void nsWindow::SetTransparencyMode(TransparencyMode aMode) {
 
 void nsWindow::UpdateWindowDraggingRegion(
     const LayoutDeviceIntRegion& aRegion) {
-  if (mDraggableRegion != aRegion) {
-    mDraggableRegion = aRegion;
-  }
+  mDraggableRegion = aRegion;
 }
 
 /**************************************************************
@@ -3674,7 +3664,7 @@ LayoutDeviceIntPoint nsWindow::WidgetToScreenOffset() {
 }
 
 LayoutDeviceIntMargin nsWindow::ClientToWindowMargin() {
-  if (mWindowType == WindowType::Popup && !IsPopupWithTitleBar()) {
+  if (mWindowType == WindowType::Popup) {
     return {};
   }
 
@@ -4420,6 +4410,17 @@ HWND nsWindow::GetTopLevelForFocus(HWND aCurWnd) {
 }
 
 void nsWindow::DispatchFocusToTopLevelWindow(bool aIsActivate) {
+  if (aIsActivate && mPickerDisplayCount) {
+    // We disable the root window when a picker opens. See PickerOpen. When the
+    // picker closes (but before PickerClosed is called), our window will get
+    // focus, but it will still be disabled. This confuses the focus system.
+    // Therefore, we ignore this focus and explicitly call this function once
+    // we re-enable the window. Rarely, the picker seems to re-enable our root
+    // window before we do, but for simplicity, we always ignore focus before
+    // the final call to PickerClosed. See bug 1883568 for further details.
+    return;
+  }
+
   if (aIsActivate) {
     sJustGotActivate = false;
   }
@@ -5038,6 +5039,44 @@ bool nsWindow::ProcessMessageInternal(UINT msg, WPARAM& wParam, LPARAM& lParam,
       }
       break;
     }
+
+    case WM_GETTITLEBARINFOEX: {
+      if (!mCustomNonClient) {
+        break;
+      }
+      auto* info = reinterpret_cast<TITLEBARINFOEX*>(lParam);
+      const LayoutDeviceIntPoint origin = WidgetToScreenOffset();
+      auto GeckoClientToWinScreenRect =
+          [&origin](LayoutDeviceIntRect aRect) -> RECT {
+        aRect.MoveBy(origin);
+        return {
+            .left = aRect.x,
+            .top = aRect.y,
+            .right = aRect.XMost(),
+            .bottom = aRect.YMost(),
+        };
+      };
+      auto SetButton = [&](size_t aIndex, WindowButtonType aType) {
+        info->rgrect[aIndex] =
+            GeckoClientToWinScreenRect(mWindowBtnRect[aType]);
+        DWORD& state = info->rgstate[aIndex];
+        if (mWindowBtnRect[aType].IsEmpty()) {
+          state = STATE_SYSTEM_INVISIBLE;
+        } else {
+          state = STATE_SYSTEM_FOCUSABLE;
+        }
+      };
+      info->rgrect[0] = info->rcTitleBar =
+          GeckoClientToWinScreenRect(mDraggableRegion.GetBounds());
+      info->rgstate[0] = 0;
+      SetButton(2, WindowButtonType::Minimize);
+      SetButton(3, WindowButtonType::Maximize);
+      SetButton(5, WindowButtonType::Close);
+      // We don't have a help button.
+      info->rgstate[4] = STATE_SYSTEM_INVISIBLE;
+      info->rgrect[4] = {0, 0, 0, 0};
+      result = true;
+    } break;
 
     case WM_NCHITTEST: {
       if (mInputRegion.mFullyTransparent) {
@@ -6169,6 +6208,9 @@ int32_t nsWindow::ClientMarginHitTestPoint(int32_t aX, int32_t aY) {
     if (mWindowBtnRect[WindowButtonType::Minimize].Contains(pt)) {
       testResult = HTMINBUTTON;
     } else if (mWindowBtnRect[WindowButtonType::Maximize].Contains(pt)) {
+#ifdef ACCESSIBILITY
+      a11y::Compatibility::SuppressA11yForSnapLayouts();
+#endif
       testResult = HTMAXBUTTON;
     } else if (mWindowBtnRect[WindowButtonType::Close].Contains(pt)) {
       testResult = HTCLOSE;
@@ -8168,8 +8210,23 @@ WPARAM nsWindow::wParamFromGlobalMouseState() {
   return result;
 }
 
+// WORKAROUND FOR UNDOCUMENTED BEHAVIOR: `IFileDialog::Show` disables the
+// top-level ancestor of its provided owner-window. If the modal window's
+// container process crashes, it will never get a chance to undo that.
+//
+// For simplicity's sake we simply unconditionally perform both the disabling
+// and reenabling here, synchronously, on the main thread, rather than leaving
+// it to happen in our asynchronously-operated IFileDialog.
+
 void nsWindow::PickerOpen() {
   AssertIsOnMainThread();
+
+  // Disable the root-level window synchronously before any file-dialogs get a
+  // chance to fight over doing it asynchronously.
+  if (!mPickerDisplayCount) {
+    ::EnableWindow(::GetAncestor(GetWindowHandle(), GA_ROOT), FALSE);
+  }
+
   mPickerDisplayCount++;
 }
 
@@ -8179,16 +8236,10 @@ void nsWindow::PickerClosed() {
   if (!mPickerDisplayCount) return;
   mPickerDisplayCount--;
 
-  // WORKAROUND FOR UNDOCUMENTED BEHAVIOR: `IFileDialog::Show` disables the
-  // top-level ancestor of its provided owner-window. If the modal window's
-  // container process crashes, it will never get a chance to undo that, so we
-  // do it manually here.
-  //
-  // Note that this may cause problems in the embedded case if you reparent a
-  // subtree of the native window hierarchy containing a Gecko window while that
-  // Gecko window has a file-dialog open.
+  // Once all the file-dialogs are gone, reenable the root-level window.
   if (!mPickerDisplayCount) {
     ::EnableWindow(::GetAncestor(GetWindowHandle(), GA_ROOT), TRUE);
+    DispatchFocusToTopLevelWindow(true);
   }
 
   if (!mPickerDisplayCount && mDestroyCalled) {
@@ -8528,6 +8579,7 @@ void nsWindow::ChangedDPI() {
       presShell->BackingScaleFactorChanged();
     }
   }
+  NotifyAPZOfDPIChange();
 }
 
 static Result<POINTER_FLAGS, nsresult> PointerStateToFlag(

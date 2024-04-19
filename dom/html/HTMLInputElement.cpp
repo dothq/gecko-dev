@@ -49,7 +49,6 @@
 #include "nsSearchControlFrame.h"
 #include "nsPIDOMWindow.h"
 #include "nsRepeatService.h"
-#include "nsContentCID.h"
 #include "mozilla/dom/ProgressEvent.h"
 #include "nsGkAtoms.h"
 #include "nsStyleConsts.h"
@@ -779,8 +778,8 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
   // Get parent nsPIDOMWindow object.
   nsCOMPtr<Document> doc = OwnerDoc();
 
-  nsCOMPtr<nsPIDOMWindowOuter> win = doc->GetWindow();
-  if (!win) {
+  RefPtr<BrowsingContext> bc = doc->GetBrowsingContext();
+  if (!bc) {
     return NS_ERROR_FAILURE;
   }
 
@@ -793,15 +792,14 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
   nsAutoString okButtonLabel;
   if (aType == FILE_PICKER_DIRECTORY) {
     nsContentUtils::GetMaybeLocalizedString(nsContentUtils::eFORMS_PROPERTIES,
-                                            "DirectoryUpload", OwnerDoc(),
-                                            title);
+                                            "DirectoryUpload", doc, title);
 
     nsContentUtils::GetMaybeLocalizedString(nsContentUtils::eFORMS_PROPERTIES,
-                                            "DirectoryPickerOkButtonLabel",
-                                            OwnerDoc(), okButtonLabel);
+                                            "DirectoryPickerOkButtonLabel", doc,
+                                            okButtonLabel);
   } else {
     nsContentUtils::GetMaybeLocalizedString(nsContentUtils::eFORMS_PROPERTIES,
-                                            "FileUpload", OwnerDoc(), title);
+                                            "FileUpload", doc, title);
   }
 
   nsCOMPtr<nsIFilePicker> filePicker =
@@ -818,8 +816,7 @@ nsresult HTMLInputElement::InitFilePicker(FilePickerType aType) {
     mode = nsIFilePicker::modeOpen;
   }
 
-  nsresult rv =
-      filePicker->Init(win, title, mode, OwnerDoc()->GetBrowsingContext());
+  nsresult rv = filePicker->Init(bc, title, mode);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (!okButtonLabel.IsEmpty()) {
@@ -4447,7 +4444,7 @@ void HTMLInputElement::MaybeDispatchLoginManagerEvents(HTMLFormElement* aForm) {
   dispatcher->PostDOMEvent();
 }
 
-void HTMLInputElement::UnbindFromTree(bool aNullParent) {
+void HTMLInputElement::UnbindFromTree(UnbindContext& aContext) {
   if (mType == FormControlType::InputPassword) {
     MaybeFireInputPasswordRemoved();
   }
@@ -4465,8 +4462,8 @@ void HTMLInputElement::UnbindFromTree(bool aNullParent) {
     NotifyUAWidgetTeardown();
   }
 
-  nsImageLoadingContent::UnbindFromTree(aNullParent);
-  nsGenericHTMLFormControlElementWithState::UnbindFromTree(aNullParent);
+  nsImageLoadingContent::UnbindFromTree();
+  nsGenericHTMLFormControlElementWithState::UnbindFromTree(aContext);
 
   // If we are contained within a disconnected subtree, attempt to add
   // ourselves to the subtree root's radio group.
@@ -6483,7 +6480,8 @@ bool HTMLInputElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
   }
 
   // Current radio button is not selected.
-  // But make it tabbable if nothing in group is selected.
+  // Make it tabbable if nothing in group is selected and it is the first radio
+  // button.
   auto* container = GetCurrentRadioGroupContainer();
   if (!container) {
     *aIsFocusable = defaultFocusable;
@@ -6493,7 +6491,8 @@ bool HTMLInputElement::IsHTMLFocusable(bool aWithMouse, bool* aIsFocusable,
   nsAutoString name;
   GetAttr(nsGkAtoms::name, name);
 
-  if (container->GetCurrentRadioButton(name)) {
+  if (container->GetCurrentRadioButton(name) ||
+      container->GetFirstRadioButton(name) != this) {
     *aTabIndex = -1;
   }
   *aIsFocusable = defaultFocusable;

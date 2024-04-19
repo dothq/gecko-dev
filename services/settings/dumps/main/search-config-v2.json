@@ -1,37 +1,269 @@
 {
   "data": [
     {
-      "orders": [
-        {
-          "order": [
-            "baidu",
-            "bing",
-            "google",
-            "wikipedia*"
-          ],
-          "environment": {
-            "distributions": [
-              "MozillaOnline"
-            ]
+      "base": {
+        "name": "DuckDuckGo",
+        "urls": {
+          "search": {
+            "base": "https://duckduckgo.com/",
+            "params": [
+              {
+                "name": "t",
+                "value": "{partnerCode}"
+              }
+            ],
+            "searchTermParamName": "q"
+          },
+          "suggestions": {
+            "base": "https://ac.duckduckgo.com/ac/",
+            "params": [
+              {
+                "name": "type",
+                "value": "list"
+              }
+            ],
+            "searchTermParamName": "q"
           }
         },
+        "aliases": [
+          "duckduckgo",
+          "ddg"
+        ],
+        "partnerCode": "ffab",
+        "classification": "general"
+      },
+      "schema": 1713282081098,
+      "variants": [
         {
-          "order": [
-            "qwant",
-            "qwantjr"
-          ],
+          "environment": {
+            "allRegionsAndLocales": true
+          },
+          "subVariants": [
+            {
+              "environment": {
+                "channels": [
+                  "esr"
+                ]
+              },
+              "partnerCode": "ftsa",
+              "telemetrySuffix": "esr"
+            }
+          ]
+        },
+        {
           "environment": {
             "distributions": [
-              "qwant-001",
-              "qwant-002"
+              "mint-001"
             ]
-          }
+          },
+          "partnerCode": "lm",
+          "telemetrySuffix": "lm"
         }
       ],
-      "schema": 1707824831520,
-      "recordType": "engineOrders",
-      "id": "3e1fed64-5ec7-4b1c-bedc-741fe3c59bc3",
-      "last_modified": 1707833224345
+      "identifier": "ddg",
+      "recordType": "engine",
+      "id": "04e99a38-13ee-47d8-8aa4-64482b3dea99",
+      "last_modified": 1713282817053
+    },
+    {
+      "base": {
+        "name": "Google",
+        "urls": {
+          "search": {
+            "base": "https://www.google.com/search",
+            "params": [
+              {
+                "name": "client",
+                "value": "{partnerCode}"
+              },
+              {
+                "name": "channel",
+                "experimentConfig": "google_channel_row"
+              }
+            ],
+            "searchTermParamName": "q"
+          },
+          "trending": {
+            "base": "https://www.google.com/complete/search",
+            "method": "GET",
+            "params": [
+              {
+                "name": "client",
+                "value": "firefox"
+              },
+              {
+                "name": "channel",
+                "value": "ftr"
+              }
+            ],
+            "searchTermParamName": "q"
+          },
+          "suggestions": {
+            "base": "https://www.google.com/complete/search",
+            "params": [
+              {
+                "name": "client",
+                "value": "firefox"
+              },
+              {
+                "name": "channel",
+                "experimentConfig": "search_rich_suggestions"
+              }
+            ],
+            "searchTermParamName": "q"
+          }
+        },
+        "aliases": [
+          "google"
+        ],
+        "partnerCode": "firefox-b-d",
+        "classification": "general"
+      },
+      "schema": 1713282083062,
+      "variants": [
+        {
+          "environment": {
+            "allRegionsAndLocales": true
+          },
+          "subVariants": [
+            {
+              "environment": {
+                "channels": [
+                  "esr"
+                ]
+              },
+              "partnerCode": "firefox-b-e",
+              "telemetrySuffix": "b-e"
+            }
+          ],
+          "telemetrySuffix": "b-d"
+        },
+        {
+          "urls": {
+            "search": {
+              "params": []
+            }
+          },
+          "environment": {
+            "regions": [
+              "ru",
+              "tr",
+              "by",
+              "kz"
+            ]
+          },
+          "telemetrySuffix": "com-nocodes"
+        },
+        {
+          "urls": {
+            "search": {
+              "params": [
+                {
+                  "name": "client",
+                  "value": "{partnerCode}"
+                },
+                {
+                  "name": "channel",
+                  "experimentConfig": "google_channel_us"
+                }
+              ]
+            }
+          },
+          "environment": {
+            "regions": [
+              "us"
+            ]
+          },
+          "partnerCode": "firefox-b-1-d",
+          "subVariants": [
+            {
+              "environment": {
+                "regions": [
+                  "us"
+                ],
+                "channels": [
+                  "esr"
+                ]
+              },
+              "partnerCode": "firefox-b-1-e",
+              "telemetrySuffix": "b-1-e"
+            }
+          ],
+          "telemetrySuffix": "b-1-d"
+        },
+        {
+          "urls": {
+            "search": {
+              "params": [
+                {
+                  "name": "client",
+                  "value": "{partnerCode}"
+                },
+                {
+                  "name": "channel",
+                  "value": "fs"
+                }
+              ]
+            }
+          },
+          "environment": {
+            "distributions": [
+              "canonical",
+              "canonical-001"
+            ]
+          },
+          "partnerCode": "ubuntu",
+          "telemetrySuffix": "canonical"
+        },
+        {
+          "urls": {
+            "search": {
+              "params": [
+                {
+                  "name": "client",
+                  "value": "{partnerCode}"
+                },
+                {
+                  "name": "channel",
+                  "value": "fs"
+                }
+              ]
+            }
+          },
+          "environment": {
+            "distributions": [
+              "canonical-002"
+            ]
+          },
+          "partnerCode": "ubuntu-sn",
+          "telemetrySuffix": "ubuntu-sn"
+        },
+        {
+          "environment": {
+            "distributions": [
+              "mint-001"
+            ]
+          },
+          "partnerCode": "firefox-b-lm",
+          "telemetrySuffix": "b-lm"
+        },
+        {
+          "environment": {
+            "regions": [
+              "us"
+            ],
+            "distributions": [
+              "mint-001"
+            ]
+          },
+          "partnerCode": "firefox-b-1-lm",
+          "telemetrySuffix": "b-1-lm"
+        }
+      ],
+      "identifier": "google",
+      "recordType": "engine",
+      "id": "7ace4aa1-e762-4f4b-87b9-b23b3c3a930b",
+      "last_modified": 1713282817051
     },
     {
       "base": {
@@ -77,7 +309,7 @@
         "partnerCode": "MOZI",
         "classification": "general"
       },
-      "schema": 1706918405822,
+      "schema": 1713199744323,
       "variants": [
         {
           "environment": {
@@ -166,295 +398,125 @@
               "xh",
               "zh-CN"
             ]
-          }
-        },
-        {
-          "environment": {
-            "channels": [
-              "esr"
-            ]
           },
-          "partnerCode": "MOZR",
-          "telemetrySuffix": "esr"
+          "subVariants": [
+            {
+              "environment": {
+                "channels": [
+                  "esr"
+                ]
+              },
+              "partnerCode": "MOZR",
+              "telemetrySuffix": "esr"
+            }
+          ]
         }
       ],
       "identifier": "bing",
       "recordType": "engine",
       "id": "05645095-d26e-4f20-9137-f24a14a23f28",
-      "last_modified": 1707833224310
+      "last_modified": 1713282817048
     },
     {
       "base": {
-        "name": "Google",
+        "name": "Qwant",
         "urls": {
           "search": {
-            "base": "https://www.google.com/search",
+            "base": "https://www.qwant.com/",
             "params": [
               {
                 "name": "client",
-                "value": "{partnerCode}"
-              },
-              {
-                "name": "channel",
-                "experimentConfig": "google_channel_row"
-              }
-            ],
-            "searchTermParamName": "q"
-          },
-          "trending": {
-            "base": "https://www.google.com/complete/search",
-            "method": "GET",
-            "params": [
-              {
-                "name": "client",
-                "value": "firefox"
-              },
-              {
-                "name": "channel",
-                "value": "ftr"
-              }
-            ],
-            "searchTermParamName": "q"
-          },
-          "suggestions": {
-            "base": "https://www.google.com/complete/search",
-            "params": [
-              {
-                "name": "client",
-                "value": "firefox"
-              },
-              {
-                "name": "channel",
-                "experimentConfig": "search_rich_suggestions"
-              }
-            ],
-            "searchTermParamName": "q"
-          }
-        },
-        "aliases": [
-          "google"
-        ],
-        "partnerCode": "firefox-b-d",
-        "classification": "general"
-      },
-      "schema": 1702901739026,
-      "variants": [
-        {
-          "environment": {
-            "allRegionsAndLocales": true
-          },
-          "telemetrySuffix": "b-d"
-        },
-        {
-          "environment": {
-            "channels": [
-              "esr"
-            ]
-          },
-          "partnerCode": "firefox-b-e",
-          "telemetrySuffix": "b-e"
-        },
-        {
-          "urls": {
-            "search": {
-              "params": []
-            }
-          },
-          "environment": {
-            "regions": [
-              "ru",
-              "tr",
-              "by",
-              "kz"
-            ]
-          },
-          "telemetrySuffix": "com-nocodes"
-        },
-        {
-          "urls": {
-            "search": {
-              "params": [
-                {
-                  "name": "client",
-                  "value": "{partnerCode}"
-                },
-                {
-                  "name": "channel",
-                  "experimentConfig": "google_channel_us"
-                }
-              ]
-            }
-          },
-          "environment": {
-            "regions": [
-              "us"
-            ]
-          },
-          "partnerCode": "firefox-b-1-d",
-          "telemetrySuffix": "b-1-d"
-        },
-        {
-          "urls": {
-            "search": {
-              "params": [
-                {
-                  "name": "client",
-                  "value": "{partnerCode}"
-                },
-                {
-                  "name": "channel",
-                  "experimentConfig": "google_channel_us"
-                }
-              ]
-            }
-          },
-          "environment": {
-            "regions": [
-              "us"
-            ],
-            "channels": [
-              "esr"
-            ]
-          },
-          "partnerCode": "firefox-b-1-e",
-          "telemetrySuffix": "b-1-e"
-        },
-        {
-          "urls": {
-            "search": {
-              "params": [
-                {
-                  "name": "client",
-                  "value": "{partnerCode}"
-                },
-                {
-                  "name": "channel",
-                  "value": "fs"
-                }
-              ]
-            }
-          },
-          "environment": {
-            "distributions": [
-              "canonical",
-              "canonical-001"
-            ]
-          },
-          "partnerCode": "ubuntu",
-          "telemetrySuffix": "canonical"
-        },
-        {
-          "urls": {
-            "search": {
-              "params": [
-                {
-                  "name": "client",
-                  "value": "{partnerCode}"
-                },
-                {
-                  "name": "channel",
-                  "value": "fs"
-                }
-              ]
-            }
-          },
-          "environment": {
-            "distributions": [
-              "canonical-002"
-            ]
-          },
-          "partnerCode": "ubuntu-sn",
-          "telemetrySuffix": "ubuntu-sn"
-        },
-        {
-          "environment": {
-            "distributions": [
-              "mint-001"
-            ]
-          },
-          "partnerCode": "firefox-b-lm",
-          "telemetrySuffix": "b-lm"
-        },
-        {
-          "environment": {
-            "regions": [
-              "us"
-            ],
-            "distributions": [
-              "mint-001"
-            ]
-          },
-          "partnerCode": "firefox-b-1-lm",
-          "telemetrySuffix": "b-1-lm"
-        }
-      ],
-      "identifier": "google",
-      "recordType": "engine",
-      "id": "7ace4aa1-e762-4f4b-87b9-b23b3c3a930b",
-      "last_modified": 1702906502757
-    },
-    {
-      "base": {
-        "name": "DuckDuckGo",
-        "urls": {
-          "search": {
-            "base": "https://duckduckgo.com/",
-            "params": [
-              {
-                "name": "t",
                 "value": "{partnerCode}"
               }
             ],
             "searchTermParamName": "q"
           },
           "suggestions": {
-            "base": "https://ac.duckduckgo.com/ac/",
+            "base": "https://api.qwant.com/api/suggest/",
             "params": [
               {
-                "name": "type",
-                "value": "list"
+                "name": "client",
+                "value": "opensearch"
               }
             ],
             "searchTermParamName": "q"
           }
         },
         "aliases": [
-          "duckduckgo",
-          "ddg"
+          "qwant"
         ],
-        "partnerCode": "ffab",
+        "partnerCode": "brz-moz",
         "classification": "general"
       },
-      "schema": 1702901739665,
+      "schema": 1710460806956,
       "variants": [
         {
           "environment": {
-            "allRegionsAndLocales": true
+            "locales": [
+              "fr"
+            ]
           }
         },
         {
           "environment": {
-            "channels": [
-              "esr"
+            "regions": [
+              "be",
+              "ch",
+              "es",
+              "fr",
+              "it",
+              "nl"
             ]
-          },
-          "partnerCode": "ftsa",
-          "telemetrySuffix": "esr"
+          }
         },
         {
           "environment": {
             "distributions": [
-              "mint-001"
+              "qwant-001",
+              "qwant-002"
             ]
           },
-          "partnerCode": "lm",
-          "telemetrySuffix": "lm"
+          "partnerCode": "firefoxqwant",
+          "telemetrySuffix": "qwant"
         }
       ],
-      "identifier": "ddg",
+      "identifier": "qwant",
       "recordType": "engine",
-      "id": "04e99a38-13ee-47d8-8aa4-64482b3dea99",
-      "last_modified": 1702906502754
+      "id": "2e62746e-b90a-42ee-b0f2-9ed0e1e2eaf0",
+      "last_modified": 1710766863306
+    },
+    {
+      "orders": [
+        {
+          "order": [
+            "baidu",
+            "bing",
+            "google",
+            "wikipedia*"
+          ],
+          "environment": {
+            "distributions": [
+              "MozillaOnline"
+            ]
+          }
+        },
+        {
+          "order": [
+            "qwant",
+            "qwantjr"
+          ],
+          "environment": {
+            "distributions": [
+              "qwant-001",
+              "qwant-002"
+            ]
+          }
+        }
+      ],
+      "schema": 1707824831520,
+      "recordType": "engineOrders",
+      "id": "3e1fed64-5ec7-4b1c-bedc-741fe3c59bc3",
+      "last_modified": 1707833224345
     },
     {
       "base": {
@@ -5946,62 +6008,6 @@
     },
     {
       "base": {
-        "name": "Qwant",
-        "urls": {
-          "search": {
-            "base": "https://www.qwant.com/",
-            "params": [
-              {
-                "name": "client",
-                "value": "{partnerCode}"
-              }
-            ],
-            "searchTermParamName": "q"
-          },
-          "suggestions": {
-            "base": "https://api.qwant.com/api/suggest/",
-            "params": [
-              {
-                "name": "client",
-                "value": "opensearch"
-              }
-            ],
-            "searchTermParamName": "q"
-          }
-        },
-        "aliases": [
-          "qwant"
-        ],
-        "partnerCode": "brz-moz",
-        "classification": "general"
-      },
-      "schema": 1702901816102,
-      "variants": [
-        {
-          "environment": {
-            "locales": [
-              "fr"
-            ]
-          }
-        },
-        {
-          "environment": {
-            "distributions": [
-              "qwant-001",
-              "qwant-002"
-            ]
-          },
-          "partnerCode": "firefoxqwant",
-          "telemetrySuffix": "qwant"
-        }
-      ],
-      "identifier": "qwant",
-      "recordType": "engine",
-      "id": "2e62746e-b90a-42ee-b0f2-9ed0e1e2eaf0",
-      "last_modified": 1702906502343
-    },
-    {
-      "base": {
         "name": "Seznam",
         "urls": {
           "search": {
@@ -7329,5 +7335,5 @@
       "last_modified": 1702906502241
     }
   ],
-  "timestamp": 1707833224345
+  "timestamp": 1713282817053
 }

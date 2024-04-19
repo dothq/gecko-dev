@@ -297,6 +297,10 @@ struct BaseCompiler final {
   // Flag indicating that the compiler is currently in a dead code region.
   bool deadCode_;
 
+  // Store previously finished note to know if we need to insert a nop in
+  // finishTryNote.
+  size_t mostRecentFinishedTryNoteIndex_;
+
   ///////////////////////////////////////////////////////////////////////////
   //
   // State for bounds check elimination.
@@ -973,7 +977,7 @@ struct BaseCompiler final {
                     bool tailCall, CodeOffset* fastCallOffset,
                     CodeOffset* slowCallOffset);
   CodeOffset callImport(unsigned instanceDataOffset, const FunctionCall& call);
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   void callRef(const Stk& calleeRef, const FunctionCall& call,
                CodeOffset* fastCallOffset, CodeOffset* slowCallOffset);
 #  ifdef ENABLE_WASM_TAIL_CALLS
@@ -1641,7 +1645,7 @@ struct BaseCompiler final {
   [[nodiscard]] bool emitRefFunc();
   [[nodiscard]] bool emitRefNull();
   [[nodiscard]] bool emitRefIsNull();
-#ifdef ENABLE_WASM_FUNCTION_REFERENCES
+#ifdef ENABLE_WASM_GC
   [[nodiscard]] bool emitRefAsNonNull();
   [[nodiscard]] bool emitBrOnNull();
   [[nodiscard]] bool emitBrOnNonNull();

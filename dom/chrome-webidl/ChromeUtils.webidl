@@ -327,6 +327,8 @@ namespace ChromeUtils {
    *
    * In worker threads, aOption is required and only { global: "current" } and
    * { global: "contextual" } are supported.
+   *
+   * In DevTools distinct global, aOptions.global is reuiqred.
    */
   [Throws]
   object importESModule(DOMString aResourceURI,
@@ -344,6 +346,8 @@ namespace ChromeUtils {
    *
    * In worker threads, aOption is required and only { global: "current" } and
    * { global: "contextual" } are supported.
+   *
+   * In DevTools distinct global, aOptions.global is reuiqred.
    */
   [Throws]
   undefined defineESModuleGetters(object aTarget, object aModules,
@@ -540,6 +544,9 @@ partial namespace ChromeUtils {
    * the same file will not cause the module to be re-evaluated, but
    * the symbols in EXPORTED_SYMBOLS will be exported into the
    * specified target object and the global object returned as above.
+   *
+   * TODO: Remove this once m-c, c-c, and out-of-tree code migrations finish
+   *       (bug 1881888).
    */
   [Throws]
   object import(UTF8String aResourceURI, optional object aTargetObj);
@@ -947,7 +954,6 @@ dictionary IOActivityDataDictionary {
 [GenerateInitFromJSON]
 dictionary OriginAttributesDictionary {
   unsigned long userContextId = 0;
-  boolean inIsolatedMozBrowser = false;
   unsigned long privateBrowsingId = 0;
   DOMString firstPartyDomain = "";
   DOMString geckoViewSessionContextId = "";
@@ -957,7 +963,6 @@ dictionary OriginAttributesDictionary {
 [GenerateInitFromJSON, GenerateToJSON]
 dictionary OriginAttributesPatternDictionary {
   unsigned long userContextId;
-  boolean inIsolatedMozBrowser;
   unsigned long privateBrowsingId;
   DOMString firstPartyDomain;
   DOMString geckoViewSessionContextId;
@@ -1030,13 +1035,8 @@ enum ImportESModuleTargetGlobal {
 };
 
 dictionary ImportESModuleOptionsDictionary {
-  /**
-   * If true, a distinct module loader will be used, in the system principal,
-   * but with a distinct global so that the DevTools can load a distinct set
-   * of modules and do not interfere with its debuggee.
-   */
-  boolean loadInDevToolsLoader;
-
+  // This field is required for importESModule and defineESModuleGetters in
+  // DevTools distinct global.
   ImportESModuleTargetGlobal global;
 };
 

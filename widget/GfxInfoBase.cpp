@@ -279,6 +279,12 @@ static const char* GetPrefNameForFeature(int32_t aFeature) {
     case nsIGfxInfo::FEATURE_WEBGL_USE_HARDWARE:
       name = BLOCKLIST_PREF_BRANCH "webgl-use-hardware";
       break;
+    case nsIGfxInfo::FEATURE_OVERLAY_VP_AUTO_HDR:
+      name = BLOCKLIST_PREF_BRANCH "overlay-vp-auto-hdr";
+      break;
+    case nsIGfxInfo::FEATURE_OVERLAY_VP_SUPER_RESOLUTION:
+      name = BLOCKLIST_PREF_BRANCH "overlay-vp-super-resolution";
+      break;
     default:
       MOZ_ASSERT_UNREACHABLE("Unexpected nsIGfxInfo feature?!");
       break;
@@ -554,6 +560,12 @@ static int32_t BlocklistFeatureToGfxFeature(const nsAString& aFeature) {
   }
   if (aFeature.EqualsLiteral("ACCELERATED_CANVAS2D")) {
     return nsIGfxInfo::FEATURE_ACCELERATED_CANVAS2D;
+  }
+  if (aFeature.EqualsLiteral("FEATURE_OVERLAY_VP_AUTO_HDR")) {
+    return nsIGfxInfo::FEATURE_OVERLAY_VP_AUTO_HDR;
+  }
+  if (aFeature.EqualsLiteral("FEATURE_OVERLAY_VP_SUPER_RESOLUTION")) {
+    return nsIGfxInfo::FEATURE_OVERLAY_VP_SUPER_RESOLUTION;
   }
   if (aFeature.EqualsLiteral("ALL")) {
     return GfxDriverInfo::allFeatures;
@@ -1276,8 +1288,7 @@ bool GfxInfoBase::DoesDriverVendorMatch(const nsAString& aBlocklistVendor,
 }
 
 bool GfxInfoBase::IsFeatureAllowlisted(int32_t aFeature) const {
-  return aFeature == nsIGfxInfo::FEATURE_VIDEO_OVERLAY ||
-         aFeature == nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY;
+  return aFeature == nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY;
 }
 
 nsresult GfxInfoBase::GetFeatureStatusImpl(
@@ -1925,7 +1936,7 @@ using Device = nsIGfxInfo::FontVisibilityDeviceDetermination;
 static StaticAutoPtr<std::pair<Device, nsString>> ret;
 
 std::pair<Device, nsString>* GfxInfoBase::GetFontVisibilityDeterminationPair() {
-  if(!ret) {
+  if (!ret) {
     ret = new std::pair<Device, nsString>();
     ret->first = Device::Unassigned;
     ret->second = u""_ns;
@@ -2147,6 +2158,18 @@ GfxInfoBase::GetUsingGPUProcess(bool* aOutValue) {
   }
 
   *aOutValue = !!gpu->GetGPUChild();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+GfxInfoBase::GetUsingRemoteCanvas(bool* aOutValue) {
+  *aOutValue = gfx::gfxVars::RemoteCanvasEnabled();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+GfxInfoBase::GetUsingAcceleratedCanvas(bool* aOutValue) {
+  *aOutValue = gfx::gfxVars::UseAcceleratedCanvas2D();
   return NS_OK;
 }
 

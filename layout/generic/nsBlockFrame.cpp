@@ -41,7 +41,6 @@
 #include "nsPresContextInlines.h"
 #include "nsHTMLParts.h"
 #include "nsGkAtoms.h"
-#include "nsAttrValueInlines.h"
 #include "mozilla/Sprintf.h"
 #include "nsFloatManager.h"
 #include "prenv.h"
@@ -50,22 +49,15 @@
 #include <algorithm>
 #include "nsLayoutUtils.h"
 #include "nsDisplayList.h"
-#include "nsCSSAnonBoxes.h"
 #include "nsCSSFrameConstructor.h"
 #include "TextOverflow.h"
 #include "nsIFrameInlines.h"
 #include "CounterStyleManager.h"
-#include "mozilla/dom/HTMLDetailsElement.h"
-#include "mozilla/dom/HTMLSummaryElement.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/RestyleManager.h"
 #include "mozilla/ServoStyleSet.h"
-#include "mozilla/Telemetry.h"
 #include "nsFlexContainerFrame.h"
-#include "nsFileControlFrame.h"
-#include "nsMathMLContainerFrame.h"
-#include "nsSelectsAreaFrame.h"
 
 #include "nsBidiPresUtils.h"
 
@@ -95,7 +87,7 @@ static void MarkAllDescendantLinesDirty(nsBlockFrame* aBlock) {
 
 static void MarkSameFloatManagerLinesDirty(nsBlockFrame* aBlock) {
   nsBlockFrame* blockWithFloatMgr = aBlock;
-  while (!blockWithFloatMgr->HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) {
+  while (!blockWithFloatMgr->HasAnyStateBits(NS_BLOCK_BFC)) {
     nsBlockFrame* bf = do_QueryFrame(blockWithFloatMgr->GetParent());
     if (!bf) {
       break;
@@ -130,47 +122,37 @@ static bool BlockHasAnyFloats(nsIFrame* aFrame) {
   return false;
 }
 
-/**
- * Determines whether the given frame is visible or has
- * visible children that participate in the same line. Frames
- * that are not line participants do not have their
- * children checked.
- */
-static bool FrameHasVisibleInlineContent(nsIFrame* aFrame) {
+// Determines whether the given frame is visible text or has visible text that
+// participate in the same line. Frames that are not line participants do not
+// have their children checked.
+static bool FrameHasVisibleInlineText(nsIFrame* aFrame) {
   MOZ_ASSERT(aFrame, "Frame argument cannot be null");
-
-  if (aFrame->StyleVisibility()->IsVisible()) {
-    return true;
+  if (!aFrame->IsLineParticipant()) {
+    return false;
   }
-
-  if (aFrame->IsLineParticipant()) {
-    for (nsIFrame* kid : aFrame->PrincipalChildList()) {
-      if (kid->StyleVisibility()->IsVisible() ||
-          FrameHasVisibleInlineContent(kid)) {
-        return true;
-      }
+  if (aFrame->IsTextFrame()) {
+    return aFrame->StyleVisibility()->IsVisible() &&
+           NS_GET_A(aFrame->StyleText()->mWebkitTextFillColor.CalcColor(
+               aFrame)) != 0;
+  }
+  for (nsIFrame* kid : aFrame->PrincipalChildList()) {
+    if (FrameHasVisibleInlineText(kid)) {
+      return true;
     }
   }
   return false;
 }
 
-/**
- * Determines whether any of the frames descended from the
- * given line have inline content with 'visibility: visible'.
- * This function calls FrameHasVisibleInlineContent to process
- * each frame in the line's child list.
- */
-static bool LineHasVisibleInlineContent(nsLineBox* aLine) {
+// Determines whether any of the frames from the given line have visible text.
+static bool LineHasVisibleInlineText(nsLineBox* aLine) {
   nsIFrame* kid = aLine->mFirstChild;
   int32_t n = aLine->GetChildCount();
   while (n-- > 0) {
-    if (FrameHasVisibleInlineContent(kid)) {
+    if (FrameHasVisibleInlineText(kid)) {
       return true;
     }
-
     kid = kid->GetNextSibling();
   }
-
   return false;
 }
 
@@ -444,13 +426,6 @@ NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(BlockEndEdgeOfChildrenProperty, nscoord)
 
 nsBlockFrame* NS_NewBlockFrame(PresShell* aPresShell, ComputedStyle* aStyle) {
   return new (aPresShell) nsBlockFrame(aStyle, aPresShell->GetPresContext());
-}
-
-nsBlockFrame* NS_NewBlockFormattingContext(PresShell* aPresShell,
-                                           ComputedStyle* aComputedStyle) {
-  nsBlockFrame* blockFrame = NS_NewBlockFrame(aPresShell, aComputedStyle);
-  blockFrame->AddStateBits(NS_BLOCK_STATIC_BFC);
-  return blockFrame;
 }
 
 NS_IMPL_FRAMEARENA_HELPERS(nsBlockFrame)
@@ -1194,7 +1169,7 @@ static LogicalSize CalculateContainingBlockSizeForAbsolutes(
  */
 static const nsBlockFrame* GetAsLineClampDescendant(const nsIFrame* aFrame) {
   if (const nsBlockFrame* block = do_QueryFrame(aFrame)) {
-    if (!block->HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) {
+    if (!block->HasAnyStateBits(NS_BLOCK_BFC)) {
       return block;
     }
   }
@@ -1211,7 +1186,7 @@ static bool IsLineClampRoot(const nsBlockFrame* aFrame) {
     return false;
   }
 
-  if (!aFrame->HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) {
+  if (!aFrame->HasAnyStateBits(NS_BLOCK_BFC)) {
     return false;
   }
 
@@ -2023,6 +1998,9 @@ nsReflowStatus nsBlockFrame::TrialReflow(nsPresContext* aPresContext,
       ComputeFinalSize(aReflowInput, state, aMetrics);
   aTrialState.mContainerWidth = state.ContainerSize().width;
 
+  // Align content
+  AlignContent(state, aMetrics, aTrialState.mBlockEndEdgeOfChildren);
+
   return state.mReflowStatus;
 }
 
@@ -2191,6 +2169,11 @@ nscoord nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
         aState.ClearFloats(blockEndEdgeOfChildren, StyleClear::Both);
   }
 
+  // undo cached alignment shift for sizing purposes
+  // (we used shifted positions because the float manager uses them)
+  blockEndEdgeOfChildren -= aState.mAlignContentShift;
+  aState.UndoAlignContentShift();
+
   if (NS_UNCONSTRAINEDSIZE != aReflowInput.ComputedBSize()) {
     // Note: We don't use blockEndEdgeOfChildren because it includes the
     // previous margin.
@@ -2221,97 +2204,83 @@ nscoord nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
     // calculated from aspect-ratio. i.e. Don't carry out block margin-end if it
     // is replaced by the block size from aspect-ratio and inline size.
     aMetrics.mCarriedOutBEndMargin.Zero();
-  } else {
-    Maybe<nscoord> containBSize = ContainIntrinsicBSize(
-        IsComboboxControlFrame() ? NS_UNCONSTRAINEDSIZE : 0);
-    if (containBSize && *containBSize != NS_UNCONSTRAINEDSIZE) {
-      // If we're size-containing in block axis and we don't have a specified
-      // block size, then our final size should actually be computed from only
-      // our border, padding and contain-intrinsic-block-size, ignoring the
-      // actual contents. Hence this case is a simplified version of the case
-      // below.
-      //
-      // NOTE: We exempt the nsComboboxControlFrame subclass from taking this
-      // special case when it has 'contain-intrinsic-block-size: none', because
-      // comboboxes implicitly honors the size-containment behavior on its
-      // nsComboboxDisplayFrame child (which it shrinkwraps) rather than on the
-      // nsComboboxControlFrame. (Moreover, the DisplayFrame child doesn't even
-      // need any special content-size-ignoring behavior in its reflow method,
-      // because that method just resolves "auto" BSize values to one
-      // line-height rather than by measuring its contents' BSize.)
-      nscoord contentBSize = *containBSize;
-      nscoord autoBSize =
-          aReflowInput.ApplyMinMaxBSize(contentBSize, aState.mConsumedBSize);
+  } else if (Maybe<nscoord> containBSize = ContainIntrinsicBSize()) {
+    // If we're size-containing in block axis and we don't have a specified
+    // block size, then our final size should actually be computed from only
+    // our border, padding and contain-intrinsic-block-size, ignoring the
+    // actual contents. Hence this case is a simplified version of the case
+    // below.
+    nscoord contentBSize = *containBSize;
+    nscoord autoBSize =
+        aReflowInput.ApplyMinMaxBSize(contentBSize, aState.mConsumedBSize);
+    aMetrics.mCarriedOutBEndMargin.Zero();
+    autoBSize += borderPadding.BStartEnd(wm);
+    finalSize.BSize(wm) = autoBSize;
+  } else if (aState.mReflowStatus.IsInlineBreakBefore()) {
+    // Our parent is expected to push this frame to the next page/column so
+    // what size we set here doesn't really matter.
+    finalSize.BSize(wm) = aReflowInput.AvailableBSize();
+  } else if (aState.mReflowStatus.IsComplete()) {
+    const nscoord lineClampedContentBlockEndEdge =
+        ApplyLineClamp(aReflowInput, this, blockEndEdgeOfChildren);
+
+    const nscoord bpBStart = borderPadding.BStart(wm);
+    const nscoord contentBSize = blockEndEdgeOfChildren - bpBStart;
+    const nscoord lineClampedContentBSize =
+        lineClampedContentBlockEndEdge - bpBStart;
+
+    const nscoord autoBSize = aReflowInput.ApplyMinMaxBSize(
+        lineClampedContentBSize, aState.mConsumedBSize);
+    if (autoBSize != contentBSize) {
+      // Our min-block-size, max-block-size, or -webkit-line-clamp value made
+      // our bsize change.  Don't carry out our kids' block-end margins.
       aMetrics.mCarriedOutBEndMargin.Zero();
-      autoBSize += borderPadding.BStartEnd(wm);
-      finalSize.BSize(wm) = autoBSize;
-    } else if (aState.mReflowStatus.IsInlineBreakBefore()) {
-      // Our parent is expected to push this frame to the next page/column so
-      // what size we set here doesn't really matter.
-      finalSize.BSize(wm) = aReflowInput.AvailableBSize();
-    } else if (aState.mReflowStatus.IsComplete()) {
-      const nscoord lineClampedContentBlockEndEdge =
-          ApplyLineClamp(aReflowInput, this, blockEndEdgeOfChildren);
-
-      const nscoord bpBStart = borderPadding.BStart(wm);
-      const nscoord contentBSize = blockEndEdgeOfChildren - bpBStart;
-      const nscoord lineClampedContentBSize =
-          lineClampedContentBlockEndEdge - bpBStart;
-
-      const nscoord autoBSize = aReflowInput.ApplyMinMaxBSize(
-          lineClampedContentBSize, aState.mConsumedBSize);
-      if (autoBSize != contentBSize) {
-        // Our min-block-size, max-block-size, or -webkit-line-clamp value made
-        // our bsize change.  Don't carry out our kids' block-end margins.
-        aMetrics.mCarriedOutBEndMargin.Zero();
-      }
-      nscoord bSize = autoBSize + borderPadding.BStartEnd(wm);
-      if (MOZ_UNLIKELY(autoBSize > contentBSize &&
-                       bSize > aReflowInput.AvailableBSize() &&
-                       aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE)) {
-        // Applying `min-size` made us overflow our available size.
-        // Clamp it and report that we're Incomplete, or BreakBefore if we have
-        // 'break-inside: avoid' that is applicable.
-        bSize = aReflowInput.AvailableBSize();
-        if (ShouldAvoidBreakInside(aReflowInput)) {
-          aState.mReflowStatus.SetInlineLineBreakBeforeAndReset();
-        } else {
-          aState.mReflowStatus.SetIncomplete();
-        }
-      }
-      finalSize.BSize(wm) = bSize;
-    } else {
-      NS_ASSERTION(
-          aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE,
-          "Shouldn't be incomplete if availableBSize is UNCONSTRAINED.");
-      nscoord bSize = std::max(aState.mBCoord, aReflowInput.AvailableBSize());
-      if (aReflowInput.AvailableBSize() == NS_UNCONSTRAINEDSIZE) {
-        // This should never happen, but it does. See bug 414255
-        bSize = aState.mBCoord;
-      }
-      const nscoord maxBSize = aReflowInput.ComputedMaxBSize();
-      if (maxBSize != NS_UNCONSTRAINEDSIZE &&
-          aState.mConsumedBSize + bSize - borderPadding.BStart(wm) > maxBSize) {
-        // Compute this fragment's block-size, with the max-block-size
-        // constraint taken into consideration.
-        const nscoord clampedBSizeWithoutEndBP =
-            std::max(0, maxBSize - aState.mConsumedBSize) +
-            borderPadding.BStart(wm);
-        const nscoord clampedBSize =
-            clampedBSizeWithoutEndBP + borderPadding.BEnd(wm);
-        if (clampedBSize <= aReflowInput.AvailableBSize()) {
-          // We actually fit after applying `max-size` so we should be
-          // Overflow-Incomplete instead.
-          bSize = clampedBSize;
-          aState.mReflowStatus.SetOverflowIncomplete();
-        } else {
-          // We cannot fit after applying `max-size` with our block-end BP, so
-          // we should draw it in our next continuation.
-          bSize = clampedBSizeWithoutEndBP;
-        }
-      }
-      finalSize.BSize(wm) = bSize;
     }
+    nscoord bSize = autoBSize + borderPadding.BStartEnd(wm);
+    if (MOZ_UNLIKELY(autoBSize > contentBSize &&
+                     bSize > aReflowInput.AvailableBSize() &&
+                     aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE)) {
+      // Applying `min-size` made us overflow our available size.
+      // Clamp it and report that we're Incomplete, or BreakBefore if we have
+      // 'break-inside: avoid' that is applicable.
+      bSize = aReflowInput.AvailableBSize();
+      if (ShouldAvoidBreakInside(aReflowInput)) {
+        aState.mReflowStatus.SetInlineLineBreakBeforeAndReset();
+      } else {
+        aState.mReflowStatus.SetIncomplete();
+      }
+    }
+    finalSize.BSize(wm) = bSize;
+  } else {
+    NS_ASSERTION(aReflowInput.AvailableBSize() != NS_UNCONSTRAINEDSIZE,
+                 "Shouldn't be incomplete if availableBSize is UNCONSTRAINED.");
+    nscoord bSize = std::max(aState.mBCoord, aReflowInput.AvailableBSize());
+    if (aReflowInput.AvailableBSize() == NS_UNCONSTRAINEDSIZE) {
+      // This should never happen, but it does. See bug 414255
+      bSize = aState.mBCoord;
+    }
+    const nscoord maxBSize = aReflowInput.ComputedMaxBSize();
+    if (maxBSize != NS_UNCONSTRAINEDSIZE &&
+        aState.mConsumedBSize + bSize - borderPadding.BStart(wm) > maxBSize) {
+      // Compute this fragment's block-size, with the max-block-size
+      // constraint taken into consideration.
+      const nscoord clampedBSizeWithoutEndBP =
+          std::max(0, maxBSize - aState.mConsumedBSize) +
+          borderPadding.BStart(wm);
+      const nscoord clampedBSize =
+          clampedBSizeWithoutEndBP + borderPadding.BEnd(wm);
+      if (clampedBSize <= aReflowInput.AvailableBSize()) {
+        // We actually fit after applying `max-size` so we should be
+        // Overflow-Incomplete instead.
+        bSize = clampedBSize;
+        aState.mReflowStatus.SetOverflowIncomplete();
+      } else {
+        // We cannot fit after applying `max-size` with our block-end BP, so
+        // we should draw it in our next continuation.
+        bSize = clampedBSizeWithoutEndBP;
+      }
+    }
+    finalSize.BSize(wm) = bSize;
   }
 
   if (IsTrueOverflowContainer()) {
@@ -2379,6 +2348,77 @@ nscoord nsBlockFrame::ComputeFinalSize(const ReflowInput& aReflowInput,
 #endif
 
   return blockEndEdgeOfChildren;
+}
+
+void nsBlockFrame::AlignContent(BlockReflowState& aState,
+                                ReflowOutput& aMetrics,
+                                nscoord aBEndEdgeOfChildren) {
+  if (!StaticPrefs::layout_css_align_content_blocks_enabled()) {
+    return;
+  }
+
+  StyleAlignFlags alignment = StylePosition()->mAlignContent.primary;
+  alignment &= ~StyleAlignFlags::FLAG_BITS;
+
+  // Short circuit
+  const bool isCentered = alignment == StyleAlignFlags::CENTER ||
+                          alignment == StyleAlignFlags::SPACE_AROUND ||
+                          alignment == StyleAlignFlags::SPACE_EVENLY;
+  const bool isEndAlign = alignment == StyleAlignFlags::END ||
+                          alignment == StyleAlignFlags::FLEX_END ||
+                          alignment == StyleAlignFlags::LAST_BASELINE;
+  if (!isEndAlign && !isCentered && !aState.mAlignContentShift) {
+    // desired shift = 0, no cached shift to undo
+    return;
+  }
+
+  // NOTE: ComputeFinalSize already called aState.UndoAlignContentShift(),
+  //       so metrics no longer include cached shift.
+  // NOTE: Content is currently positioned at cached shift
+  // NOTE: Content has been fragmented against 0-shift assumption.
+
+  // Calculate shift
+  nscoord shift = 0;
+  WritingMode wm = aState.mReflowInput.GetWritingMode();
+  if ((isCentered || isEndAlign) && !mLines.empty() &&
+      aState.mReflowStatus.IsFullyComplete() && !GetPrevInFlow()) {
+    nscoord availB = aState.mReflowInput.AvailableBSize();
+    nscoord endB = aMetrics.BSize(wm) - aState.BorderPadding().BEnd(wm);
+    shift = std::min(availB, endB) - aBEndEdgeOfChildren;
+
+    // note: these measures all include start BP, so it subtracts out
+    if (!(StylePosition()->mAlignContent.primary & StyleAlignFlags::UNSAFE)) {
+      shift = std::max(0, shift);
+    }
+    if (isCentered) {
+      shift = shift / 2;
+    }
+  }
+  // else: zero shift if start-aligned or if fragmented
+
+  nscoord delta = shift - aState.mAlignContentShift;
+  if (delta) {
+    // Shift children
+    LogicalPoint translation(wm, 0, delta);
+    for (nsLineBox& line : Lines()) {
+      SlideLine(aState, &line, delta);
+    }
+    for (nsIFrame* kid : GetChildList(FrameChildListID::Float)) {
+      kid->MovePositionBy(wm, translation);
+      nsContainerFrame::PlaceFrameView(kid);
+    }
+    if (HasOutsideMarker() && !mLines.empty()) {
+      nsIFrame* marker = GetOutsideMarker();
+      marker->MovePositionBy(wm, translation);
+    }
+  }
+
+  if (shift) {
+    // Cache shift
+    SetProperty(AlignContentShift(), shift);
+  } else {
+    RemoveProperty(AlignContentShift());
+  }
 }
 
 void nsBlockFrame::ConsiderBlockEndEdgeOfChildren(
@@ -3153,9 +3193,12 @@ bool nsBlockFrame::ReflowDirtyLines(BlockReflowState& aState) {
         // Immediately fragment for page-name. It is possible we could break
         // out of the loop right here, but this should make it more similar to
         // what happens when reflow causes fragmentation.
-        PushTruncatedLine(aState, line, &keepGoing);
+        // Set the page name, so that PushTruncatedLine does not need to
+        // recalculate the new page name.
         PresShell()->FrameConstructor()->SetNextPageContentFramePageName(
             nextPageName ? nextPageName : GetAutoPageValue());
+        PushTruncatedLine(aState, line, &keepGoing,
+                          ComputeNewPageNameIfNeeded::No);
       } else {
         // Reflow the dirty line. If it's an incremental reflow, then force
         // it to invalidate the dirty area if necessary
@@ -3867,7 +3910,7 @@ bool nsBlockFrame::IsSelfEmpty() {
   // Blocks which are margin-roots (including inline-blocks) cannot be treated
   // as empty for margin-collapsing and other purposes. They're more like
   // replaced elements.
-  if (HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) {
+  if (HasAnyStateBits(NS_BLOCK_BFC)) {
     return false;
   }
 
@@ -4730,11 +4773,25 @@ void nsBlockFrame::SetBreakBeforeStatusBeforeLine(BlockReflowState& aState,
   *aKeepReflowGoing = false;
 }
 
-void nsBlockFrame::PushTruncatedLine(BlockReflowState& aState,
-                                     LineIterator aLine,
-                                     bool* aKeepReflowGoing) {
+void nsBlockFrame::PushTruncatedLine(
+    BlockReflowState& aState, LineIterator aLine, bool* aKeepReflowGoing,
+    ComputeNewPageNameIfNeeded aComputeNewPageName) {
   PushLines(aState, aLine.prev());
   *aKeepReflowGoing = false;
+
+  if (aComputeNewPageName == ComputeNewPageNameIfNeeded::Yes) {
+    // mCanHaveClassABreakpoints can only be true during paginated reflow, and
+    // we expect this function to only be called when the available bsize is
+    // constrained.
+    const WritingMode wm = GetWritingMode();
+    const bool canBreakForPageNames =
+        aState.mReflowInput.mFlags.mCanHaveClassABreakpoints &&
+        !PresShell()->GetRootFrame()->GetWritingMode().IsOrthogonalTo(wm);
+    if (canBreakForPageNames) {
+      PresShell()->FrameConstructor()->MaybeSetNextPageContentFramePageName(
+          aLine->mFirstChild);
+    }
+  }
   aState.mReflowStatus.SetIncomplete();
 }
 
@@ -5177,7 +5234,7 @@ void nsBlockFrame::SplitFloat(BlockReflowState& aState, nsIFrame* aFloat,
   }
 
   aState.AppendPushedFloatChain(nextInFlow);
-  if (MOZ_LIKELY(!HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) ||
+  if (MOZ_LIKELY(!HasAnyStateBits(NS_BLOCK_BFC)) ||
       MOZ_UNLIKELY(IsTrueOverflowContainer())) {
     aState.mReflowStatus.SetOverflowIncomplete();
   } else {
@@ -6290,7 +6347,7 @@ nsContainerFrame* nsBlockFrame::GetRubyContentPseudoFrame() {
   auto* firstChild = PrincipalChildList().FirstChild();
   if (firstChild && firstChild->IsRubyFrame() &&
       firstChild->Style()->GetPseudoType() ==
-          mozilla::PseudoStyleType::blockRubyContent) {
+          PseudoStyleType::blockRubyContent) {
     return static_cast<nsContainerFrame*>(firstChild);
   }
   return nullptr;
@@ -6425,15 +6482,80 @@ nsBlockInFlowLineIterator::nsBlockInFlowLineIterator(nsBlockFrame* aFrame,
   *aFoundValidLine = FindValidLine();
 }
 
+static bool AnonymousBoxIsBFC(const ComputedStyle* aStyle) {
+  switch (aStyle->GetPseudoType()) {
+    case PseudoStyleType::fieldsetContent:
+    case PseudoStyleType::columnContent:
+    case PseudoStyleType::buttonContent:
+    case PseudoStyleType::cellContent:
+    case PseudoStyleType::scrolledContent:
+    case PseudoStyleType::anonymousItem:
+      return true;
+    default:
+      return false;
+  }
+}
+
 static bool StyleEstablishesBFC(const ComputedStyle* aStyle) {
   // paint/layout containment boxes and multi-column containers establish an
   // independent formatting context.
   // https://drafts.csswg.org/css-contain/#containment-paint
   // https://drafts.csswg.org/css-contain/#containment-layout
+  // https://drafts.csswg.org/css-align/#distribution-block
   // https://drafts.csswg.org/css-multicol/#columns
-  return aStyle->StyleDisplay()->IsContainPaint() ||
-         aStyle->StyleDisplay()->IsContainLayout() ||
-         aStyle->GetPseudoType() == PseudoStyleType::columnContent;
+  const auto* disp = aStyle->StyleDisplay();
+  return disp->IsContainPaint() || disp->IsContainLayout() ||
+         disp->DisplayInside() == StyleDisplayInside::FlowRoot ||
+         disp->IsAbsolutelyPositionedStyle() || disp->IsFloatingStyle() ||
+         aStyle->StylePosition()->mAlignContent.primary !=
+             StyleAlignFlags::NORMAL ||
+         aStyle->IsRootElementStyle() || AnonymousBoxIsBFC(aStyle);
+}
+
+static bool EstablishesBFC(const nsBlockFrame* aFrame) {
+  if (aFrame->HasAnyClassFlag(LayoutFrameClassFlags::BlockFormattingContext)) {
+    return true;
+  }
+
+  if (nsIFrame* parent = aFrame->GetParent()) {
+    if (parent->IsFieldSetFrame()) {
+      // A rendered legend always establishes a new formatting context, and so
+      // does the fieldset content frame, so we can just return true here.
+      // https://html.spec.whatwg.org/#rendered-legend
+      return true;
+    }
+
+    const auto wm = aFrame->GetWritingMode();
+    const auto parentWM = parent->GetWritingMode();
+    if (wm.GetBlockDir() != parentWM.GetBlockDir() ||
+        wm.IsVerticalSideways() != parentWM.IsVerticalSideways()) {
+      // If a box has a different writing-mode value than its containing block
+      // [...] if the box is a block container, then it establishes a new block
+      // formatting context.
+      // https://drafts.csswg.org/css-writing-modes/#block-flow
+      return true;
+    }
+  }
+
+  if (aFrame->IsColumnSpan()) {
+    return true;
+  }
+
+  if (aFrame->IsSuppressedScrollableBlockForPrint()) {
+    return true;
+  }
+
+  const auto* style = aFrame->Style();
+  if (style->GetPseudoType() == PseudoStyleType::marker) {
+    if (aFrame->GetParent() &&
+        aFrame->GetParent()->StyleList()->mListStylePosition ==
+            StyleListStylePosition::Outside) {
+      // An outside ::marker needs to be an independent formatting context
+      // to avoid being influenced by the float manager etc.
+      return true;
+    }
+  }
+  return StyleEstablishesBFC(style);
 }
 
 void nsBlockFrame::DidSetComputedStyle(ComputedStyle* aOldStyle) {
@@ -6442,24 +6564,16 @@ void nsBlockFrame::DidSetComputedStyle(ComputedStyle* aOldStyle) {
     return;
   }
 
-  // If NS_BLOCK_STATIC_BFC flag was set when the frame was initialized, it
-  // remains set during the lifetime of the frame and always forces it to be
-  // treated as a BFC, independently of the value of NS_BLOCK_DYNAMIC_BFC.
-  // Consequently, we don't bother invalidating or updating that latter flag.
-  if (HasAnyStateBits(NS_BLOCK_STATIC_BFC)) {
-    return;
-  }
-
-  bool isBFC = StyleEstablishesBFC(Style());
-  if (StyleEstablishesBFC(aOldStyle) != isBFC) {
+  const bool isBFC = EstablishesBFC(this);
+  if (HasAnyStateBits(NS_BLOCK_BFC) != isBFC) {
     if (MaybeHasFloats()) {
       // If the frame contains floats, this update may change their float
       // manager. Be safe by dirtying all descendant lines of the nearest
       // ancestor's float manager.
-      RemoveStateBits(NS_BLOCK_DYNAMIC_BFC);
+      RemoveStateBits(NS_BLOCK_BFC);
       MarkSameFloatManagerLinesDirty(this);
     }
-    AddOrRemoveStateBits(NS_BLOCK_DYNAMIC_BFC, isBFC);
+    AddOrRemoveStateBits(NS_BLOCK_BFC, isBFC);
   }
 }
 
@@ -7469,11 +7583,11 @@ void nsBlockFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   // We'll try to draw an accessibility backplate behind text (to ensure it's
   // readable over any possible background-images), if all of the following
   // hold:
-  //    (A) the backplate feature is preffed on
-  //    (B) we are not honoring the document colors
+  //    (A) we are not honoring the document colors
+  //    (B) the backplate feature is preffed on
   //    (C) the force color adjust property is set to auto
-  if (StaticPrefs::browser_display_permit_backplate() &&
-      PresContext()->ForcingColors() && !IsComboboxControlFrame() &&
+  if (PresContext()->ForcingColors() &&
+      StaticPrefs::browser_display_permit_backplate() &&
       StyleText()->mForcedColorAdjust != StyleForcedColorAdjust::None) {
     backplateColor.emplace(GetBackplateColor(this));
   }
@@ -7565,7 +7679,7 @@ void nsBlockFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
         }
         lastY = lineArea.y;
         lastYMost = lineArea.YMost();
-        if (lineInLine && backplateColor && LineHasVisibleInlineContent(line)) {
+        if (lineInLine && backplateColor && LineHasVisibleInlineText(line)) {
           nsRect lineBackplate = GetLineTextArea(line, aBuilder) +
                                  aBuilder->ToReferenceFrame(this);
           if (curBackplateArea.IsEmpty()) {
@@ -7762,35 +7876,15 @@ void nsBlockFrame::ChildIsDirty(nsIFrame* aChild) {
   nsContainerFrame::ChildIsDirty(aChild);
 }
 
-static bool AlwaysEstablishesBFC(const nsBlockFrame* aFrame) {
-  switch (aFrame->Type()) {
-    case LayoutFrameType::ColumnSetWrapper:
-      // CSS Multi-column level 1 section 2: A multi-column container
-      // establishes a new block formatting context, as per CSS 2.1 section
-      // 9.4.1.
-    case LayoutFrameType::ComboboxControl:
-      return true;
-    case LayoutFrameType::Block:
-      return static_cast<const nsFileControlFrame*>(do_QueryFrame(aFrame)) ||
-             // Ensure that the options inside the select aren't expanded by
-             // right floats outside the select.
-             static_cast<const nsSelectsAreaFrame*>(do_QueryFrame(aFrame)) ||
-             // See bug 1373767 and bug 353894.
-             static_cast<const nsMathMLmathBlockFrame*>(do_QueryFrame(aFrame));
-    default:
-      return false;
-  }
-}
-
 void nsBlockFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
                         nsIFrame* aPrevInFlow) {
   // These are all the block specific frame bits, they are copied from
   // the prev-in-flow to a newly created next-in-flow, except for the
   // NS_BLOCK_FLAGS_NON_INHERITED_MASK bits below.
   constexpr nsFrameState NS_BLOCK_FLAGS_MASK =
-      NS_BLOCK_BFC_STATE_BITS | NS_BLOCK_CLIP_PAGINATED_OVERFLOW |
-      NS_BLOCK_HAS_FIRST_LETTER_STYLE | NS_BLOCK_FRAME_HAS_OUTSIDE_MARKER |
-      NS_BLOCK_HAS_FIRST_LETTER_CHILD | NS_BLOCK_FRAME_HAS_INSIDE_MARKER;
+      NS_BLOCK_BFC | NS_BLOCK_HAS_FIRST_LETTER_STYLE |
+      NS_BLOCK_FRAME_HAS_OUTSIDE_MARKER | NS_BLOCK_HAS_FIRST_LETTER_CHILD |
+      NS_BLOCK_FRAME_HAS_INSIDE_MARKER;
 
   // This is the subset of NS_BLOCK_FLAGS_MASK that is NOT inherited
   // by default.  They should only be set on the first-in-flow.
@@ -7812,37 +7906,12 @@ void nsBlockFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
     AddStateBits(NS_BLOCK_NEEDS_BIDI_RESOLUTION);
   }
 
-  // A display:flow-root box establishes a block formatting context.
-  //
-  // If a box has a different writing-mode value than its containing block:
-  // ...
-  //   If the box is a block container, then it establishes a new block
-  //   formatting context.
-  // (https://drafts.csswg.org/css-writing-modes/#block-flow)
-  //
-  // If the box has contain: paint or contain:layout (or contain:strict),
-  // then it should also establish a formatting context.
-  //
-  // Per spec, a column-span always establishes a new block formatting context.
-  //
-  // Other more specific frame types also always establish a BFC.
-  //
-  if (StyleDisplay()->mDisplay == mozilla::StyleDisplay::FlowRoot ||
-      (GetParent() &&
-       (GetWritingMode().GetBlockDir() !=
-            GetParent()->GetWritingMode().GetBlockDir() ||
-        GetWritingMode().IsVerticalSideways() !=
-            GetParent()->GetWritingMode().IsVerticalSideways())) ||
-      IsColumnSpan() || AlwaysEstablishesBFC(this)) {
-    AddStateBits(NS_BLOCK_STATIC_BFC);
-  }
-
-  if (StyleEstablishesBFC(Style())) {
-    AddStateBits(NS_BLOCK_DYNAMIC_BFC);
+  if (EstablishesBFC(this)) {
+    AddStateBits(NS_BLOCK_BFC);
   }
 
   if (HasAnyStateBits(NS_FRAME_FONT_INFLATION_CONTAINER) &&
-      HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) {
+      HasAnyStateBits(NS_BLOCK_BFC)) {
     AddStateBits(NS_FRAME_FONT_INFLATION_FLOW_ROOT);
   }
 }
@@ -7866,13 +7935,13 @@ void nsBlockFrame::SetInitialChildList(ChildListID aListID,
          (pseudo == PseudoStyleType::cellContent &&
           !GetParent()->Style()->IsPseudoOrAnonBox()) ||
          pseudo == PseudoStyleType::fieldsetContent ||
-         pseudo == PseudoStyleType::buttonContent ||
+         (pseudo == PseudoStyleType::buttonContent &&
+          !GetParent()->IsComboboxControlFrame()) ||
          pseudo == PseudoStyleType::columnContent ||
          (pseudo == PseudoStyleType::scrolledContent &&
           !GetParent()->IsListControlFrame()) ||
          pseudo == PseudoStyleType::mozSVGText) &&
-        !IsComboboxControlFrame() && !IsMathMLFrame() &&
-        !IsColumnSetWrapperFrame() &&
+        !IsMathMLFrame() && !IsColumnSetWrapperFrame() &&
         RefPtr<ComputedStyle>(GetFirstLetterStyle(PresContext())) != nullptr;
     NS_ASSERTION(haveFirstLetterStyle ==
                      HasAnyStateBits(NS_BLOCK_HAS_FIRST_LETTER_STYLE),
@@ -7895,11 +7964,6 @@ void nsBlockFrame::SetMarkerFrameForListItem(nsIFrame* aMarkerFrame) {
     SetProperty(InsideMarkerProperty(), aMarkerFrame);
     AddStateBits(NS_BLOCK_FRAME_HAS_INSIDE_MARKER);
   } else {
-    if (nsBlockFrame* marker = do_QueryFrame(aMarkerFrame)) {
-      // An outside ::marker needs to be an independent formatting context
-      // to avoid being influenced by the float manager etc.
-      marker->AddStateBits(NS_BLOCK_STATIC_BFC);
-    }
     SetProperty(OutsideMarkerProperty(),
                 new (PresShell()) nsFrameList(aMarkerFrame, aMarkerFrame));
     AddStateBits(NS_BLOCK_FRAME_HAS_OUTSIDE_MARKER);
@@ -8100,7 +8164,7 @@ void nsBlockFrame::CheckFloats(BlockReflowState& aState) {
 void nsBlockFrame::IsMarginRoot(bool* aBStartMarginRoot,
                                 bool* aBEndMarginRoot) {
   nsIFrame* parent = GetParent();
-  if (!HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS)) {
+  if (!HasAnyStateBits(NS_BLOCK_BFC)) {
     if (!parent || parent->IsFloatContainingBlock()) {
       *aBStartMarginRoot = false;
       *aBEndMarginRoot = false;
@@ -8127,14 +8191,14 @@ bool nsBlockFrame::BlockNeedsFloatManager(nsIFrame* aBlock) {
   NS_ASSERTION(aBlock->IsBlockFrameOrSubclass(), "aBlock must be a block");
 
   nsIFrame* parent = aBlock->GetParent();
-  return aBlock->HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS) ||
+  return aBlock->HasAnyStateBits(NS_BLOCK_BFC) ||
          (parent && !parent->IsFloatContainingBlock());
 }
 
 /* static */
 bool nsBlockFrame::BlockCanIntersectFloats(nsIFrame* aFrame) {
   return aFrame->IsBlockFrameOrSubclass() && !aFrame->IsReplaced() &&
-         !aFrame->HasAnyStateBits(NS_BLOCK_BFC_STATE_BITS);
+         !aFrame->HasAnyStateBits(NS_BLOCK_BFC);
 }
 
 // Note that this width can vary based on the vertical position.

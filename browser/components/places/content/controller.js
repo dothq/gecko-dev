@@ -102,7 +102,7 @@ PlacesController.prototype = {
   QueryInterface: ChromeUtils.generateQI(["nsIClipboardOwner"]),
 
   // nsIClipboardOwner
-  LosingOwnership: function PC_LosingOwnership(aXferable) {
+  LosingOwnership: function PC_LosingOwnership() {
     this.cutNodes = [];
   },
 
@@ -333,7 +333,7 @@ PlacesController.prototype = {
     }
   },
 
-  onEvent: function PC_onEvent(eventName) {},
+  onEvent: function PC_onEvent() {},
 
   /**
    * Determine whether or not the selection can be removed, either by the
@@ -378,8 +378,12 @@ PlacesController.prototype = {
    */
   _isRepeatedRemoveOperation() {
     let lastRemoveOperationFingerprint = this._lastRemoveOperationFingerprint;
+    // .bookmarkGuid and .pageGuid may either be null or an empty string. While
+    // that should probably change, it's safer to use || here.
     this._lastRemoveOperationFingerprint = PlacesUtils.sha256(
-      this._view.selectedNodes.map(n => n.guid ?? n.uri).join()
+      this._view.selectedNodes
+        .map(n => n.bookmarkGuid || (n.pageGuid || n.uri) + n.time)
+        .join()
     );
     return (
       lastRemoveOperationFingerprint == this._lastRemoveOperationFingerprint

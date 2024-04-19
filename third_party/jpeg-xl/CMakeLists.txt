@@ -161,13 +161,13 @@ set(JPEGXL_ENABLE_AVX512_SPR false CACHE BOOL
 set(JPEGXL_ENABLE_AVX512_ZEN4 false CACHE BOOL
 "Build with Zen4-optimized AVX512 support (faster on CPUs that support it, but larger binary size).")
 set(JPEGXL_ENABLE_WASM_TRHEADS true CACHE BOOL
-    "Builds WASM modules with threads suppurt")
+    "Builds WASM modules with threads support")
 
 # Force system dependencies.
 set(JPEGXL_FORCE_SYSTEM_BROTLI false CACHE BOOL
     "Force using system installed brotli instead of third_party/brotli source.")
 set(JPEGXL_FORCE_SYSTEM_GTEST false CACHE BOOL
-    "Force using system installed googletest (gtest/gmock) instead of third_party/googletest source.")
+    "Force using system installed googletest (gtest) instead of third_party/googletest source.")
 set(JPEGXL_FORCE_SYSTEM_LCMS2 false CACHE BOOL
     "Force using system installed lcms2 instead of third_party/lcms source.")
 set(JPEGXL_FORCE_SYSTEM_HWY false CACHE BOOL

@@ -306,8 +306,16 @@ add_task(async function test_app_provided_engine_deployment_extended() {
   await assertCorrectlySwitchedWhenRemoved(async () => {
     info("Change configuration to remove engine from user's environment");
 
-    await SearchTestUtils.updateRemoteSettingsConfig(CONFIG_SIMPLE_LOCALE_DE);
-    configStub.returns(CONFIG_SIMPLE_LOCALE_DE);
+    await SearchTestUtils.updateRemoteSettingsConfig(
+      SearchUtils.newSearchConfigEnabled
+        ? CONFIG_SIMPLE_LOCALE_DE_V2
+        : CONFIG_SIMPLE_LOCALE_DE
+    );
+    configStub.returns(
+      SearchUtils.newSearchConfigEnabled
+        ? CONFIG_SIMPLE_LOCALE_DE_V2
+        : CONFIG_SIMPLE_LOCALE_DE
+    );
   });
 });
 

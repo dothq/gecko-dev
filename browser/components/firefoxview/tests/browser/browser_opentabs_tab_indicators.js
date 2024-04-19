@@ -1,9 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-const { NonPrivateTabs } = ChromeUtils.importESModule(
-  "resource:///modules/OpenTabs.sys.mjs"
-);
+requestLongerTimeout(2);
 
 let pageWithAlert =
   // eslint-disable-next-line @microsoft/sdl/no-insecure-url
@@ -11,18 +9,12 @@ let pageWithAlert =
 let pageWithSound =
   "http://mochi.test:8888/browser/dom/base/test/file_audioLoop.html";
 
-function cleanup() {
-  // Cleanup
-  while (gBrowser.tabs.length > 1) {
-    BrowserTestUtils.removeTab(gBrowser.tabs[0]);
-  }
-}
-
 add_task(async function test_notification_dot_indicator() {
+  clearHistory();
   await withFirefoxView({}, async browser => {
     const { document } = browser.contentWindow;
     let win = browser.ownerGlobal;
-    await navigateToCategoryAndWait(document, "opentabs");
+    await navigateToViewAndWait(document, "opentabs");
     // load page that opens prompt when page is hidden
     let openedTab = await BrowserTestUtils.openNewForegroundTab(
       gBrowser,
@@ -47,9 +39,10 @@ add_task(async function test_notification_dot_indicator() {
     await tabChangeRaised;
     await openTabs.updateComplete;
 
-    await TestUtils.waitForCondition(
-      () => openTabs.viewCards[0].tabList.rowEls[1].attention,
-      "The opened tab doesn't have the attention property, so no notification dot is shown."
+    await TestUtils.waitForCondition(() =>
+      Array.from(openTabs.viewCards[0].tabList.rowEls).some(rowEl => {
+        return rowEl.indicators.includes("attention");
+      })
     );
 
     info("The newly opened tab has a notification dot.");
@@ -58,11 +51,12 @@ add_task(async function test_notification_dot_indicator() {
     await BrowserTestUtils.switchTab(gBrowser, openedTab);
     EventUtils.synthesizeKey("KEY_Enter", {}, win);
 
-    cleanup();
+    cleanupTabs();
   });
 });
 
 add_task(async function test_container_indicator() {
+  clearHistory();
   await withFirefoxView({}, async browser => {
     const { document } = browser.contentWindow;
     let win = browser.ownerGlobal;
@@ -79,7 +73,7 @@ add_task(async function test_container_indicator() {
       URLs[0]
     );
 
-    await navigateToCategoryAndWait(document, "opentabs");
+    await navigateToViewAndWait(document, "opentabs");
 
     let openTabs = document.querySelector("view-opentabs[name=opentabs]");
 
@@ -95,10 +89,14 @@ add_task(async function test_container_indicator() {
     );
     info("openTabs component has finished updating.");
 
-    let containerTabElem = openTabs.viewCards[0].tabList.rowEls[1];
+    let containerTabElem;
 
     await TestUtils.waitForCondition(
-      () => containerTabElem.containerObj,
+      () =>
+        Array.from(openTabs.viewCards[0].tabList.rowEls).some(rowEl => {
+          containerTabElem = rowEl;
+          return rowEl.containerObj;
+        }),
       "The container tab element isn't marked in Fx View."
     );
 
@@ -111,14 +109,15 @@ add_task(async function test_container_indicator() {
 
     info("The newly opened tab is marked as a container tab.");
 
-    cleanup();
+    cleanupTabs();
   });
 });
 
 add_task(async function test_sound_playing_muted_indicator() {
+  clearHistory();
   await withFirefoxView({}, async browser => {
     const { document } = browser.contentWindow;
-    await navigateToCategoryAndWait(document, "opentabs");
+    await navigateToViewAndWait(document, "opentabs");
 
     // Load a page in a container tab
     let soundTab = await BrowserTestUtils.openNewForegroundTab(
@@ -146,9 +145,13 @@ add_task(async function test_sound_playing_muted_indicator() {
       "The tab list hasn't rendered."
     );
 
-    let soundPlayingTabElem = openTabs.viewCards[0].tabList.rowEls[1];
-
-    await TestUtils.waitForCondition(() => soundPlayingTabElem.soundPlaying);
+    let soundPlayingTabElem;
+    await TestUtils.waitForCondition(() =>
+      Array.from(openTabs.viewCards[0].tabList.rowEls).some(rowEl => {
+        soundPlayingTabElem = rowEl;
+        return rowEl.indicators.includes("soundplaying");
+      })
+    );
 
     ok(
       soundPlayingTabElem.mediaButtonEl,
@@ -174,7 +177,9 @@ add_task(async function test_sound_playing_muted_indicator() {
     await tabChangeRaised;
     await openTabs.updateComplete;
 
-    await TestUtils.waitForCondition(() => soundPlayingTabElem.muted);
+    await TestUtils.waitForCondition(() =>
+      soundPlayingTabElem.indicators.includes("muted")
+    );
 
     ok(
       soundPlayingTabElem.mediaButtonEl,
@@ -185,7 +190,9 @@ add_task(async function test_sound_playing_muted_indicator() {
     soundTab.toggleMuteAudio();
     await tabChangeRaised;
     await openTabs.updateComplete;
-    await TestUtils.waitForCondition(() => soundPlayingTabElem.soundPlaying);
+    await TestUtils.waitForCondition(() =>
+      soundPlayingTabElem.indicators.includes("soundplaying")
+    );
 
     ok(
       soundPlayingTabElem.mediaButtonEl,
@@ -195,13 +202,80 @@ add_task(async function test_sound_playing_muted_indicator() {
     soundTab.toggleMuteAudio();
     await tabChangeRaised;
     await openTabs.updateComplete;
-    await TestUtils.waitForCondition(() => soundPlayingTabElem.muted);
+    await TestUtils.waitForCondition(() =>
+      soundPlayingTabElem.indicators.includes("muted")
+    );
 
     ok(
       soundPlayingTabElem.mediaButtonEl,
       "The tab has the unmute button showing."
     );
 
-    cleanup();
+    cleanupTabs();
   });
+});
+
+add_task(async function test_bookmark_indicator() {
+  const tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, URLs[0]);
+  await withFirefoxView({}, async browser => {
+    const { document } = browser.contentWindow;
+    await navigateToViewAndWait(document, "opentabs");
+    const openTabs = document.querySelector("view-opentabs[name=opentabs]");
+    setSortOption(openTabs, "recency");
+    let rowEl = await TestUtils.waitForCondition(
+      () => openTabs.viewCards[0]?.tabList.rowEls[0]
+    );
+
+    info("Bookmark a tab while Firefox View is active.");
+    let bookmark = await PlacesUtils.bookmarks.insert({
+      parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+      url: URLs[0],
+    });
+    await TestUtils.waitForCondition(
+      () => rowEl.shadowRoot.querySelector(".bookmark"),
+      "Tab shows the bookmark star."
+    );
+    await PlacesUtils.bookmarks.update({
+      guid: bookmark.guid,
+      url: URLs[1],
+    });
+    await TestUtils.waitForCondition(
+      () => !rowEl.shadowRoot.querySelector(".bookmark"),
+      "The bookmark star is removed."
+    );
+    bookmark = await PlacesUtils.bookmarks.insert({
+      parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+      url: URLs[0],
+    });
+    await TestUtils.waitForCondition(
+      () => rowEl.shadowRoot.querySelector(".bookmark"),
+      "The bookmark star is restored."
+    );
+    await PlacesUtils.bookmarks.remove(bookmark.guid);
+    await TestUtils.waitForCondition(
+      () => !rowEl.shadowRoot.querySelector(".bookmark"),
+      "The bookmark star is removed again."
+    );
+
+    info("Bookmark a tab while Firefox View is inactive.");
+    await BrowserTestUtils.switchTab(gBrowser, tab);
+    bookmark = await PlacesUtils.bookmarks.insert({
+      parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+      url: URLs[0],
+    });
+    await switchToFxViewTab();
+    await TestUtils.waitForCondition(
+      () => rowEl.shadowRoot.querySelector(".bookmark"),
+      "Tab shows the bookmark star."
+    );
+    await BrowserTestUtils.switchTab(gBrowser, tab);
+    await PlacesUtils.bookmarks.remove(bookmark.guid);
+    await switchToFxViewTab();
+    await TestUtils.waitForCondition(
+      () => !rowEl.shadowRoot.querySelector(".bookmark"),
+      "The bookmark star is removed."
+    );
+  });
+  await cleanupTabs();
+  await PlacesUtils.bookmarks.eraseEverything();
 });
